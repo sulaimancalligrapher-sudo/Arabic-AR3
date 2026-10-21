@@ -1,0 +1,6 @@
+{
+  "name": "Arabic AR Whiteboard - السبورة التفاعلية والواقع المعزز",
+  "description": "نظام السبورة التفاعلية الذكية مع تقنية الواقع المعزز AR لتعلم ورسم الخط العربي والأشكال التعليمية للأجهزة الذكية (جوال، تابلت، كمبيوتر)",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
