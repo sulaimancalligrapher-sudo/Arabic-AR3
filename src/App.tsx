@@ -5,7 +5,6 @@ import { WhiteboardCanvas, WhiteboardCanvasRef } from './components/WhiteboardCa
 import { ARCameraOverlay } from './components/ARCameraOverlay';
 import { WhiteboardToolbar } from './components/WhiteboardToolbar';
 import { TemplateLibraryModal } from './components/TemplateLibraryModal';
-import { MobileQuickBar } from './components/MobileQuickBar';
 import { audioService } from './services/audioService';
 import {
   Camera,
@@ -25,6 +24,7 @@ export default function App() {
   const [penType, setPenType] = useState<PenType>('calligraphy');
   const [penColor, setPenColor] = useState<string>('#0f172a');
   const [penSize, setPenSize] = useState<number>(18);
+  const [calligraphyAngle, setCalligraphyAngle] = useState<number>(45);
 
   // Template State
   const [customTemplates, setCustomTemplates] = useState<DrawingTemplate[]>([]);
@@ -225,6 +225,8 @@ export default function App() {
         onSelectPenColor={setPenColor}
         penSize={penSize}
         onChangePenSize={setPenSize}
+        calligraphyAngle={calligraphyAngle}
+        onChangeCalligraphyAngle={setCalligraphyAngle}
         template={selectedTemplate}
         templateOpacity={templateOpacity}
         onChangeTemplateOpacity={setTemplateOpacity}
@@ -275,6 +277,7 @@ export default function App() {
             penType={penType}
             penColor={penColor}
             penSize={penSize}
+            calligraphyAngle={calligraphyAngle}
             template={selectedTemplate}
             templateOpacity={templateOpacity}
             guideColor={guideColor}
@@ -338,10 +341,10 @@ export default function App() {
             <div className="hidden sm:flex absolute bottom-3 right-3 z-20 items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/80 border border-slate-700/80 backdrop-blur-md text-[11px] text-slate-300 pointer-events-none">
               <span>شطفة قلم القصبة:</span>
               <div
-                className="w-4 h-1.5 rounded-[1px] shadow-sm transform -rotate-45"
-                style={{ backgroundColor: penColor }}
+                className="w-4 h-1.5 rounded-[1px] shadow-sm transition-transform"
+                style={{ backgroundColor: penColor, transform: `rotate(-${calligraphyAngle}deg)` }}
               />
-              <span className="font-mono text-amber-400">45°</span>
+              <span className="font-mono text-amber-400">{calligraphyAngle}°</span>
             </div>
           )}
 
@@ -370,7 +373,7 @@ export default function App() {
                     ١
                   </span>
                   <div>
-                    <strong className="text-white">السبورة التفاعلية:</strong> استخدم إصبعك أو قلم الشاشة (Apple Pencil / S-Pen) أو الماوس للرسم. قلم الخط العربي يحاكي زاوية القصبة الطبيعية 45 درجة تلقائياً.
+                    <strong className="text-white">السبورة التفاعلية:</strong> استخدم إصبعك أو قلم الشاشة أو الماوس للرسم. يمكنك التحكم بزاوية وسُمك القلم والألوان من زر أدوات الرسم.
                   </div>
                 </div>
 
@@ -379,7 +382,7 @@ export default function App() {
                     ٢
                   </span>
                   <div>
-                    <strong className="text-white">خيارات التتبع الخارجية:</strong> توجد أزرار التتبع الأربعة (تتبع السبابة ☝️، هيكل يد واحدة 🖐️، هيكل يدين 🖐️🖐️، التاج الملكي 👑) في شريط الأدوات العلوي خارج السبورة لسهولة النقر والتحكم الفوري.
+                    <strong className="text-white">خيارات التتبع المجمعة:</strong> عند تشغيل الواقع المعزز AR، اضغط زر خيارات التتبع للتبديل بين تتبع السبابة ☝️، أو هيكل يد واحدة 🖐️، أو هيكل يدين 🖐️🖐️، وتفعيل التاج الملكي 👑.
                   </div>
                 </div>
 
@@ -397,7 +400,7 @@ export default function App() {
                     ٤
                   </span>
                   <div>
-                    <strong className="text-white">رفع نماذج مخصصة:</strong> من خلال "مكتبة النماذج"، يمكنك اختيار أي حرف عربي أو رفع أي صورة من جهازك لتحويلها لنموذج شفاف قابل للشف والتلوين.
+                    <strong className="text-white">رفع نماذج مخصصة:</strong> من خلال أيقونة النماذج، يمكنك اختيار أي حرف عربي أو رفع أي صورة من جهازك لتحويلها لنموذج شفاف قابل للشف والتلوين.
                   </div>
                 </div>
               </div>
@@ -413,26 +416,6 @@ export default function App() {
         )}
 
       </main>
-
-      {/* Mobile Floating Quick Bar (Phone & Tablet) */}
-      <MobileQuickBar
-        boardStyle={boardStyle}
-        onToggleAR={() => setBoardStyle(boardStyle === 'ar_camera' ? 'white' : 'ar_camera')}
-        penType={penType}
-        onSelectPenType={setPenType}
-        penColor={penColor}
-        onSelectPenColor={setPenColor}
-        canUndo={historyCanUndo}
-        canRedo={historyCanRedo}
-        onUndo={handleUndo}
-        onRedo={handleRedo}
-        onClear={handleClear}
-        onOpenLibrary={() => setIsLibraryOpen(true)}
-        trackingMode={trackingMode}
-        onSelectTrackingMode={handleSelectTrackingMode}
-        showCrown={showCrown}
-        onToggleCrown={handleToggleCrown}
-      />
 
       {/* Template Library Modal */}
       <TemplateLibraryModal

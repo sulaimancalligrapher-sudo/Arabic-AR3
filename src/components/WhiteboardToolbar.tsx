@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { BoardStyle, PenType, GuideColor, DrawingTemplate, HandTrackingDisplayMode } from '../types/drawing';
 import { CALLIGRAPHY_COLORS, GUIDE_COLORS } from '../data/drawingTemplates';
 import {
@@ -10,8 +10,7 @@ import {
   Trash2,
   Download,
   Camera,
-  Grid,
-  Square,
+  Layers,
   Sparkles,
   Volume2,
   FolderOpen,
@@ -19,7 +18,11 @@ import {
   Crown,
   FlipHorizontal,
   RefreshCw,
-  Video
+  MousePointer,
+  SlidersHorizontal,
+  X,
+  Compass,
+  Check
 } from 'lucide-react';
 
 interface WhiteboardToolbarProps {
@@ -31,6 +34,8 @@ interface WhiteboardToolbarProps {
   onSelectPenColor: (color: string) => void;
   penSize: number;
   onChangePenSize: (size: number) => void;
+  calligraphyAngle: number;
+  onChangeCalligraphyAngle: (angle: number) => void;
   template: DrawingTemplate | null;
   templateOpacity: number;
   onChangeTemplateOpacity: (val: number) => void;
@@ -46,7 +51,7 @@ interface WhiteboardToolbarProps {
   onPronounce: () => void;
   accuracy: number;
 
-  // AR Tracking & Camera Controls (Placed outside the whiteboard with the tools)
+  // AR Tracking & Camera Controls
   trackingMode: HandTrackingDisplayMode;
   onSelectTrackingMode: (mode: HandTrackingDisplayMode) => void;
   showCrown: boolean;
@@ -63,6 +68,8 @@ interface WhiteboardToolbarProps {
   };
 }
 
+type ActivePopover = 'drawing_tools' | 'board_settings' | 'ar_settings' | null;
+
 export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
   boardStyle,
   onSelectBoardStyle,
@@ -72,6 +79,8 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
   onSelectPenColor,
   penSize,
   onChangePenSize,
+  calligraphyAngle,
+  onChangeCalligraphyAngle,
   template,
   templateOpacity,
   onChangeTemplateOpacity,
@@ -96,410 +105,580 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
   onToggleMirror,
   arDetectionStatus,
 }) => {
+  const [activePopover, setActivePopover] = useState<ActivePopover>(null);
+  const [lastStandardBoard, setLastStandardBoard] = useState<BoardStyle>('grid');
+  const toolbarRef = useRef<HTMLDivElement>(null);
+
+  // Keep track of the last used standard board style before entering AR
+  useEffect(() => {
+    if (boardStyle !== 'ar_camera') {
+      setLastStandardBoard(boardStyle);
+    }
+  }, [boardStyle]);
+
+  // Close popover when clicking outside or pressing Escape
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setActivePopover(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  const togglePopover = (popover: ActivePopover) => {
+    setActivePopover(prev => (prev === popover ? null : popover));
+  };
+
+  // Toggle AR mode vs standard board
+  const handleToggleAR = () => {
+    if (boardStyle === 'ar_camera') {
+      onSelectBoardStyle(lastStandardBoard || 'grid');
+      setActivePopover(null);
+    } else {
+      onSelectBoardStyle('ar_camera');
+      setActivePopover('ar_settings'); // Automatically open AR options for convenience
+    }
+  };
+
+  // Switch to Mouse / Finger touch drawing
+  const handleSelectMouseMode = () => {
+    if (boardStyle === 'ar_camera') {
+      onSelectBoardStyle(lastStandardBoard || 'grid');
+    }
+    setActivePopover(null);
+  };
+
   return (
-    <header className="w-full bg-slate-900/95 backdrop-blur-md border-b border-slate-800 text-slate-100 px-3 sm:px-6 py-2.5 z-40 transition-all select-none">
-      <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-3">
+    <header
+      ref={toolbarRef}
+      className="relative w-full bg-slate-900/95 backdrop-blur-md border-b border-slate-800 text-slate-100 z-50 select-none shadow-md"
+    >
+      {/* Top Main Row: Icons Only */}
+      <div className="max-w-7xl mx-auto px-2 sm:px-4 py-2 flex items-center justify-between gap-1.5 sm:gap-3 overflow-x-auto scrollbar-none">
         
-        {/* Right Section (Brand & Active Template) */}
-        <div className="w-full md:w-auto flex items-center justify-between md:justify-start gap-3">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-500 to-amber-700 flex items-center justify-center text-slate-950 font-bold shadow-md shadow-amber-500/20">
-              <span className="font-ruqaa text-xl font-black">ض</span>
-            </div>
-            <div>
-              <div className="flex items-center gap-1.5">
-                <h1 className="font-ruqaa font-black text-sm sm:text-base text-amber-400">
-                  السبورة التفاعلية والواقع المعزز
-                </h1>
-                <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                  AR 2.0
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-400">
-                رسم وخط عربي تفاعلي • جوال • تابلت • كمبيوتر
-              </p>
-            </div>
+        {/* Right Section: Brand & Lesson Folder & Tool Windows (RTL layout) */}
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          
+          {/* Brand Logo Icon */}
+          <div
+            title="السبورة التفاعلية للخط العربي والواقع المعزز"
+            className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-500 to-amber-700 flex items-center justify-center text-slate-950 font-bold shadow-md shadow-amber-500/20 shrink-0 cursor-default"
+          >
+            <span className="font-ruqaa text-xl font-black">ض</span>
           </div>
 
-          {/* Active Template pill & Library trigger */}
+          {/* 1. Lesson / Template Library Icon (Icon only, no text) */}
           <button
             onClick={onOpenLibrary}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs text-amber-300 font-semibold transition-all active:scale-95 shadow-sm"
+            title={template ? `الدرس الحالي: ${template.title} (اضغط لتغيير الدرس)` : 'اختيار الدرس أو نموذج الشف'}
+            className="p-2 sm:p-2.5 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-amber-400 border border-slate-700 transition-all active:scale-95 cursor-pointer relative"
+            aria-label="اختيار الدرس"
           >
-            <FolderOpen className="w-4 h-4 text-amber-400" />
-            <span className="max-w-[120px] sm:max-w-[180px] truncate">
-              {template ? template.title : 'اختر نموذجاً للشف'}
-            </span>
-            <span className="text-[10px] bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded">
-              تغيير
-            </span>
+            <FolderOpen className="w-5 h-5 text-amber-400" />
+            {template && (
+              <span className="absolute top-1 left-1 w-2 h-2 rounded-full bg-amber-400 ring-2 ring-slate-900" />
+            )}
           </button>
+
+          <div className="h-5 w-px bg-slate-800 mx-0.5" />
+
+          {/* 2. Drawing Tools Button (زر أدوات الرسم - يفتح نافذة الأدوات) */}
+          <button
+            onClick={() => togglePopover('drawing_tools')}
+            title="زر أدوات الرسم (الأقلام، الألوان، السُمك، وزاوية الخط)"
+            className={`p-2 sm:p-2.5 rounded-xl border transition-all active:scale-95 cursor-pointer relative flex items-center justify-center ${
+              activePopover === 'drawing_tools'
+                ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-[0_0_12px_rgba(245,158,11,0.4)]'
+                : 'bg-slate-800/90 hover:bg-slate-700 text-slate-200 border-slate-700'
+            }`}
+            aria-label="أدوات الرسم والخط"
+          >
+            {penType === 'calligraphy' && <PenTool className="w-5 h-5" />}
+            {penType === 'marker' && <span className="w-4 h-4 rounded-full bg-current" />}
+            {penType === 'brush' && <Paintbrush className="w-5 h-5" />}
+            {penType === 'eraser' && <Eraser className="w-5 h-5" />}
+            
+            {/* Color Dot Indicator */}
+            <span
+              className="absolute bottom-1 left-1 w-2.5 h-2.5 rounded-full border border-slate-900 shadow-xs"
+              style={{ backgroundColor: penColor }}
+            />
+          </button>
+
+          {/* 3. Board Settings Button (زر السبورة - يفتح نافذة خلفيات وإعدادات السبورة) */}
+          <button
+            onClick={() => togglePopover('board_settings')}
+            title="زر إعدادات السبورة (بيضاء، داكنة، خضراء، ميزان الخط، والشفافية)"
+            className={`p-2 sm:p-2.5 rounded-xl border transition-all active:scale-95 cursor-pointer relative ${
+              activePopover === 'board_settings'
+                ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-[0_0_12px_rgba(245,158,11,0.4)]'
+                : 'bg-slate-800/90 hover:bg-slate-700 text-slate-200 border-slate-700'
+            }`}
+            aria-label="إعدادات السبورة"
+          >
+            <Layers className="w-5 h-5" />
+          </button>
+
+          <div className="h-5 w-px bg-slate-800 mx-0.5" />
+
+          {/* 4. Mouse / Touch Drawing Button (زر الرسم بالفأرة أو الإصبع - أيقونة فأر بدون نص) */}
+          <button
+            onClick={handleSelectMouseMode}
+            title="الرسم بالفأرة أو باللمس المباشر على الشاشة"
+            className={`p-2 sm:p-2.5 rounded-xl border transition-all active:scale-95 cursor-pointer ${
+              boardStyle !== 'ar_camera'
+                ? 'bg-amber-500 text-slate-950 border-amber-400 font-bold shadow-[0_0_10px_rgba(245,158,11,0.3)]'
+                : 'bg-slate-800/90 hover:bg-slate-700 text-slate-300 border-slate-700'
+            }`}
+            aria-label="الرسم بالفأرة أو اللمس"
+          >
+            <MousePointer className="w-5 h-5" />
+          </button>
+
+          {/* 5. AR Camera Button (زر واقع المعزز - أيقونة كاميرا بدون نص) */}
+          <button
+            onClick={handleToggleAR}
+            title={boardStyle === 'ar_camera' ? 'إيقاف واقع المعزز AR والعودة للسبورة' : 'تشغيل كاميرا الواقع المعزز AR وتتبع اليد بالهواء'}
+            className={`p-2 sm:p-2.5 rounded-xl border transition-all active:scale-95 cursor-pointer relative ${
+              boardStyle === 'ar_camera'
+                ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 border-amber-400 shadow-[0_0_14px_rgba(245,158,11,0.5)]'
+                : 'bg-slate-800/90 hover:bg-slate-700 text-amber-400 border-slate-700'
+            }`}
+            aria-label="واقع معزز AR"
+          >
+            <Camera className="w-5 h-5" />
+            {boardStyle === 'ar_camera' && (
+              <span className="absolute top-1 left-1 w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+            )}
+          </button>
+
+          {/* 6. AR Tracking Options Popover Button (عند تشغيل AR - زر واحد يجمع خيارات التتبع) */}
+          {boardStyle === 'ar_camera' && (
+            <button
+              onClick={() => togglePopover('ar_settings')}
+              title="إعدادات وخيارات تتبع اليدين والتاج الملكي والكاميرا"
+              className={`p-2 sm:p-2.5 rounded-xl border transition-all active:scale-95 cursor-pointer relative ${
+                activePopover === 'ar_settings'
+                  ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-md'
+                  : 'bg-slate-800/90 hover:bg-slate-700 text-amber-300 border-amber-500/40'
+              }`}
+              aria-label="خيارات الواقع المعزز"
+            >
+              <SlidersHorizontal className="w-5 h-5" />
+              {/* Little indicator of active tracking mode */}
+              <span className="absolute -top-1 -right-1 text-[11px] leading-none">
+                {trackingMode === 'finger_only' ? '☝️' : trackingMode === 'two_hands' ? '🖐️🖐️' : '🖐️'}
+              </span>
+            </button>
+          )}
+
         </div>
 
-        {/* Center Section: Board Styles & Pen Tools */}
-        <div className="w-full md:w-auto flex flex-wrap items-center justify-center gap-2">
+        {/* Left Section: Accuracy, Voice, Undo, Redo, Clear, Save (Icons Only) */}
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           
-          {/* Board Background Selector */}
-          <div className="flex items-center bg-slate-950/70 p-1 rounded-xl border border-slate-800">
-            <button
-              onClick={() => onSelectBoardStyle('white')}
-              title="سبورة بيضاء نظيفة"
-              className={`p-2 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all ${
-                boardStyle === 'white' ? 'bg-slate-200 text-slate-950 shadow-sm' : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <Square className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">بيضاء</span>
-            </button>
-            <button
-              onClick={() => onSelectBoardStyle('dark')}
-              title="سبورة داكنة كلاسيكية"
-              className={`p-2 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all ${
-                boardStyle === 'dark' ? 'bg-slate-800 text-amber-400 border border-slate-700 shadow-sm' : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <Square className="w-3.5 h-3.5 fill-current" />
-              <span className="hidden sm:inline">داكنة</span>
-            </button>
-            <button
-              onClick={() => onSelectBoardStyle('green')}
-              title="سبورة خضراء مدرسية"
-              className={`p-2 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all ${
-                boardStyle === 'green' ? 'bg-emerald-800 text-emerald-200 shadow-sm' : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <Square className="w-3.5 h-3.5 fill-emerald-500" />
-              <span className="hidden sm:inline">خضراء</span>
-            </button>
-            <button
-              onClick={() => onSelectBoardStyle('grid')}
-              title="شبكة وميزان الخط العربي"
-              className={`p-2 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all ${
-                boardStyle === 'grid' ? 'bg-amber-100 text-amber-950 shadow-sm' : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <Grid className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">ميزان الخط</span>
-            </button>
-            {/* AR Camera Mode */}
-            <button
-              onClick={() => onSelectBoardStyle(boardStyle === 'ar_camera' ? 'white' : 'ar_camera')}
-              title="واقع معزز AR (كاميرا مع شفافية وتتبع اليد)"
-              className={`p-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
-                boardStyle === 'ar_camera'
-                  ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 shadow-[0_0_12px_rgba(245,158,11,0.5)]'
-                  : 'text-amber-400 hover:bg-slate-800'
-              }`}
-            >
-              <Camera className="w-3.5 h-3.5" />
-              <span>واقع معزز AR</span>
-            </button>
-          </div>
-
-          {/* Pen Tool Selector */}
-          <div className="flex items-center bg-slate-950/70 p-1 rounded-xl border border-slate-800">
-            <button
-              onClick={() => onSelectPenType('calligraphy')}
-              title="قلم الخط العربي (مشطوف بزاوية 45°)"
-              className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
-                penType === 'calligraphy'
-                  ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
-                  : 'text-slate-300 hover:text-white hover:bg-slate-800'
-              }`}
-            >
-              <PenTool className="w-3.5 h-3.5" />
-              <span>قلم الخط</span>
-            </button>
-            <button
-              onClick={() => onSelectPenType('marker')}
-              title="قلم حبر مستدير ناعم"
-              className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
-                penType === 'marker'
-                  ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
-                  : 'text-slate-300 hover:text-white hover:bg-slate-800'
-              }`}
-            >
-              <span className="w-2 h-2 rounded-full bg-current" />
-              <span>حبر ناعم</span>
-            </button>
-            <button
-              onClick={() => onSelectPenType('brush')}
-              title="فرشاة تلوين هوائية"
-              className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
-                penType === 'brush'
-                  ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
-                  : 'text-slate-300 hover:text-white hover:bg-slate-800'
-              }`}
-            >
-              <Paintbrush className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">فرشاة</span>
-            </button>
-            <button
-              onClick={() => onSelectPenType('eraser')}
-              title="ممحاة لتعديل الخطوط"
-              className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
-                penType === 'eraser'
-                  ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
-                  : 'text-slate-300 hover:text-white hover:bg-slate-800'
-              }`}
-            >
-              <Eraser className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">ممحاة</span>
-            </button>
-          </div>
-
-        </div>
-
-        {/* Left Section: Action Buttons & Accuracy Score */}
-        <div className="w-full md:w-auto flex items-center justify-between md:justify-end gap-2">
-          {/* Real-time Accuracy Percentage */}
+          {/* Accuracy Score Badge (Icon + % only, no text) */}
           {template && template.category !== 'freehand' && (
-            <div className="flex items-center gap-1.5 px-3 py-1 bg-slate-950/80 border border-slate-800 rounded-xl text-xs">
+            <div
+              title={`نسبة تطابق الرسم مع النموذج: ${accuracy}%`}
+              className="flex items-center gap-1 px-2.5 py-1.5 bg-slate-950/70 border border-slate-800 rounded-xl text-xs font-mono font-bold shrink-0"
+            >
               <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-              <span className="text-slate-400">التطابق:</span>
-              <span className={`font-bold font-mono ${accuracy >= 70 ? 'text-emerald-400' : 'text-amber-400'}`}>
+              <span className={accuracy >= 70 ? 'text-emerald-400' : 'text-amber-400'}>
                 {accuracy}%
               </span>
             </div>
           )}
 
-          {/* Voice Speaker */}
+          {/* Voice Speaker (Icon only) */}
           {template?.arabicAudioText && (
             <button
               onClick={onPronounce}
-              title="استمع لنطق الحرف أو الشكل"
-              className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-400 border border-slate-700 transition-all active:scale-95 shadow-sm"
+              title={`استمع لنطق: ${template.arabicAudioText}`}
+              className="p-2 sm:p-2.5 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-amber-400 border border-slate-700 transition-all active:scale-95 cursor-pointer shrink-0"
+              aria-label="نطق الصوت"
             >
-              <Volume2 className="w-4 h-4" />
+              <Volume2 className="w-5 h-5" />
             </button>
           )}
 
-          {/* Undo / Redo */}
-          <div className="flex items-center bg-slate-950/70 p-1 rounded-xl border border-slate-800">
+          <div className="h-5 w-px bg-slate-800 mx-0.5 hidden xs:block" />
+
+          {/* Undo / Redo (Icons only) */}
+          <div className="flex items-center bg-slate-950/70 p-1 rounded-xl border border-slate-800 shrink-0">
             <button
               onClick={onUndo}
               disabled={!canUndo}
               title="تراجع (Ctrl+Z)"
-              className="p-1.5 rounded-lg text-slate-300 hover:text-white disabled:opacity-30 disabled:pointer-events-none transition-all"
+              className="p-1.5 sm:p-2 rounded-lg text-slate-300 hover:text-white disabled:opacity-25 disabled:pointer-events-none transition-all active:scale-90 cursor-pointer"
+              aria-label="تراجع"
             >
-              <Undo2 className="w-4 h-4" />
+              <Undo2 className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
             </button>
             <button
               onClick={onRedo}
               disabled={!canRedo}
               title="إعادة (Ctrl+Y)"
-              className="p-1.5 rounded-lg text-slate-300 hover:text-white disabled:opacity-30 disabled:pointer-events-none transition-all"
+              className="p-1.5 sm:p-2 rounded-lg text-slate-300 hover:text-white disabled:opacity-25 disabled:pointer-events-none transition-all active:scale-90 cursor-pointer"
+              aria-label="إعادة"
             >
-              <Redo2 className="w-4 h-4" />
+              <Redo2 className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
             </button>
           </div>
 
-          {/* Clear Canvas */}
+          {/* Clear Canvas / Trash Can (Icon only) */}
           <button
             onClick={onClear}
             title="مسح السبورة بالكامل"
-            className="p-2 rounded-xl bg-slate-800 hover:bg-red-950/50 hover:text-red-400 text-slate-400 border border-slate-700/60 transition-all active:scale-95"
+            className="p-2 sm:p-2.5 rounded-xl bg-slate-800/90 hover:bg-red-950/50 hover:text-red-400 text-slate-400 border border-slate-700/80 transition-all active:scale-95 cursor-pointer shrink-0"
+            aria-label="مسح السبورة"
           >
-            <Trash2 className="w-4 h-4" />
+            <Trash2 className="w-5 h-5" />
           </button>
 
-          {/* Export / Download Image */}
+          {/* Export / Download Image (Icon only) */}
           <button
             onClick={onExport}
-            title="تنزيل اللوحة كصورة عالية الدقة PNG"
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-emerald-950/60 hover:text-emerald-400 text-slate-200 border border-slate-700 text-xs font-semibold transition-all active:scale-95 shadow-sm"
+            title="حفظ وتنزيل اللوحة كصورة عالية الدقة PNG"
+            className="p-2 sm:p-2.5 rounded-xl bg-slate-800/90 hover:bg-emerald-950/50 hover:text-emerald-400 text-emerald-400 border border-slate-700/80 transition-all active:scale-95 cursor-pointer shrink-0"
+            aria-label="حفظ كصورة"
           >
-            <Download className="w-4 h-4" />
-            <span className="hidden sm:inline">حفظ</span>
+            <Download className="w-5 h-5" />
           </button>
+
         </div>
 
       </div>
 
-      {/* AR Tracking Controls Bar (Placed OUTSIDE the whiteboard with the tools) */}
-      {boardStyle === 'ar_camera' && (
-        <div className="max-w-7xl mx-auto mt-2.5 pt-2.5 border-t border-amber-500/30 flex flex-wrap items-center justify-between gap-2.5 text-xs bg-slate-950/60 px-3 py-2 rounded-2xl border">
-          
-          {/* Tracking Options: Finger / One Hand / Two Hands / Crown */}
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-amber-400 text-xs font-bold flex items-center gap-1.5 ml-1">
-              <Camera className="w-3.5 h-3.5 text-amber-400" />
-              <span>خيارات التتبع:</span>
-            </span>
+      {/* Backdrop overlay for small screens when any popover is open */}
+      {activePopover && (
+        <div
+          onClick={() => setActivePopover(null)}
+          className="fixed inset-0 bg-slate-950/50 backdrop-blur-xs z-40 transition-opacity"
+        />
+      )}
 
-            {/* Mode 1: Finger Only */}
+      {/* ======================================================== */}
+      {/* 1. DRAWING TOOLS POPOVER (زر أدوات الرسم)                 */}
+      {/* ======================================================== */}
+      {activePopover === 'drawing_tools' && (
+        <div
+          className="fixed inset-x-3 top-16 sm:absolute sm:top-full sm:right-6 sm:left-auto max-w-sm sm:w-96 w-auto mx-auto sm:mx-0 z-50 bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl p-4 text-slate-100 animate-in fade-in zoom-in-95 duration-150 overflow-y-auto max-h-[80vh]"
+        >
+          {/* Header */}
+          <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3.5">
+            <div className="flex items-center gap-2">
+              <PenTool className="w-4 h-4 text-amber-400" />
+              <h2 className="font-bold text-sm text-amber-300">أدوات الرسم والخط</h2>
+            </div>
             <button
-              onClick={() => onSelectTrackingMode('finger_only')}
-              title="تتبع إصبع واحد (السبابة) للرسم الدقيق بالهواء"
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all active:scale-95 cursor-pointer ${
-                trackingMode === 'finger_only'
-                  ? 'bg-emerald-600 text-white shadow-[0_0_12px_rgba(16,185,129,0.5)] border border-emerald-400'
-                  : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
-              }`}
+              onClick={() => setActivePopover(null)}
+              className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+              aria-label="إغلاق"
             >
-              <span>☝️</span>
-              <span>تتبع السبابة</span>
-            </button>
-
-            {/* Mode 2: One Hand Skeleton */}
-            <button
-              onClick={() => onSelectTrackingMode('one_hand')}
-              title="هيكل يد واحدة كامل بـ 21 مفصل مع مؤشر التقاط ورسم"
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all active:scale-95 cursor-pointer ${
-                trackingMode === 'one_hand'
-                  ? 'bg-blue-600 text-white shadow-[0_0_12px_rgba(37,99,235,0.5)] border border-blue-400'
-                  : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
-              }`}
-            >
-              <Hand className="w-3.5 h-3.5" />
-              <span>هيكل يد واحدة</span>
-            </button>
-
-            {/* Mode 3: Two Hands Skeleton */}
-            <button
-              onClick={() => onSelectTrackingMode('two_hands')}
-              title="هيكل يدين معاً (اليمنى واليسرى) للألعاب والتفاعل الحركي"
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all active:scale-95 cursor-pointer ${
-                trackingMode === 'two_hands'
-                  ? 'bg-purple-600 text-white shadow-[0_0_12px_rgba(168,85,247,0.5)] border border-purple-400'
-                  : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
-              }`}
-            >
-              <span>🖐️🖐️</span>
-              <span>هيكل يدين اثنتين</span>
-            </button>
-
-            {/* Mode 4: Royal Crown Toggle */}
-            <button
-              onClick={onToggleCrown}
-              title={showCrown ? 'إلغاء تاج الرأس الملكي' : 'تفعيل وضع التاج الملكي فوق رأس الطالب'}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all active:scale-95 cursor-pointer ${
-                showCrown
-                  ? 'bg-gradient-to-r from-amber-500 to-yellow-400 text-slate-950 shadow-[0_0_14px_rgba(245,158,11,0.6)] border border-yellow-300'
-                  : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
-              }`}
-            >
-              <Crown className="w-3.5 h-3.5 text-current" />
-              <span>{showCrown ? 'التاج الملكي: مفعّل 👑' : 'التاج: معطّل'}</span>
+              <X className="w-4 h-4" />
             </button>
           </div>
 
-          {/* Camera Controls & Status Badge */}
-          <div className="flex flex-wrap items-center gap-2">
-            
-            {/* Mirror Toggle */}
-            <button
-              onClick={onToggleMirror}
-              title={isMirrored ? 'المرآة مفعلة (يمينك يمين) - اضغط للإلغاء' : 'المرآة معطلة - اضغط لتفعيل المرآة'}
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all active:scale-95 cursor-pointer ${
-                isMirrored
-                  ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                  : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
-              }`}
-            >
-              <FlipHorizontal className="w-3.5 h-3.5 text-amber-400" />
-              <span>{isMirrored ? 'المرآة: مفعّلة' : 'المرآة: معطّلة'}</span>
-            </button>
+          <div className="space-y-4">
+            {/* Pen Types: Calligraphy / Smooth Marker / Brush / Eraser */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-2">نوع القلم والأداة:</label>
+              <div className="grid grid-cols-2 gap-2">
+                
+                {/* 1. قلم الخط المشطوف */}
+                <button
+                  onClick={() => onSelectPenType('calligraphy')}
+                  className={`p-2.5 rounded-xl border text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                    penType === 'calligraphy'
+                      ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-md'
+                      : 'bg-slate-800/80 hover:bg-slate-750 text-slate-200 border-slate-700'
+                  }`}
+                >
+                  <PenTool className="w-4 h-4 shrink-0" />
+                  <span>قلم الخط</span>
+                </button>
 
-            {/* Facing Mode Toggle (Front / Back) */}
-            <button
-              onClick={onToggleFacingMode}
-              title={facingMode === 'user' ? 'التبديل للكاميرا الخلفية (لتصوير الكراسة)' : 'التبديل لكاميرا السيلفي'}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition-all active:scale-95 cursor-pointer"
-            >
-              <RefreshCw className="w-3.5 h-3.5 text-amber-400" />
-              <span>{facingMode === 'user' ? 'الأمامية (سيلفي)' : 'الخلفية (كراسة)'}</span>
-            </button>
+                {/* 2. حبر ناعم مستدير */}
+                <button
+                  onClick={() => onSelectPenType('marker')}
+                  className={`p-2.5 rounded-xl border text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                    penType === 'marker'
+                      ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-md'
+                      : 'bg-slate-800/80 hover:bg-slate-750 text-slate-200 border-slate-700'
+                  }`}
+                >
+                  <span className="w-3.5 h-3.5 rounded-full bg-current shrink-0" />
+                  <span>حبر ناعم</span>
+                </button>
 
-            {/* Real-time Status Indicator Badge */}
-            {arDetectionStatus && (
-              <div className="flex items-center gap-2 px-3 py-1 bg-slate-900 border border-slate-700 rounded-xl text-[11px] font-medium text-slate-200 shadow-sm">
-                <span className={`w-2.5 h-2.5 rounded-full ${
-                  arDetectionStatus.handsCount > 0
-                    ? arDetectionStatus.isPinching
-                      ? 'bg-amber-400 animate-ping'
-                      : 'bg-emerald-400 animate-pulse'
-                    : 'bg-slate-500'
-                }`} />
-                <span>
-                  {arDetectionStatus.handsCount > 0
-                    ? arDetectionStatus.isPinching
-                      ? '✍️ يرسم الآن في الهواء'
-                      : trackingMode === 'finger_only'
-                      ? '☝️ السبابة جاهزة • قرّب الإبهام للرسم'
-                      : trackingMode === 'two_hands' && arDetectionStatus.handsCount >= 2
-                      ? '🖐️🖐️ تم اكتشاف اليدين معاً'
-                      : '🖐️ هيكل اليد متصل ومطابق'
-                    : 'ضع يدك أمام الكاميرا للبدء'}
-                  {arDetectionStatus.faceDetected && showCrown && ' • 👑 التاج مثبت'}
+                {/* 3. فرشاة تلوين */}
+                <button
+                  onClick={() => onSelectPenType('brush')}
+                  className={`p-2.5 rounded-xl border text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                    penType === 'brush'
+                      ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-md'
+                      : 'bg-slate-800/80 hover:bg-slate-750 text-slate-200 border-slate-700'
+                  }`}
+                >
+                  <Paintbrush className="w-4 h-4 shrink-0" />
+                  <span>فرشاة تلوين</span>
+                </button>
+
+                {/* 4. ممحاة */}
+                <button
+                  onClick={() => onSelectPenType('eraser')}
+                  className={`p-2.5 rounded-xl border text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                    penType === 'eraser'
+                      ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-md'
+                      : 'bg-slate-800/80 hover:bg-slate-750 text-slate-200 border-slate-700'
+                  }`}
+                >
+                  <Eraser className="w-4 h-4 shrink-0" />
+                  <span>ممحاة</span>
+                </button>
+
+              </div>
+            </div>
+
+            {/* Calligraphy Pen Angle (زاوية القلم لقلم الخط) */}
+            <div className={`p-3 rounded-xl border transition-all ${
+              penType === 'calligraphy'
+                ? 'bg-slate-950/60 border-amber-500/30'
+                : 'bg-slate-950/30 border-slate-800 opacity-60'
+            }`}>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-semibold flex items-center gap-1.5 text-slate-200">
+                  <Compass className="w-3.5 h-3.5 text-amber-400" />
+                  <span>زاوية قلم الخط:</span>
+                </span>
+                <span className="font-mono font-bold text-amber-400 text-xs px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/20">
+                  {calligraphyAngle}°
                 </span>
               </div>
-            )}
+
+              <input
+                type="range"
+                min="0"
+                max="90"
+                step="5"
+                value={calligraphyAngle}
+                onChange={(e) => onChangeCalligraphyAngle(Number(e.target.value))}
+                className="w-full accent-amber-500 cursor-pointer h-2 bg-slate-800 rounded-lg"
+              />
+
+              {/* Angle Quick Presets */}
+              <div className="flex items-center justify-between gap-1.5 mt-2.5">
+                {[
+                  { angle: 30, label: '30° نسخ' },
+                  { angle: 45, label: '45° رقعة' },
+                  { angle: 60, label: '60° ثلث' },
+                  { angle: 75, label: '75° فارسي' },
+                ].map(p => (
+                  <button
+                    key={p.angle}
+                    onClick={() => onChangeCalligraphyAngle(p.angle)}
+                    className={`flex-1 py-1 px-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
+                      calligraphyAngle === p.angle
+                        ? 'bg-amber-500 text-slate-950 shadow-xs'
+                        : 'bg-slate-800 hover:bg-slate-700 text-slate-300'
+                    }`}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Pen Size Slider (سمك القلم) */}
+            <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-semibold text-slate-200">سُمك القلم:</span>
+                <span className="font-mono font-bold text-amber-400 text-xs px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/20">
+                  {penSize}px
+                </span>
+              </div>
+              <div className="flex items-center gap-3">
+                <input
+                  type="range"
+                  min="4"
+                  max="48"
+                  value={penSize}
+                  onChange={(e) => onChangePenSize(Number(e.target.value))}
+                  className="w-full accent-amber-500 cursor-pointer h-2 bg-slate-800 rounded-lg"
+                />
+                <div
+                  className="rounded-full shrink-0 border border-slate-600 transition-all"
+                  style={{
+                    width: `${Math.min(32, Math.max(8, penSize))}px`,
+                    height: `${Math.min(32, Math.max(8, penSize))}px`,
+                    backgroundColor: penColor
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* Ink Colors Palette (ألوان الرسم) */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-2">ألوان الحبر والرسم:</label>
+              <div className="grid grid-cols-5 gap-2.5">
+                {CALLIGRAPHY_COLORS.map(c => (
+                  <button
+                    key={c.hex}
+                    onClick={() => onSelectPenColor(c.hex)}
+                    title={c.name}
+                    className={`h-9 rounded-xl flex items-center justify-center transition-all cursor-pointer relative ${
+                      penColor === c.hex
+                        ? 'ring-2 ring-amber-400 ring-offset-2 ring-offset-slate-900 scale-105 shadow-md'
+                        : 'hover:scale-105 opacity-90'
+                    }`}
+                    style={{ backgroundColor: c.hex }}
+                  >
+                    {penColor === c.hex && (
+                      <Check className={`w-4 h-4 ${c.hex === '#ffffff' ? 'text-slate-950' : 'text-white'}`} />
+                    )}
+                  </button>
+                ))}
+
+                {/* Custom Color Picker */}
+                <label
+                  className="h-9 rounded-xl border border-dashed border-slate-600 hover:border-amber-400 flex items-center justify-center cursor-pointer transition-transform hover:scale-105 relative bg-slate-800"
+                  title="لون مخصص"
+                >
+                  <input
+                    type="color"
+                    value={penColor}
+                    onChange={(e) => onSelectPenColor(e.target.value)}
+                    className="opacity-0 absolute inset-0 cursor-pointer w-full h-full"
+                  />
+                  <span className="text-xs font-bold text-amber-400">+</span>
+                </label>
+              </div>
+            </div>
 
           </div>
-
         </div>
       )}
 
-      {/* Secondary Bar: Colors & Stroke Width Slider */}
-      <div className="max-w-7xl mx-auto mt-2 pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-3 text-xs">
-        
-        {/* Calligraphy Ink Colors */}
-        <div className="flex items-center gap-1.5 overflow-x-auto py-0.5">
-          <span className="text-slate-400 text-[11px] font-medium hidden sm:inline">ألوان الحبر:</span>
-          {CALLIGRAPHY_COLORS.map(c => (
-            <button
-              key={c.hex}
-              onClick={() => onSelectPenColor(c.hex)}
-              title={c.name}
-              className={`w-6 h-6 rounded-full transition-all shrink-0 cursor-pointer ${
-                penColor === c.hex
-                  ? 'ring-2 ring-amber-400 ring-offset-2 ring-offset-slate-900 scale-110'
-                  : 'hover:scale-105 opacity-85'
-              }`}
-              style={{ backgroundColor: c.hex }}
-            />
-          ))}
-
-          {/* Custom color picker */}
-          <label className="relative cursor-pointer p-0.5 rounded-full hover:scale-105 transition-transform shrink-0" title="اختيار لون مخصص">
-            <input
-              type="color"
-              value={penColor}
-              onChange={(e) => onSelectPenColor(e.target.value)}
-              className="w-6 h-6 rounded-full overflow-hidden opacity-0 absolute inset-0 cursor-pointer"
-            />
-            <div
-              className="w-6 h-6 rounded-full border border-slate-600 flex items-center justify-center text-[10px] font-bold"
-              style={{ backgroundColor: penColor }}
-            >
-              +
+      {/* ======================================================== */}
+      {/* 2. BOARD SETTINGS POPOVER (زر السبورة)                    */}
+      {/* ======================================================== */}
+      {activePopover === 'board_settings' && (
+        <div
+          className="fixed inset-x-3 top-16 sm:absolute sm:top-full sm:right-28 sm:left-auto max-w-sm sm:w-96 w-auto mx-auto sm:mx-0 z-50 bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl p-4 text-slate-100 animate-in fade-in zoom-in-95 duration-150 overflow-y-auto max-h-[80vh]"
+        >
+          {/* Header */}
+          <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3.5">
+            <div className="flex items-center gap-2">
+              <Layers className="w-4 h-4 text-amber-400" />
+              <h2 className="font-bold text-sm text-amber-300">خيارات وخلفيات السبورة</h2>
             </div>
-          </label>
-        </div>
-
-        {/* Controls: Pen Size Slider & Template Opacity */}
-        <div className="flex items-center gap-4 flex-wrap">
-          {/* Pen Size Slider */}
-          <div className="flex items-center gap-2 bg-slate-950/50 px-3 py-1 rounded-xl border border-slate-800/80">
-            <span className="text-slate-400 text-[11px]">سُمك القلم:</span>
-            <input
-              type="range"
-              min="4"
-              max="48"
-              value={penSize}
-              onChange={(e) => onChangePenSize(Number(e.target.value))}
-              className="w-20 sm:w-28 accent-amber-500 cursor-pointer"
-            />
-            <span className="w-5 text-center font-mono font-bold text-amber-400">
-              {penSize}
-            </span>
+            <button
+              onClick={() => setActivePopover(null)}
+              className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+              aria-label="إغلاق"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
 
-          {/* Template Opacity Slider (When template is selected) */}
-          {template && template.category !== 'freehand' && (
-            <div className="flex items-center gap-2 bg-slate-950/50 px-3 py-1 rounded-xl border border-slate-800/80">
-              <span className="text-slate-400 text-[11px]">شفافية النموذج:</span>
+          <div className="space-y-4">
+            {/* Board Style: White / Dark / Green / Grid */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-2">نوع خلفية السبورة:</label>
+              <div className="grid grid-cols-2 gap-2">
+                
+                {/* 1. بيضاء */}
+                <button
+                  onClick={() => onSelectBoardStyle('white')}
+                  className={`p-3 rounded-xl border text-xs font-bold flex items-center gap-2.5 transition-all cursor-pointer ${
+                    boardStyle === 'white'
+                      ? 'bg-slate-100 text-slate-950 border-white shadow-md'
+                      : 'bg-slate-800/80 hover:bg-slate-750 text-slate-200 border-slate-700'
+                  }`}
+                >
+                  <span className="w-4 h-4 rounded-md bg-white border border-slate-400 shrink-0" />
+                  <span>سبورة بيضاء</span>
+                </button>
+
+                {/* 2. داكنة */}
+                <button
+                  onClick={() => onSelectBoardStyle('dark')}
+                  className={`p-3 rounded-xl border text-xs font-bold flex items-center gap-2.5 transition-all cursor-pointer ${
+                    boardStyle === 'dark'
+                      ? 'bg-slate-950 text-amber-400 border-amber-500 shadow-md'
+                      : 'bg-slate-800/80 hover:bg-slate-750 text-slate-200 border-slate-700'
+                  }`}
+                >
+                  <span className="w-4 h-4 rounded-md bg-slate-950 border border-slate-700 shrink-0" />
+                  <span>سبورة داكنة</span>
+                </button>
+
+                {/* 3. خضراء */}
+                <button
+                  onClick={() => onSelectBoardStyle('green')}
+                  className={`p-3 rounded-xl border text-xs font-bold flex items-center gap-2.5 transition-all cursor-pointer ${
+                    boardStyle === 'green'
+                      ? 'bg-emerald-900 text-emerald-200 border-emerald-500 shadow-md'
+                      : 'bg-slate-800/80 hover:bg-slate-750 text-slate-200 border-slate-700'
+                  }`}
+                >
+                  <span className="w-4 h-4 rounded-md bg-emerald-800 border border-emerald-600 shrink-0" />
+                  <span>سبورة خضراء</span>
+                </button>
+
+                {/* 4. ميزان الخط والشبكة */}
+                <button
+                  onClick={() => onSelectBoardStyle('grid')}
+                  className={`p-3 rounded-xl border text-xs font-bold flex items-center gap-2.5 transition-all cursor-pointer ${
+                    boardStyle === 'grid'
+                      ? 'bg-amber-100 text-amber-950 border-amber-400 shadow-md'
+                      : 'bg-slate-800/80 hover:bg-slate-750 text-slate-200 border-slate-700'
+                  }`}
+                >
+                  <span className="w-4 h-4 rounded-md bg-amber-50 border border-amber-300 flex items-center justify-center text-[10px] text-amber-800 font-mono shrink-0">#</span>
+                  <span>ميزان الخط</span>
+                </button>
+
+              </div>
+            </div>
+
+            {/* Guide Line Color (لون الخط الدليلي للشف) */}
+            <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800">
+              <label className="block text-xs font-semibold text-slate-300 mb-2">لون الخط الدليلي للنموذج:</label>
+              <div className="flex items-center justify-between gap-2">
+                {GUIDE_COLORS.map(g => (
+                  <button
+                    key={g.id}
+                    onClick={() => onSelectGuideColor(g.id)}
+                    title={g.name}
+                    className={`flex-1 py-2 rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer border ${
+                      guideColor === g.id
+                        ? 'border-amber-400 bg-slate-800 shadow-sm ring-1 ring-amber-400'
+                        : 'border-slate-700/60 hover:bg-slate-800/50'
+                    }`}
+                  >
+                    <span
+                      className="w-3.5 h-3.5 rounded-full"
+                      style={{ backgroundColor: g.hex }}
+                    />
+                    <span className="text-[10px] text-slate-300 hidden xs:inline">{g.name}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Template Tracing Opacity Slider (شفافية النموذج للشف) */}
+            <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-semibold text-slate-200">شفافية نموذج الشف:</span>
+                <span className="font-mono font-bold text-amber-400 text-xs px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/20">
+                  {Math.round(templateOpacity * 100)}%
+                </span>
+              </div>
               <input
                 type="range"
                 min="0.1"
@@ -507,36 +686,187 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
                 step="0.05"
                 value={templateOpacity}
                 onChange={(e) => onChangeTemplateOpacity(Number(e.target.value))}
-                className="w-16 sm:w-24 accent-amber-500 cursor-pointer"
+                className="w-full accent-amber-500 cursor-pointer h-2 bg-slate-800 rounded-lg"
               />
-              <span className="w-8 text-center font-mono font-bold text-amber-400">
-                {Math.round(templateOpacity * 100)}%
-              </span>
+              <div className="flex items-center justify-between text-[10px] text-slate-400 mt-1">
+                <span>خفيف جداً (10%)</span>
+                <span>واضح جداً (80%)</span>
+              </div>
             </div>
-          )}
 
-          {/* Guide Line Color (When template is selected) */}
-          {template && template.category !== 'freehand' && (
-            <div className="hidden lg:flex items-center gap-1.5 bg-slate-950/50 px-3 py-1 rounded-xl border border-slate-800/80">
-              <span className="text-slate-400 text-[11px]">لون الخط الدليلي:</span>
-              {GUIDE_COLORS.map(g => (
-                <button
-                  key={g.id}
-                  onClick={() => onSelectGuideColor(g.id)}
-                  title={g.name}
-                  className={`w-4 h-4 rounded-full transition-all cursor-pointer ${
-                    guideColor === g.id
-                      ? 'ring-2 ring-amber-400 ring-offset-1 ring-offset-slate-900 scale-125'
-                      : 'opacity-70 hover:opacity-100'
-                  }`}
-                  style={{ backgroundColor: g.hex }}
-                />
-              ))}
-            </div>
-          )}
+          </div>
         </div>
+      )}
 
-      </div>
+      {/* ======================================================== */}
+      {/* 3. AR TRACKING OPTIONS POPOVER (خيارات الواقع المعزز AR)   */}
+      {/* ======================================================== */}
+      {activePopover === 'ar_settings' && boardStyle === 'ar_camera' && (
+        <div
+          className="fixed inset-x-3 top-16 sm:absolute sm:top-full sm:right-52 sm:left-auto max-w-sm sm:w-96 w-auto mx-auto sm:mx-0 z-50 bg-slate-900 border border-amber-500/40 rounded-2xl shadow-2xl p-4 text-slate-100 animate-in fade-in zoom-in-95 duration-150 overflow-y-auto max-h-[80vh]"
+        >
+          {/* Header */}
+          <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3.5">
+            <div className="flex items-center gap-2">
+              <Camera className="w-4 h-4 text-amber-400" />
+              <h2 className="font-bold text-sm text-amber-300">خيارات الواقع المعزز AR</h2>
+            </div>
+            <button
+              onClick={() => setActivePopover(null)}
+              className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+              aria-label="إغلاق"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="space-y-4">
+            
+            {/* Tracking Mode Options: Finger Only / One Hand / Two Hands */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-2">وضع تتبع اليد في الهواء:</label>
+              <div className="space-y-2">
+                
+                {/* 1. تتبع إصبع واحد (السبابة) */}
+                <button
+                  onClick={() => onSelectTrackingMode('finger_only')}
+                  className={`w-full p-2.5 rounded-xl border text-xs font-bold flex items-center justify-between transition-all cursor-pointer ${
+                    trackingMode === 'finger_only'
+                      ? 'bg-emerald-600 text-white border-emerald-400 shadow-md'
+                      : 'bg-slate-800 hover:bg-slate-750 text-slate-200 border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">☝️</span>
+                    <div className="text-right">
+                      <div>تتبع إصبع السبابة فقط</div>
+                      <div className="text-[10px] opacity-80 font-normal">رسم مباشر بدقة عالية عند رأس الإصبع</div>
+                    </div>
+                  </div>
+                  {trackingMode === 'finger_only' && <Check className="w-4 h-4 shrink-0" />}
+                </button>
+
+                {/* 2. هيكل يد واحدة كامل */}
+                <button
+                  onClick={() => onSelectTrackingMode('one_hand')}
+                  className={`w-full p-2.5 rounded-xl border text-xs font-bold flex items-center justify-between transition-all cursor-pointer ${
+                    trackingMode === 'one_hand'
+                      ? 'bg-blue-600 text-white border-blue-400 shadow-md'
+                      : 'bg-slate-800 hover:bg-slate-750 text-slate-200 border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <Hand className="w-4 h-4 shrink-0 text-amber-300" />
+                    <div className="text-right">
+                      <div>هيكل يد واحدة كامل (21 مفصلاً)</div>
+                      <div className="text-[10px] opacity-80 font-normal">تتبع حركي كامل للمفاصل والرسم بالقرص</div>
+                    </div>
+                  </div>
+                  {trackingMode === 'one_hand' && <Check className="w-4 h-4 shrink-0" />}
+                </button>
+
+                {/* 3. هيكل يدين اثنتين */}
+                <button
+                  onClick={() => onSelectTrackingMode('two_hands')}
+                  className={`w-full p-2.5 rounded-xl border text-xs font-bold flex items-center justify-between transition-all cursor-pointer ${
+                    trackingMode === 'two_hands'
+                      ? 'bg-purple-600 text-white border-purple-400 shadow-md'
+                      : 'bg-slate-800 hover:bg-slate-750 text-slate-200 border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">🖐️🖐️</span>
+                    <div className="text-right">
+                      <div>هيكل يدين معاً (اليمنى واليسرى)</div>
+                      <div className="text-[10px] opacity-80 font-normal">للألعاب والتفاعل الحركي باليدين</div>
+                    </div>
+                  </div>
+                  {trackingMode === 'two_hands' && <Check className="w-4 h-4 shrink-0" />}
+                </button>
+
+              </div>
+            </div>
+
+            {/* Royal Crown Feature (التاج الملكي فوق رأس الطالب) */}
+            <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0 border border-amber-500/30">
+                  <Crown className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="text-xs font-bold text-amber-300">التاج الملكي 👑</div>
+                  <div className="text-[10px] text-slate-400">يثبت فوق رأس الطالب عند تتبع الوجه</div>
+                </div>
+              </div>
+
+              <button
+                onClick={onToggleCrown}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  showCrown
+                    ? 'bg-amber-500 text-slate-950 shadow-sm'
+                    : 'bg-slate-800 text-slate-400 hover:text-white'
+                }`}
+              >
+                {showCrown ? 'مفعّل' : 'معطّل'}
+              </button>
+            </div>
+
+            {/* Camera Flipping & Mirroring */}
+            <div className="grid grid-cols-2 gap-2">
+              
+              {/* Mirror Toggle */}
+              <button
+                onClick={onToggleMirror}
+                className={`p-2.5 rounded-xl border text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                  isMirrored
+                    ? 'bg-slate-800 text-amber-300 border-amber-500/40'
+                    : 'bg-slate-800/60 text-slate-400 border-slate-700'
+                }`}
+              >
+                <FlipHorizontal className="w-4 h-4 text-amber-400 shrink-0" />
+                <span>{isMirrored ? 'مرآة: مفعّلة' : 'مرآة: معطّلة'}</span>
+              </button>
+
+              {/* Camera Switch (Front / Back) */}
+              <button
+                onClick={onToggleFacingMode}
+                className="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer"
+              >
+                <RefreshCw className="w-4 h-4 text-amber-400 shrink-0" />
+                <span>{facingMode === 'user' ? 'كاميرا أمامية' : 'كاميرا خلفية'}</span>
+              </button>
+
+            </div>
+
+            {/* Live Detection Status Indicator */}
+            {arDetectionStatus && (
+              <div className="p-2.5 bg-slate-950/80 rounded-xl border border-slate-800 flex items-center gap-2 text-[11px] text-slate-300">
+                <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                  arDetectionStatus.handsCount > 0
+                    ? arDetectionStatus.isPinching
+                      ? 'bg-amber-400 animate-ping'
+                      : 'bg-emerald-400 animate-pulse'
+                    : 'bg-slate-500'
+                }`} />
+                <span className="truncate">
+                  {arDetectionStatus.handsCount > 0
+                    ? arDetectionStatus.isPinching
+                      ? '✍️ يرسم الآن في الهواء'
+                      : trackingMode === 'finger_only'
+                      ? '☝️ السبابة متصلة • قرّب الإبهام للرسم'
+                      : trackingMode === 'two_hands' && arDetectionStatus.handsCount >= 2
+                      ? '🖐️🖐️ تم اكتشاف اليدين معاً'
+                      : '🖐️ هيكل اليد متصل ومطابق'
+                    : 'وجّه يدك نحو الكاميرا للبدء'}
+                  {arDetectionStatus.faceDetected && showCrown && ' • 👑 التاج مثبت'}
+                </span>
+              </div>
+            )}
+
+          </div>
+        </div>
+      )}
+
     </header>
   );
 };

@@ -25,6 +25,7 @@ interface WhiteboardCanvasProps {
   videoElement: HTMLVideoElement | null;
   virtualCursor: { x: number; y: number } | null;
   isAirDrawing: boolean;
+  calligraphyAngle?: number;
   onAccuracyUpdate?: (accuracy: number) => void;
   onGoalAchieved?: (accuracy: number) => void;
 }
@@ -41,6 +42,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
   videoElement,
   virtualCursor,
   isAirDrawing,
+  calligraphyAngle = 45,
   onAccuracyUpdate,
   onGoalAchieved,
 }, ref) => {
@@ -361,7 +363,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       color: penColor,
       size: penSize,
       opacity: penType === 'brush' ? 0.65 : 1,
-      nibAngle: 45
+      nibAngle: calligraphyAngle
     };
 
     activeStrokeRef.current = newStroke;
@@ -442,7 +444,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
           color: penColor,
           size: penSize,
           opacity: penType === 'brush' ? 0.65 : 1,
-          nibAngle: 45
+          nibAngle: calligraphyAngle
         };
       } else {
         // Continue air stroke
@@ -466,7 +468,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         redrawCanvas();
       }
     }
-  }, [virtualCursor, isAirDrawing, isARMode, dimensions, penType, penColor, penSize, redrawCanvas]);
+  }, [virtualCursor, isAirDrawing, isARMode, dimensions, penType, penColor, penSize, calligraphyAngle, redrawCanvas]);
 
   // Imperative actions exposed to parent component
   useImperativeHandle(ref, () => ({
