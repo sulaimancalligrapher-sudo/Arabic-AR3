@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState, useCallback, useImperativeHandle, forwardRef } from 'react';
-import { BoardStyle, PenType, Stroke, Point, DrawingTemplate, GuideColor } from '../types/drawing';
+import { BoardStyle, PenType, Stroke, Point, DrawingTemplate, GuideColor, LessonStep } from '../types/drawing';
 import { audioService } from '../services/audioService';
 import { formatDirectImageUrl } from '../utils/urlHelper';
 import confetti from 'canvas-confetti';
@@ -210,6 +210,75 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     ctx.restore();
   };
 
+  // Helper to draw step markers (green start dot, red end dot, outer circular step number badge - NO ARROWS)
+  const drawStepMarkers = (
+    ctx: CanvasRenderingContext2D,
+    steps: LessonStep[],
+    drawX: number,
+    drawY: number,
+    drawW: number,
+    drawH: number
+  ) => {
+    steps.forEach(s => {
+      const sx = drawX + s.startX * drawW;
+      const sy = drawY + s.startY * drawH;
+      const ex = drawX + s.endX * drawW;
+      const ey = drawY + s.endY * drawH;
+
+      ctx.save();
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
+      ctx.shadowBlur = 4;
+
+      // Subtle faint dashed guide between start and end
+      ctx.beginPath();
+      ctx.setLineDash([3, 4]);
+      ctx.strokeStyle = 'rgba(16, 185, 129, 0.45)';
+      ctx.lineWidth = 1.5;
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(ex, ey);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // 1. End point: Small Red Dot (نقطة حمراء صغيرة لنهاية الجرة)
+      ctx.beginPath();
+      ctx.arc(ex, ey, 5, 0, Math.PI * 2);
+      ctx.fillStyle = '#ef4444';
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = '#ffffff';
+      ctx.stroke();
+
+      // 2. Start point: Small Green Dot (نقطة خضراء صغيرة لبداية الجرة)
+      ctx.beginPath();
+      ctx.arc(sx, sy, 5.5, 0, Math.PI * 2);
+      ctx.fillStyle = '#10b981';
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = '#ffffff';
+      ctx.stroke();
+
+      // 3. Step Number Badge placed OUTSIDE the green dot (الرقم خارج النقطة كعلامة خطوات)
+      const badgeX = sx - 15;
+      const badgeY = sy - 14;
+
+      ctx.beginPath();
+      ctx.arc(badgeX, badgeY, 9.5, 0, Math.PI * 2);
+      ctx.fillStyle = '#0f172a';
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = '#10b981';
+      ctx.stroke();
+
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 10px Cairo, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(String(s.stepNumber), badgeX, badgeY);
+
+      ctx.restore();
+    });
+  };
+
   // Draw Template Guide Layer (Supports both Google Drive image links and SVG data)
   const drawTemplateGuide = () => {
     const tCanvas = templateCanvasRef.current;
@@ -273,55 +342,9 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
 
         ctx.restore();
 
-        // Render Step Maker arrows if lesson has defined steps
+        // Render Step Maker steps (No arrows: green start dot, red end dot, outer badge)
         if (template.steps && template.steps.length > 0) {
-          template.steps.forEach(s => {
-            const sx = s.startX * drawW + drawX;
-            const sy = s.startY * drawH + drawY;
-            const ex = s.endX * drawW + drawX;
-            const ey = s.endY * drawH + drawY;
-
-            ctx.save();
-            ctx.shadowColor = 'rgba(0,0,0,0.4)';
-            ctx.shadowBlur = 4;
-
-            // Directional line
-            ctx.strokeStyle = '#2563eb';
-            ctx.lineWidth = 3.5;
-            ctx.lineCap = 'round';
-            ctx.beginPath();
-            ctx.moveTo(sx, sy);
-            ctx.lineTo(ex, ey);
-            ctx.stroke();
-
-            // Arrowhead
-            const angle = Math.atan2(ey - sy, ex - sx);
-            const arrowLen = 14;
-            ctx.fillStyle = '#2563eb';
-            ctx.beginPath();
-            ctx.moveTo(ex, ey);
-            ctx.lineTo(ex - arrowLen * Math.cos(angle - Math.PI / 6), ey - arrowLen * Math.sin(angle - Math.PI / 6));
-            ctx.lineTo(ex - arrowLen * Math.cos(angle + Math.PI / 6), ey - arrowLen * Math.sin(angle + Math.PI / 6));
-            ctx.closePath();
-            ctx.fill();
-
-            // Starting point badge with step number
-            ctx.fillStyle = '#10b981';
-            ctx.beginPath();
-            ctx.arc(sx, sy, 12, 0, Math.PI * 2);
-            ctx.fill();
-
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth = 2;
-            ctx.stroke();
-
-            ctx.fillStyle = '#ffffff';
-            ctx.font = 'bold 11px Cairo, sans-serif';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(String(s.stepNumber), sx, sy);
-            ctx.restore();
-          });
+          drawStepMarkers(ctx, template.steps, drawX, drawY, drawW, drawH);
         }
 
         // Sample guide points for accuracy evaluation
@@ -373,52 +396,9 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         ctx.drawImage(img, drawX, drawY, drawW, drawH);
         ctx.restore();
 
-        // Render Step Maker arrows if lesson has defined steps
+        // Render Step Maker steps (No arrows: green start dot, red end dot, outer badge)
         if (template.steps && template.steps.length > 0) {
-          template.steps.forEach(s => {
-            const sx = s.startX * drawW + drawX;
-            const sy = s.startY * drawH + drawY;
-            const ex = s.endX * drawW + drawX;
-            const ey = s.endY * drawH + drawY;
-
-            ctx.save();
-            ctx.shadowColor = 'rgba(0,0,0,0.4)';
-            ctx.shadowBlur = 4;
-
-            ctx.strokeStyle = '#2563eb';
-            ctx.lineWidth = 3.5;
-            ctx.lineCap = 'round';
-            ctx.beginPath();
-            ctx.moveTo(sx, sy);
-            ctx.lineTo(ex, ey);
-            ctx.stroke();
-
-            const angle = Math.atan2(ey - sy, ex - sx);
-            const arrowLen = 14;
-            ctx.fillStyle = '#2563eb';
-            ctx.beginPath();
-            ctx.moveTo(ex, ey);
-            ctx.lineTo(ex - arrowLen * Math.cos(angle - Math.PI / 6), ey - arrowLen * Math.sin(angle - Math.PI / 6));
-            ctx.lineTo(ex - arrowLen * Math.cos(angle + Math.PI / 6), ey - arrowLen * Math.sin(angle + Math.PI / 6));
-            ctx.closePath();
-            ctx.fill();
-
-            ctx.fillStyle = '#10b981';
-            ctx.beginPath();
-            ctx.arc(sx, sy, 12, 0, Math.PI * 2);
-            ctx.fill();
-
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth = 2;
-            ctx.stroke();
-
-            ctx.fillStyle = '#ffffff';
-            ctx.font = 'bold 11px Cairo, sans-serif';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(String(s.stepNumber), sx, sy);
-            ctx.restore();
-          });
+          drawStepMarkers(ctx, template.steps, drawX, drawY, drawW, drawH);
         }
 
         try {

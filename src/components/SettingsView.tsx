@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { DrawingTemplate, LessonDifficulty } from '../types/drawing';
+import { DrawingTemplate, LessonDifficulty, LessonStep } from '../types/drawing';
 import { sheetService, GOOGLE_APPS_SCRIPT_CODE } from '../services/sheetService';
 import { audioService } from '../services/audioService';
 import { formatDirectImageUrl, extractDriveFileId } from '../utils/urlHelper';
@@ -74,6 +74,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [formAudioText, setFormAudioText] = useState('');
   const [formRepeatCount, setFormRepeatCount] = useState<number>(1);
   const [formDifficulty, setFormDifficulty] = useState<LessonDifficulty>('سهل');
+  const [formSteps, setFormSteps] = useState<LessonStep[]>([]);
+  const [formStepsData, setFormStepsData] = useState<string>('');
 
   // Extract unique topics from templates
   const topics = Array.from(
@@ -221,6 +223,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setFormAudioText(tpl.arabicAudioText || tpl.title);
     setFormRepeatCount(Number(tpl.repeatCount) || 1);
     setFormDifficulty(tpl.difficulty || 'سهل');
+    setFormSteps(tpl.steps || []);
+    setFormStepsData(tpl.stepsData || (tpl.steps ? JSON.stringify(tpl.steps) : ''));
     setIsAddModalOpen(true);
   };
 
@@ -235,6 +239,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setFormAudioText('');
     setFormRepeatCount(1);
     setFormDifficulty('سهل');
+    setFormSteps([]);
+    setFormStepsData('');
     setIsAddModalOpen(true);
   };
 
@@ -266,8 +272,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       repeatCount: Number(formRepeatCount) || 1,
       difficulty: formDifficulty,
       svgData: editingTemplate?.svgData || '',
-      steps: editingTemplate?.steps || [],
-      stepsData: editingTemplate?.stepsData || ''
+      steps: formSteps,
+      stepsData: formStepsData || (formSteps.length > 0 ? JSON.stringify(formSteps) : '')
     };
 
     let updatedList: DrawingTemplate[];
@@ -296,6 +302,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   // Save updated steps from StepMakerModal
   const handleSaveStepsFromModal = async (updatedLesson: DrawingTemplate) => {
+    // If the Add/Edit form is currently open, sync steps directly to form state
+    if (isAddModalOpen) {
+      setFormSteps(updatedLesson.steps || []);
+      setFormStepsData(updatedLesson.stepsData || (updatedLesson.steps ? JSON.stringify(updatedLesson.steps) : ''));
+    }
+
     const updatedList = templates.map(t => t.id === updatedLesson.id ? updatedLesson : t);
     onUpdateTemplates(updatedList);
     sheetService.saveLocalTemplates(updatedList);
@@ -842,8 +854,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   كل صف في الورقة يمثل موضوعاً رئيسياً (مثل: خط النسخ، خط الرقعة).
                 </div>
                 <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80">
-                  <strong className="text-amber-400 block mb-1">٢. ٦ أعمدة لكل درس أفقياً:</strong>
-                  الدرس 1 (B:G)، الدرس 2 (H:M)، الدرس 3 (N:S)، وهكذا (الفئة، رابط الصورة، عنوان الصورة، نص القراءة، التكرار، المستوى).
+                  <strong className="text-amber-400 block mb-1">٢. ٧ أعمدة لكل درس أفقياً:</strong>
+                  الدرس 1 (B:H)، الدرس 2 (I:O)، الدرس 3 (P:V)... (الفئة، رابط الصورة، عنوان الدرس، نص القراءة، التكرار، المستوى، خطوات الحرف).
                 </div>
                 <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80">
                   <strong className="text-amber-400 block mb-1">٣. لصق الكود وحفظه:</strong>
@@ -1047,6 +1059,78 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     <option value="متقدم">متقدم</option>
                     <option value="صعب">صعب</option>
                   </select>
+                </div>
+              </div>
+
+              {/* 8. Dedicated Step Maker Section inside Add/Edit Modal */}
+              <div className="p-3.5 rounded-2xl bg-slate-950/70 border border-slate-800 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-xs">
+                      <Footprints className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-200">
+                        ٨. خطوات رسم الحرف (Step Maker) (العامود H):
+                      </label>
+                      <p className="text-[10px] text-slate-400">
+                        تحديد نقطة الانطلاق (🟢) والانتهاء (🔴) ورقم الخطوة لكل جزء في الحرف.
+                      </p>
+                    </div>
+                  </div>
+                  <span
+                    className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full ${
+                      formSteps.length > 0
+                        ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                        : 'bg-slate-800 text-slate-400'
+                    }`}
+                  >
+                    {formSteps.length > 0 ? `${formSteps.length} خطوة مسجلة` : 'بدون خطوات'}
+                  </span>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!formImageUrl.trim() && !editingTemplate?.svgData) {
+                        alert('يرجى إدخال رابط الصورة أولاً لتتمكن من وضع خطوات الرسم عليها');
+                        return;
+                      }
+                      const draftLesson: DrawingTemplate = {
+                        id: editingTemplate ? editingTemplate.id : `draft_${Date.now()}`,
+                        title: formTitle.trim() || 'معاينة الدرس',
+                        imageUrl: previewDirectUrl || formImageUrl.trim(),
+                        topic: formTopic.trim() || 'خط النسخ',
+                        category: formCategory.trim() || 'حروف',
+                        repeatCount: formRepeatCount,
+                        difficulty: formDifficulty,
+                        svgData: editingTemplate?.svgData || '',
+                        steps: formSteps,
+                        stepsData: formStepsData || (formSteps.length > 0 ? JSON.stringify(formSteps) : '')
+                      };
+                      setStepMakerLesson(draftLesson);
+                    }}
+                    className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs shadow-md transition-all active:scale-95 cursor-pointer"
+                  >
+                    <Compass className="w-3.5 h-3.5" />
+                    <span>{formSteps.length > 0 ? 'تعديل خطوات رسم الحرف' : 'فتح صانع الخطوات على الصورة'}</span>
+                  </button>
+
+                  {formSteps.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (window.confirm('هل تريد مسح جميع الخطوات المحددة لهذا الدرس؟')) {
+                          setFormSteps([]);
+                          setFormStepsData('');
+                        }
+                      }}
+                      className="px-3 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-xs font-bold transition-all cursor-pointer"
+                    >
+                      مسح الخطوات
+                    </button>
+                  )}
                 </div>
               </div>
 
