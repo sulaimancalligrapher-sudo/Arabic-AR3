@@ -5,6 +5,8 @@ import { WhiteboardCanvas, WhiteboardCanvasRef } from './components/WhiteboardCa
 import { ARCameraOverlay } from './components/ARCameraOverlay';
 import { WhiteboardToolbar } from './components/WhiteboardToolbar';
 import { TemplateLibraryModal } from './components/TemplateLibraryModal';
+import { SettingsView } from './components/SettingsView';
+import { sheetService } from './services/sheetService';
 import { audioService } from './services/audioService';
 import {
   Camera,
@@ -19,6 +21,50 @@ import {
 export default function App() {
   const canvasRef = useRef<WhiteboardCanvasRef>(null);
 
+  // Dynamic Routing ('whiteboard' or 'settings')
+  const [currentRoute, setCurrentRoute] = useState<'whiteboard' | 'settings'>(() => {
+    if (typeof window !== 'undefined') {
+      return window.location.hash === '#/settings' || window.location.hash === '#settings'
+        ? 'settings'
+        : 'whiteboard';
+    }
+    return 'whiteboard';
+  });
+
+  // Templates State (loaded from Google Sheets / LocalStorage / Default templates)
+  const [allTemplates, setAllTemplates] = useState<DrawingTemplate[]>(() => sheetService.getLocalTemplates());
+  const [selectedTemplate, setSelectedTemplate] = useState<DrawingTemplate | null>(() => {
+    const initialList = sheetService.getLocalTemplates();
+    return initialList.length > 0 ? initialList[0] : DRAWING_TEMPLATES[0];
+  });
+
+  // Listen to hash changes (e.g. #/settings or browser back/forward buttons)
+  useEffect(() => {
+    const handleHashChange = () => {
+      const hash = window.location.hash;
+      if (hash === '#/settings' || hash === '#settings') {
+        setCurrentRoute('settings');
+      } else {
+        setCurrentRoute('whiteboard');
+      }
+    };
+
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
+
+  // Background sync on load if Google Sheet URL is configured
+  useEffect(() => {
+    const url = sheetService.getStoredSheetUrl();
+    if (url) {
+      sheetService.fetchLessonsFromSheet().then((res) => {
+        if (res.success && res.lessons.length > 0) {
+          setAllTemplates(res.lessons);
+        }
+      }).catch(() => {});
+    }
+  }, []);
+
   // Core Application States
   const [boardStyle, setBoardStyle] = useState<BoardStyle>('grid');
   const [penType, setPenType] = useState<PenType>('calligraphy');
@@ -28,7 +74,6 @@ export default function App() {
 
   // Template State
   const [customTemplates, setCustomTemplates] = useState<DrawingTemplate[]>([]);
-  const [selectedTemplate, setSelectedTemplate] = useState<DrawingTemplate | null>(() => DRAWING_TEMPLATES[0]);
   const [templateOpacity, setTemplateOpacity] = useState<number>(0.35);
   const [guideColor, setGuideColor] = useState<GuideColor>('yellow');
   const [accuracy, setAccuracy] = useState<number>(0);
@@ -207,6 +252,25 @@ export default function App() {
     }, 6000);
   };
 
+  // If in Settings route, display Settings Studio View completely isolated from the whiteboard
+  if (currentRoute === 'settings') {
+    return (
+      <SettingsView
+        onBackToWhiteboard={() => {
+          window.location.hash = '#/';
+        }}
+        templates={allTemplates}
+        onUpdateTemplates={(updated) => {
+          setAllTemplates(updated);
+          sheetService.saveLocalTemplates(updated);
+          if (selectedTemplate && !updated.find(t => t.id === selectedTemplate.id)) {
+            setSelectedTemplate(updated[0] || null);
+          }
+        }}
+      />
+    );
+  }
+
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-slate-950 text-slate-100 font-cairo">
       
@@ -239,6 +303,9 @@ export default function App() {
         onClear={handleClear}
         onExport={handleExport}
         onOpenLibrary={() => setIsLibraryOpen(true)}
+        onOpenSettings={() => {
+          window.location.hash = '#/settings';
+        }}
         onPronounce={handlePronounce}
         accuracy={accuracy}
         trackingMode={trackingMode}
@@ -422,6 +489,7 @@ export default function App() {
         isOpen={isLibraryOpen}
         onClose={() => setIsLibraryOpen(false)}
         selectedTemplate={selectedTemplate}
+        templates={allTemplates}
         onSelectTemplate={(tpl) => {
           setSelectedTemplate(tpl);
           setCelebrationMessage(null);
@@ -430,6 +498,8 @@ export default function App() {
         }}
         onAddCustomTemplate={(customTpl) => {
           setCustomTemplates(prev => [customTpl, ...prev]);
+          setAllTemplates(prev => [customTpl, ...prev]);
+          sheetService.saveLocalTemplates([customTpl, ...allTemplates]);
         }}
       />
 

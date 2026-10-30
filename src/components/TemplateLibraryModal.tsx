@@ -10,6 +10,7 @@ interface TemplateLibraryModalProps {
   selectedTemplate: DrawingTemplate | null;
   onSelectTemplate: (template: DrawingTemplate) => void;
   onAddCustomTemplate: (template: DrawingTemplate) => void;
+  templates?: DrawingTemplate[];
 }
 
 export const TemplateLibraryModal: React.FC<TemplateLibraryModalProps> = ({
@@ -18,6 +19,7 @@ export const TemplateLibraryModal: React.FC<TemplateLibraryModalProps> = ({
   selectedTemplate,
   onSelectTemplate,
   onAddCustomTemplate,
+  templates = DRAWING_TEMPLATES,
 }) => {
   const [activeCategory, setActiveCategory] = useState<DrawingCategory | 'all'>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -26,7 +28,8 @@ export const TemplateLibraryModal: React.FC<TemplateLibraryModalProps> = ({
   if (!isOpen) return null;
 
   // Filter templates
-  const filtered = DRAWING_TEMPLATES.filter(tpl => {
+  const allTemplates = templates && templates.length > 0 ? templates : DRAWING_TEMPLATES;
+  const filtered = allTemplates.filter(tpl => {
     const matchCategory = activeCategory === 'all' || tpl.category === activeCategory;
     const matchSearch =
       tpl.title.toLowerCase().includes(searchQuery.toLowerCase()) ||

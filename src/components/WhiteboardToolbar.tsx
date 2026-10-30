@@ -24,7 +24,8 @@ import {
   Compass,
   Check,
   Menu,
-  ChevronDown
+  ChevronDown,
+  Settings
 } from 'lucide-react';
 
 interface WhiteboardToolbarProps {
@@ -52,6 +53,7 @@ interface WhiteboardToolbarProps {
   onOpenLibrary: () => void;
   onPronounce: () => void;
   accuracy: number;
+  onOpenSettings?: () => void;
 
   // AR Tracking & Camera Controls
   trackingMode: HandTrackingDisplayMode;
@@ -97,6 +99,7 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
   onOpenLibrary,
   onPronounce,
   accuracy,
+  onOpenSettings,
   trackingMode,
   onSelectTrackingMode,
   showCrown,
@@ -357,6 +360,18 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
           >
             <Download className="w-5 h-5" />
           </button>
+
+          {/* Settings Studio & Cloud Sync Button */}
+          {onOpenSettings && (
+            <button
+              onClick={onOpenSettings}
+              title="استوديو الإعدادات وإدارة الدروس والربط بـ Google Sheets"
+              className="p-2 sm:p-2.5 rounded-xl bg-slate-800/90 hover:bg-amber-500/20 hover:text-amber-400 text-slate-300 border border-slate-700/80 transition-all active:scale-95 cursor-pointer shrink-0"
+              aria-label="استوديو الإعدادات"
+            >
+              <Settings className="w-5 h-5" />
+            </button>
+          )}
 
         </div>
 
@@ -636,6 +651,22 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
               <Download className="w-5 h-5" />
             </button>
           </div>
+
+          {/* Settings Studio & Cloud Link Button */}
+          {onOpenSettings && (
+            <div className="mt-2.5 pt-2 border-t border-slate-800">
+              <button
+                onClick={() => {
+                  setIsMobileMenuOpen(false);
+                  onOpenSettings();
+                }}
+                className="w-full py-2 px-3 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center gap-2 text-xs font-bold active:scale-95 transition-all cursor-pointer"
+              >
+                <Settings className="w-4 h-4" />
+                <span>استوديو الإعدادات والربط بالشيت</span>
+              </button>
+            </div>
+          )}
         </div>
       )}
 
