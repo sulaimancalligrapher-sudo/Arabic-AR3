@@ -1,8 +1,9 @@
 import { DrawingTemplate } from '../types/drawing';
 import { DRAWING_TEMPLATES } from '../data/drawingTemplates';
+import { formatDirectImageUrl } from '../utils/urlHelper';
 
 const SHEET_URL_KEY = 'arabic_ar_sheet_url';
-const LOCAL_TEMPLATES_KEY = 'arabic_ar_local_templates';
+const LOCAL_TEMPLATES_KEY = 'arabic_ar_horizontal_templates_v2';
 
 export interface SheetSyncStatus {
   connected: boolean;
@@ -10,40 +11,40 @@ export interface SheetSyncStatus {
   error?: string | null;
 }
 
-// Complete Google Apps Script code to copy & paste into Google Sheets
+/**
+ * Complete Google Apps Script code configured for the horizontal structure:
+ * - Column A: الموضوع (Topic)
+ * - 6 Columns per lesson horizontally:
+ *   [الفئة, رابط الصورة, عنوان الصورة, نص للقراءة الالية, عدد التكرار, المستوى]
+ */
 export const GOOGLE_APPS_SCRIPT_CODE = `/**
  * ========================================================
- * خادم نظام السبورة التفاعلية لتعليم الخط العربي والواقع المعزز
- * Arabic AR Whiteboard - Google Sheets Database Backend
+ * خادم نظام السبورة التفاعلية لتعليم الخط العربي - الهيكل الأفقي
+ * Arabic AR Lessons Backend - Horizontal Architecture (ArabicLessons)
  * ========================================================
- * طريقة التثبيت في دقيقة واحدة:
+ * تعليمات التثبيت:
  * 1. افتح جدول بيانات Google Sheets جديد.
  * 2. من القائمة العلوية: اختر [امتدادات] (Extensions) > [Apps Script].
  * 3. احذف أي كود مكتوب، والصق هذا الكود كاملاً، ثم اضغط حفظ (Ctrl + S).
  * 4. اضغط على زر [نشر] (Deploy) باللون الأزرق بالأعلى > [نشر جديد] (New deployment).
- * 5. اضغط على أيقونة الترس بجانب "اختر النوع" واختر [تطبيق ويب] (Web app).
- * 6. اضبط الإعدادات كالتالي:
- *    - الوصف: Arabic AR Lessons Backend
+ * 5. اضغط على أيقونة الترس واختر [تطبيق ويب] (Web app).
+ * 6. اضبط الإعدادات:
+ *    - الوصف: Arabic AR Horizontal Lessons
  *    - تنفيذ التطبيق كـ (Execute as): أنا (Me)
- *    - من يملك حق الوصول (Who has access): أي شخص (Anyone)  <--- مهم جداً!
- * 7. اضغط [نشر] (Deploy)، ثم امنح الأذونات، وانسخ [رابط تطبيق الويب] (Web app URL).
- * 8. الصق الرابط في صفحة إعدادات النظام واضغط "اختبار الاتصال والمزامنة".
+ *    - من يملك حق الوصول (Who has access): أي شخص (Anyone) <--- مهم جداً!
+ * 7. اضغط [نشر] (Deploy) وامنح الأذونات، ثم انسخ رابط تطبيق الويب.
+ * 8. الصق الرابط في لوحة الإعدادات بالنظام.
  */
 
 const SHEET_NAME = "ArabicLessons";
-const HEADERS = [
-  "id",
-  "title",
-  "titleEn",
-  "category",
-  "description",
-  "arabicAudioText",
-  "difficulty",
-  "targetAccuracy",
-  "tags",
-  "svgData",
-  "stepsData",
-  "updatedAt"
+const COLS_PER_LESSON = 6;
+const SUB_HEADERS = [
+  "الفئة",
+  "رابط الصورة",
+  "عنوان الصورة",
+  "نص للقراءة الالية",
+  "عدد التكرار",
+  "المستوى"
 ];
 
 function getOrCreateSheet() {
@@ -51,20 +52,46 @@ function getOrCreateSheet() {
   let sheet = ss.getSheetByName(SHEET_NAME);
   if (!sheet) {
     sheet = ss.insertSheet(SHEET_NAME);
-    // Setup Headers with nice Arabic styling
-    sheet.appendRow(HEADERS);
-    const headerRange = sheet.getRange(1, 1, 1, HEADERS.length);
+    const headers = ["الموضوع"];
+    for (let i = 1; i <= 20; i++) {
+      for (let s = 0; s < SUB_HEADERS.length; s++) {
+        headers.push("الدرس " + i + " - " + SUB_HEADERS[s]);
+      }
+    }
+    sheet.appendRow(headers);
+    const headerRange = sheet.getRange(1, 1, 1, headers.length);
     headerRange.setBackground("#1e293b");
     headerRange.setFontColor("#f8fafc");
     headerRange.setFontWeight("bold");
-    headerRange.setFontSize(11);
+    headerRange.setFontSize(10);
     sheet.setFrozenRows(1);
-    sheet.autoResizeColumns(1, HEADERS.length);
+    sheet.setFrozenColumns(1);
   }
   return sheet;
 }
 
-// Read all lessons (GET request)
+function ensureHeaderLength(sheet, lessonSlotCount) {
+  const lastCol = Math.max(sheet.getLastColumn(), 1);
+  const neededCols = 1 + (lessonSlotCount * COLS_PER_LESSON);
+  if (neededCols > lastCol) {
+    const currentHeaders = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+    const newHeaders = [...currentHeaders];
+    const currentSlots = Math.floor((lastCol - 1) / COLS_PER_LESSON);
+    for (let i = currentSlots + 1; i <= lessonSlotCount; i++) {
+      for (let s = 0; s < SUB_HEADERS.length; s++) {
+        newHeaders.push("الدرس " + i + " - " + SUB_HEADERS[s]);
+      }
+    }
+    sheet.getRange(1, 1, 1, newHeaders.length).setValues([newHeaders]);
+    const headerRange = sheet.getRange(1, 1, 1, newHeaders.length);
+    headerRange.setBackground("#1e293b");
+    headerRange.setFontColor("#f8fafc");
+    headerRange.setFontWeight("bold");
+    headerRange.setFontSize(10);
+  }
+}
+
+// Read all lessons from horizontal structure (GET)
 function doGet(e) {
   try {
     const sheet = getOrCreateSheet();
@@ -73,28 +100,39 @@ function doGet(e) {
       return jsonResponse({ status: "success", count: 0, lessons: [] });
     }
 
-    const headers = data[0];
     const lessons = [];
 
-    for (let i = 1; i < data.length; i++) {
-      const row = data[i];
-      if (!row[0]) continue; // Skip empty rows
+    // Loop through rows starting at row 2 (row 1 is header)
+    for (let r = 1; r < data.length; r++) {
+      const row = data[r];
+      const topic = String(row[0] || '').trim();
+      if (!topic) continue;
 
-      const lesson = {
-        id: String(row[0] || ''),
-        title: String(row[1] || ''),
-        titleEn: String(row[2] || ''),
-        category: String(row[3] || 'letters'),
-        description: String(row[4] || ''),
-        arabicAudioText: String(row[5] || ''),
-        difficulty: String(row[6] || 'easy'),
-        targetAccuracy: Number(row[7] || 75),
-        tags: row[8] ? String(row[8]).split(',').map(s => s.trim()) : [],
-        svgData: String(row[9] || ''),
-        stepsData: String(row[10] || ''),
-        updatedAt: String(row[11] || '')
-      };
-      lessons.push(lesson);
+      let slotIndex = 1;
+      for (let c = 1; c < row.length; c += COLS_PER_LESSON) {
+        const category = String(row[c] || '').trim();
+        const imageUrl = String(row[c + 1] || '').trim();
+        const title = String(row[c + 2] || '').trim();
+        const tts = String(row[c + 3] || '').trim();
+        const repeatCount = Number(row[c + 4]) || 1;
+        const difficulty = String(row[c + 5] || 'سهل').trim();
+
+        if (title || imageUrl) {
+          lessons.push({
+            id: topic + "_" + slotIndex + "_" + (title || ("lesson_" + c)),
+            topic: topic,
+            category: category || "حروف",
+            imageUrl: imageUrl,
+            title: title || ("درس " + slotIndex),
+            arabicAudioText: tts || title || ("درس " + slotIndex),
+            repeatCount: repeatCount,
+            difficulty: difficulty || "سهل",
+            slotIndex: slotIndex,
+            colStart: c + 1 // 1-indexed for Sheets
+          });
+        }
+        slotIndex++;
+      }
     }
 
     return jsonResponse({
@@ -107,7 +145,7 @@ function doGet(e) {
   }
 }
 
-// Save, Update, or Delete lessons (POST request)
+// Add, Update, Sync all, or Delete (POST)
 function doPost(e) {
   try {
     const sheet = getOrCreateSheet();
@@ -120,93 +158,165 @@ function doPost(e) {
 
     const action = body.action || "upsert";
 
-    // 1. Bulk sync or initialize all lessons
+    // 1. BULK SYNC ALL LESSONS
     if (action === "sync_all" || action === "init") {
       const lessons = body.lessons || [];
       sheet.clearContents();
-      sheet.appendRow(HEADERS);
-      const headerRange = sheet.getRange(1, 1, 1, HEADERS.length);
+
+      // Group lessons by topic
+      const topicsMap = {};
+      const topicOrder = [];
+
+      lessons.forEach(l => {
+        const top = (l.topic || "خط النسخ").trim();
+        if (!topicsMap[top]) {
+          topicsMap[top] = [];
+          topicOrder.push(top);
+        }
+        topicsMap[top].push(l);
+      });
+
+      let maxLessonsPerTopic = 1;
+      topicOrder.forEach(top => {
+        if (topicsMap[top].length > maxLessonsPerTopic) {
+          maxLessonsPerTopic = topicsMap[top].length;
+        }
+      });
+
+      // Build Headers
+      const headers = ["الموضوع"];
+      for (let i = 1; i <= Math.max(maxLessonsPerTopic, 5); i++) {
+        for (let s = 0; s < SUB_HEADERS.length; s++) {
+          headers.push("الدرس " + i + " - " + SUB_HEADERS[s]);
+        }
+      }
+
+      sheet.appendRow(headers);
+      const headerRange = sheet.getRange(1, 1, 1, headers.length);
       headerRange.setBackground("#1e293b");
       headerRange.setFontColor("#f8fafc");
       headerRange.setFontWeight("bold");
+      headerRange.setFontSize(10);
       sheet.setFrozenRows(1);
+      sheet.setFrozenColumns(1);
 
-      const rows = lessons.map(l => [
-        l.id || '',
-        l.title || '',
-        l.titleEn || '',
-        l.category || 'letters',
-        l.description || '',
-        l.arabicAudioText || '',
-        l.difficulty || 'easy',
-        l.targetAccuracy || 75,
-        Array.isArray(l.tags) ? l.tags.join(', ') : (l.tags || ''),
-        l.svgData || '',
-        l.stepsData || '',
-        new Date().toISOString()
-      ]);
+      // Build Rows
+      const rows = [];
+      topicOrder.forEach(top => {
+        const list = topicsMap[top];
+        const row = [top];
+        list.forEach(l => {
+          row.push(l.category || "حروف");
+          row.push(l.imageUrl || "");
+          row.push(l.title || "");
+          row.push(l.arabicAudioText || l.title || "");
+          row.push(Number(l.repeatCount) || 1);
+          row.push(l.difficulty || "سهل");
+        });
+        rows.push(row);
+      });
 
       if (rows.length > 0) {
-        sheet.getRange(2, 1, rows.length, HEADERS.length).setValues(rows);
-      }
-      return jsonResponse({ status: "success", action: action, count: rows.length });
-    }
-
-    // 2. Delete a single lesson by ID
-    if (action === "delete") {
-      const id = String(body.id || '');
-      if (!id) return jsonResponse({ status: "error", message: "Missing id for delete" });
-
-      const data = sheet.getDataRange().getValues();
-      let deleted = false;
-      for (let i = 1; i < data.length; i++) {
-        if (String(data[i][0]) === id) {
-          sheet.deleteRow(i + 1);
-          deleted = true;
-          break;
+        for (let r = 0; r < rows.length; r++) {
+          const rowVals = rows[r];
+          sheet.getRange(r + 2, 1, 1, rowVals.length).setValues([rowVals]);
         }
       }
-      return jsonResponse({ status: "success", deleted: deleted });
+
+      return jsonResponse({ status: "success", count: lessons.length });
     }
 
-    // 3. Upsert a single lesson (add or update)
+    // 2. UPSERT SINGLE LESSON
     if (action === "upsert" || action === "save") {
       const l = body.lesson;
-      if (!l || !l.id) {
-        return jsonResponse({ status: "error", message: "Missing lesson object or id" });
-      }
+      if (!l) return jsonResponse({ status: "error", message: "Missing lesson object" });
 
+      const targetTopic = (l.topic || "خط النسخ").trim();
       const data = sheet.getDataRange().getValues();
-      let rowIndex = -1;
-      for (let i = 1; i < data.length; i++) {
-        if (String(data[i][0]) === String(l.id)) {
-          rowIndex = i + 1;
+
+      let targetRowIndex = -1;
+      for (let r = 1; r < data.length; r++) {
+        if (String(data[r][0] || '').trim() === targetTopic) {
+          targetRowIndex = r + 1; // 1-indexed for sheet
           break;
         }
       }
 
-      const rowValues = [
-        l.id,
-        l.title || '',
-        l.titleEn || '',
-        l.category || 'letters',
-        l.description || '',
-        l.arabicAudioText || '',
-        l.difficulty || 'easy',
-        l.targetAccuracy || 75,
-        Array.isArray(l.tags) ? l.tags.join(', ') : (l.tags || ''),
-        l.svgData || '',
-        l.stepsData || '',
-        new Date().toISOString()
+      const lessonValues = [
+        l.category || "حروف",
+        l.imageUrl || "",
+        l.title || "",
+        l.arabicAudioText || l.title || "",
+        Number(l.repeatCount) || 1,
+        l.difficulty || "سهل"
       ];
 
-      if (rowIndex > 0) {
-        sheet.getRange(rowIndex, 1, 1, HEADERS.length).setValues([rowValues]);
-      } else {
-        sheet.appendRow(rowValues);
+      // If Topic row does NOT exist, create new row
+      if (targetRowIndex === -1) {
+        targetRowIndex = sheet.getLastRow() + 1;
+        ensureHeaderLength(sheet, 1);
+        const newRow = [targetTopic, ...lessonValues];
+        sheet.getRange(targetRowIndex, 1, 1, newRow.length).setValues([newRow]);
+        return jsonResponse({ status: "success", action: "inserted_new_topic", row: targetRowIndex });
       }
 
-      return jsonResponse({ status: "success", id: l.id, updated: rowIndex > 0 });
+      // If Topic row exists: check if updating an existing lesson or appending horizontally
+      const rowData = sheet.getRange(targetRowIndex, 1, 1, sheet.getLastColumn()).getValues()[0];
+      let targetColStart = -1;
+
+      // Check if originalTitle or id matches an existing slot in this row
+      const searchTitle = (body.originalTitle || l.title || '').trim();
+      for (let c = 1; c < rowData.length; c += COLS_PER_LESSON) {
+        const slotTitle = String(rowData[c + 2] || '').trim();
+        if (slotTitle && slotTitle === searchTitle) {
+          targetColStart = c + 1; // 1-indexed
+          break;
+        }
+      }
+
+      // If not updating existing, find next free 6-column slot in this topic row
+      if (targetColStart === -1) {
+        let firstEmptyCol = 1;
+        while (firstEmptyCol < rowData.length) {
+          const cat = String(rowData[firstEmptyCol] || '').trim();
+          const img = String(rowData[firstEmptyCol + 1] || '').trim();
+          const tit = String(rowData[firstEmptyCol + 2] || '').trim();
+          if (!cat && !img && !tit) {
+            break;
+          }
+          firstEmptyCol += COLS_PER_LESSON;
+        }
+        targetColStart = firstEmptyCol + 1;
+      }
+
+      const slotNumber = Math.ceil((targetColStart - 1) / COLS_PER_LESSON);
+      ensureHeaderLength(sheet, slotNumber);
+      sheet.getRange(targetRowIndex, targetColStart, 1, COLS_PER_LESSON).setValues([lessonValues]);
+
+      return jsonResponse({ status: "success", action: "updated", row: targetRowIndex, col: targetColStart });
+    }
+
+    // 3. DELETE LESSON
+    if (action === "delete") {
+      const targetTopic = (body.topic || '').trim();
+      const targetTitle = (body.title || '').trim();
+
+      const data = sheet.getDataRange().getValues();
+      for (let r = 1; r < data.length; r++) {
+        const top = String(data[r][0] || '').trim();
+        if (!targetTopic || top === targetTopic) {
+          const rowVals = data[r];
+          for (let c = 1; c < rowVals.length; c += COLS_PER_LESSON) {
+            const tit = String(rowVals[c + 2] || '').trim();
+            if (tit === targetTitle || String(rowVals[c + 1] || '').trim() === body.imageUrl) {
+              // Clear these 6 cells
+              sheet.getRange(r + 1, c + 1, 1, COLS_PER_LESSON).clearContent();
+              return jsonResponse({ status: "success", deleted: true, row: r + 1, col: c + 1 });
+            }
+          }
+        }
+      }
+      return jsonResponse({ status: "success", deleted: false });
     }
 
     return jsonResponse({ status: "error", message: "Unknown action: " + action });
@@ -242,19 +352,19 @@ class SheetService {
   }
 
   public getLocalTemplates(): DrawingTemplate[] {
-    if (typeof window === 'undefined') return DRAWING_TEMPLATES;
+    if (typeof window === 'undefined') return this.normalizeTemplates(DRAWING_TEMPLATES);
     try {
       const cached = localStorage.getItem(LOCAL_TEMPLATES_KEY);
       if (cached) {
         const parsed = JSON.parse(cached);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
+          return this.normalizeTemplates(parsed);
         }
       }
     } catch {
-      // Ignore parse errors, fallback to default
+      // Fallback
     }
-    return DRAWING_TEMPLATES;
+    return this.normalizeTemplates(DRAWING_TEMPLATES);
   }
 
   public saveLocalTemplates(templates: DrawingTemplate[]): void {
@@ -264,7 +374,36 @@ class SheetService {
   }
 
   /**
-   * Fetch all lessons from Google Sheet
+   * Ensure every template has topic, category, repeatCount, and valid fields
+   */
+  public normalizeTemplates(rawList: DrawingTemplate[]): DrawingTemplate[] {
+    return rawList.map((item, idx) => {
+      const topic = (item.topic || 'خط النسخ (الأساسيات)').trim();
+      let category = (item.category || 'حروف').trim();
+      if (category === 'letters') category = 'حروف';
+      if (category === 'words') category = 'كلمات';
+      if (category === 'shapes') category = 'رسمة وزخرفة';
+
+      const directImg = formatDirectImageUrl(item.imageUrl);
+
+      return {
+        ...item,
+        id: item.id || `tpl_${idx}_${Date.now()}`,
+        topic: topic,
+        category: category,
+        imageUrl: directImg || item.imageUrl || '',
+        title: item.title || `درس ${idx + 1}`,
+        titleEn: item.titleEn || '',
+        arabicAudioText: item.arabicAudioText || item.title || '',
+        repeatCount: Number(item.repeatCount) || 1,
+        difficulty: item.difficulty || 'سهل',
+        svgData: item.svgData || ''
+      };
+    });
+  }
+
+  /**
+   * Fetch all lessons from Google Sheet (GET)
    */
   public async fetchLessonsFromSheet(): Promise<{
     success: boolean;
@@ -296,21 +435,31 @@ class SheetService {
           return { success: true, lessons: [] };
         }
 
-        const validTemplates: DrawingTemplate[] = json.lessons.map((item: any) => ({
-          id: String(item.id || `tpl_${Date.now()}`),
-          title: String(item.title || 'درس بدون عنوان'),
-          titleEn: String(item.titleEn || ''),
-          category: item.category || 'letters',
-          description: String(item.description || ''),
-          arabicAudioText: String(item.arabicAudioText || item.title || ''),
-          difficulty: item.difficulty || 'easy',
-          targetAccuracy: Number(item.targetAccuracy || 75),
-          tags: Array.isArray(item.tags) ? item.tags : (item.tags ? String(item.tags).split(',') : []),
-          svgData: String(item.svgData || ''),
-          isCustom: item.category === 'custom',
-        }));
+        const validTemplates: DrawingTemplate[] = json.lessons.map((item: any) => {
+          const topic = (item.topic || 'خط النسخ').trim();
+          const category = (item.category || 'حروف').trim();
+          const rawImg = String(item.imageUrl || '').trim();
+          const directImg = formatDirectImageUrl(rawImg);
+          const title = String(item.title || 'درس بدون عنوان').trim();
+          const tts = String(item.arabicAudioText || title).trim();
 
-        // Cache locally for offline capability
+          return {
+            id: String(item.id || `sheet_${topic}_${title}`),
+            topic: topic,
+            category: category,
+            imageUrl: directImg,
+            title: title,
+            titleEn: String(item.titleEn || ''),
+            arabicAudioText: tts,
+            repeatCount: Number(item.repeatCount) || 1,
+            difficulty: (item.difficulty as any) || 'سهل',
+            description: String(item.description || ''),
+            svgData: item.svgData || '',
+            tags: [topic, category, item.difficulty || 'سهل'],
+          };
+        });
+
+        // Save normalized templates locally
         this.saveLocalTemplates(validTemplates);
 
         return {
@@ -330,9 +479,12 @@ class SheetService {
   }
 
   /**
-   * Save or update a single lesson into the Sheet
+   * Save or update a single lesson into the horizontal Google Sheet
    */
-  public async saveLessonToSheet(lesson: DrawingTemplate): Promise<{ success: boolean; error?: string }> {
+  public async saveLessonToSheet(
+    lesson: DrawingTemplate,
+    originalTitle?: string
+  ): Promise<{ success: boolean; error?: string }> {
     const url = this.getStoredSheetUrl();
     if (!url) {
       return { success: false, error: 'الرابط غير موجود' };
@@ -344,18 +496,15 @@ class SheetService {
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({
           action: 'upsert',
+          originalTitle: originalTitle || lesson.title,
           lesson: {
-            id: lesson.id,
+            topic: lesson.topic || 'خط النسخ',
+            category: lesson.category || 'حروف',
+            imageUrl: lesson.imageUrl || '',
             title: lesson.title,
-            titleEn: lesson.titleEn,
-            category: lesson.category,
-            description: lesson.description,
-            arabicAudioText: lesson.arabicAudioText,
-            difficulty: lesson.difficulty,
-            targetAccuracy: lesson.targetAccuracy,
-            tags: lesson.tags,
-            svgData: lesson.svgData,
-            stepsData: ''
+            arabicAudioText: lesson.arabicAudioText || lesson.title,
+            repeatCount: Number(lesson.repeatCount) || 1,
+            difficulty: lesson.difficulty || 'سهل'
           }
         })
       });
@@ -374,7 +523,7 @@ class SheetService {
   /**
    * Delete a lesson from the Sheet
    */
-  public async deleteLessonFromSheet(id: string): Promise<{ success: boolean; error?: string }> {
+  public async deleteLessonFromSheet(topic: string, title: string, imageUrl?: string): Promise<{ success: boolean; error?: string }> {
     const url = this.getStoredSheetUrl();
     if (!url) return { success: false, error: 'الرابط غير موجود' };
 
@@ -382,18 +531,18 @@ class SheetService {
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: 'delete', id })
+        body: JSON.stringify({ action: 'delete', topic, title, imageUrl })
       });
 
       const json = await response.json();
       return { success: json.status === 'success', error: json.message };
     } catch (err: any) {
-      return { success: false, error: err.message || 'تعذر حذف السطر' };
+      return { success: false, error: err.message || 'تعذر حذف الدرس من الشيت' };
     }
   }
 
   /**
-   * Initialize or sync all current lessons to the Sheet
+   * Bulk sync all current lessons to the horizontal Sheet
    */
   public async syncAllLessonsToSheet(lessons: DrawingTemplate[]): Promise<{ success: boolean; count?: number; error?: string }> {
     const url = this.getStoredSheetUrl();
@@ -407,7 +556,15 @@ class SheetService {
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({
           action: 'sync_all',
-          lessons: lessons
+          lessons: lessons.map(l => ({
+            topic: l.topic || 'خط النسخ',
+            category: l.category || 'حروف',
+            imageUrl: l.imageUrl || '',
+            title: l.title,
+            arabicAudioText: l.arabicAudioText || l.title,
+            repeatCount: Number(l.repeatCount) || 1,
+            difficulty: l.difficulty || 'سهل'
+          }))
         })
       });
 
@@ -423,10 +580,10 @@ class SheetService {
   }
 
   /**
-   * Initialize Sheet with standard 28 Arabic letters
+   * Initialize Sheet with standard templates
    */
   public async initializeSheetWithDefaults(): Promise<{ success: boolean; count?: number; error?: string }> {
-    return this.syncAllLessonsToSheet(DRAWING_TEMPLATES);
+    return this.syncAllLessonsToSheet(this.getLocalTemplates());
   }
 }
 

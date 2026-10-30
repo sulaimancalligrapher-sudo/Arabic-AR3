@@ -1,14 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { DrawingTemplate, DrawingCategory } from '../types/drawing';
+import { DrawingTemplate, LessonDifficulty } from '../types/drawing';
 import { sheetService, GOOGLE_APPS_SCRIPT_CODE } from '../services/sheetService';
 import { audioService } from '../services/audioService';
+import { formatDirectImageUrl, extractDriveFileId } from '../utils/urlHelper';
 import {
   ArrowRight,
   Database,
   RefreshCw,
   Copy,
   Check,
-  ExternalLink,
   Plus,
   Trash2,
   Edit3,
@@ -20,8 +20,12 @@ import {
   Search,
   Sparkles,
   Save,
-  Upload,
-  Info
+  Info,
+  FolderOpen,
+  Image as ImageIcon,
+  Layers,
+  Repeat,
+  Gauge
 } from 'lucide-react';
 
 interface SettingsViewProps {
@@ -36,7 +40,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onUpdateTemplates,
 }) => {
   // Tabs
-  const [activeTab, setActiveTab] = useState<'sheet' | 'lessons'>('sheet');
+  const [activeTab, setActiveTab] = useState<'sheet' | 'lessons'>('lessons');
 
   // Sheet connection states
   const [sheetUrl, setSheetUrl] = useState<string>(() => sheetService.getStoredSheetUrl());
@@ -47,23 +51,70 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [statusMessage, setStatusMessage] = useState<string>('');
   const [isCopied, setIsCopied] = useState(false);
 
-  // Lessons management states
+  // Lesson Management: Topic & Category states
   const [searchQuery, setSearchQuery] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState<DrawingCategory | 'all'>('all');
+  const [selectedTopic, setSelectedTopic] = useState<string>('');
+  const [selectedCategory, setSelectedCategory] = useState<string>('');
+
+  // Add / Edit Modal states
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<DrawingTemplate | null>(null);
+  const [originalTitle, setOriginalTitle] = useState<string>('');
 
-  // Form states for adding / editing
+  // Form Fields as specified by user
+  const [formTopic, setFormTopic] = useState('');
+  const [formCategory, setFormCategory] = useState('');
+  const [formImageUrl, setFormImageUrl] = useState('');
   const [formTitle, setFormTitle] = useState('');
-  const [formTitleEn, setFormTitleEn] = useState('');
-  const [formCategory, setFormCategory] = useState<DrawingCategory>('letters');
-  const [formDescription, setFormDescription] = useState('');
   const [formAudioText, setFormAudioText] = useState('');
-  const [formDifficulty, setFormDifficulty] = useState<'easy' | 'normal' | 'advanced'>('easy');
-  const [formTargetAccuracy, setFormTargetAccuracy] = useState<number>(75);
-  const [formSvgData, setFormSvgData] = useState('');
+  const [formRepeatCount, setFormRepeatCount] = useState<number>(1);
+  const [formDifficulty, setFormDifficulty] = useState<LessonDifficulty>('سهل');
 
-  // Initial connection check if URL is present
+  // Extract unique topics from templates
+  const topics = Array.from(
+    new Set(templates.map(t => (t.topic || 'خط النسخ (الأساسيات)').trim()))
+  ).filter(Boolean);
+
+  // Default selectedTopic to first available topic
+  useEffect(() => {
+    if (topics.length > 0 && (!selectedTopic || !topics.includes(selectedTopic))) {
+      setSelectedTopic(topics[0]);
+    }
+  }, [topics, selectedTopic]);
+
+  // Lessons belonging to the selected topic
+  const currentTopicLessons = templates.filter(
+    t => (t.topic || 'خط النسخ (الأساسيات)').trim() === selectedTopic
+  );
+
+  // Extract unique categories within the selected topic
+  const categoriesInTopic = Array.from(
+    new Set(currentTopicLessons.map(t => (t.category || 'حروف').trim()))
+  ).filter(Boolean);
+
+  // Default selectedCategory to first available category in topic
+  useEffect(() => {
+    if (categoriesInTopic.length > 0) {
+      if (!selectedCategory || !categoriesInTopic.includes(selectedCategory)) {
+        setSelectedCategory(categoriesInTopic[0]);
+      }
+    } else {
+      setSelectedCategory('حروف');
+    }
+  }, [selectedTopic, categoriesInTopic, selectedCategory]);
+
+  // All registered categories across the whole system (for modal dropdown helper)
+  const allKnownCategories = Array.from(
+    new Set([
+      'حروف',
+      'كلمات',
+      'رسمة',
+      'أشكال وزخرفة',
+      ...templates.map(t => (t.category || '').trim())
+    ])
+  ).filter(Boolean);
+
+  // Initial connection test
   useEffect(() => {
     if (sheetUrl) {
       handleTestConnection();
@@ -75,7 +126,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     try {
       await navigator.clipboard.writeText(GOOGLE_APPS_SCRIPT_CODE);
       setIsCopied(true);
-      audioService.speakArabic('تم نسخ الكود بنجاح');
+      audioService.speakArabic('تم نسخ كود الهيكل الأفقي بنجاح');
       setTimeout(() => setIsCopied(false), 3000);
     } catch {
       alert('يرجى تحديد النص ونسخه يدوياً');
@@ -101,10 +152,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       setConnectionStatus('success');
       if (result.lessons.length > 0) {
         onUpdateTemplates(result.lessons);
-        setStatusMessage(`تم الاتصال بنجاح! تم جلب ومزامنة ${result.lessons.length} درساً من ورقة الشيت.`);
-        audioService.speakArabic('تم الاتصال بجدول البيانات بنجاح ومزامنة الدروس');
+        setStatusMessage(`تم الاتصال بنجاح! تم جلب ومزامنة ${result.lessons.length} درساً عبر الهيكل الأفقي.`);
+        audioService.speakArabic('تمت مزامنة الدروس من جدول البيانات بنجاح');
       } else {
-        setStatusMessage('تم الاتصال بنجاح! جدول البيانات متصل ولكنه فارغ حالياً. يمكنك تهيئته بالضغط على زر "تهيئة الحروف التلقائية".');
+        setStatusMessage('تم الاتصال بنجاح! جدول البيانات متصل ولكنه فارغ حالياً. يمكنك تهيئة الدروس بالضغط على زر "تهيئة وحفظ الدروس".');
       }
     } else {
       setConnectionStatus('error');
@@ -112,53 +163,23 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
   };
 
-  // Initialize Sheet with default 28 letters
-  const handleSeedDefaultsToSheet = async () => {
+  // Bulk sync current in-memory lessons to sheet
+  const handleSyncAllToSheet = async () => {
     if (!sheetUrl.trim()) {
       alert('يرجى إدخال رابط تطبيق الويب أولاً');
       return;
     }
-    const confirm = window.confirm('هل تريد رفع وتهيئة الحروف العربية الـ 28 التلقائية في جدول بيانات Google Sheets؟');
-    if (!confirm) return;
 
     setIsConnecting(true);
-    setStatusMessage('جاري تهيئة وحفظ الحروف العربية في جدول الشيت...');
-
-    const res = await sheetService.initializeSheetWithDefaults();
-    setIsConnecting(false);
-
-    if (res.success) {
-      setConnectionStatus('success');
-      setStatusMessage(`تمت تهيئة الشيت وحفظ ${res.count || templates.length} درساً بنجاح!`);
-      audioService.speakArabic('تم حفظ وتهيئة الحروف في جدول البيانات');
-      // Refresh
-      const refresh = await sheetService.fetchLessonsFromSheet();
-      if (refresh.success && refresh.lessons.length > 0) {
-        onUpdateTemplates(refresh.lessons);
-      }
-    } else {
-      setConnectionStatus('error');
-      setStatusMessage(res.error || 'حدث خطأ أثناء التهيئة');
-    }
-  };
-
-  // Bulk sync current in-memory lessons to sheet
-  const handleSyncAllToSheet = async () => {
-    if (!sheetUrl.trim()) {
-      alert('يرجى ضبط رابط الشيت أولاً');
-      return;
-    }
-
-    setIsConnecting(true);
-    setStatusMessage('جاري رفع ومزامنة كل الدروس إلى الشيت...');
+    setStatusMessage('جاري رفع ومزامنة الدروس إلى ورقة ArabicLessons...');
 
     const res = await sheetService.syncAllLessonsToSheet(templates);
     setIsConnecting(false);
 
     if (res.success) {
       setConnectionStatus('success');
-      setStatusMessage(`تم حفظ وتحديث ${templates.length} درساً في الشيت بنجاح!`);
-      audioService.speakArabic('تم حفظ التعديلات في جدول البيانات بنجاح');
+      setStatusMessage(`تم حفظ وتحديث ${templates.length} درساً في الشيت أفقياً بنجاح!`);
+      audioService.speakArabic('تم حفظ الدروس في جدول البيانات بنجاح');
     } else {
       setConnectionStatus('error');
       setStatusMessage(res.error || 'فشلت المزامنة');
@@ -166,16 +187,20 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   // Delete a lesson
-  const handleDeleteLesson = async (id: string, title: string) => {
-    const confirm = window.confirm(`هل أنت متأكد من حذف الدرس "${title}"؟`);
+  const handleDeleteLesson = async (lesson: DrawingTemplate) => {
+    const confirm = window.confirm(`هل أنت متأكد من حذف الدرس "${lesson.title}"؟`);
     if (!confirm) return;
 
-    const newTemplates = templates.filter(t => t.id !== id);
+    const newTemplates = templates.filter(t => t.id !== lesson.id);
     onUpdateTemplates(newTemplates);
     sheetService.saveLocalTemplates(newTemplates);
 
     if (sheetUrl.trim()) {
-      await sheetService.deleteLessonFromSheet(id);
+      await sheetService.deleteLessonFromSheet(
+        lesson.topic || 'خط النسخ',
+        lesson.title,
+        lesson.imageUrl
+      );
     }
     audioService.speakArabic('تم حذف الدرس');
   };
@@ -183,53 +208,59 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   // Open modal for editing
   const handleOpenEdit = (tpl: DrawingTemplate) => {
     setEditingTemplate(tpl);
+    setOriginalTitle(tpl.title);
+    setFormTopic(tpl.topic || 'خط النسخ');
+    setFormCategory(tpl.category || 'حروف');
+    setFormImageUrl(tpl.imageUrl || '');
     setFormTitle(tpl.title);
-    setFormTitleEn(tpl.titleEn || '');
-    setFormCategory(tpl.category);
-    setFormDescription(tpl.description || '');
     setFormAudioText(tpl.arabicAudioText || tpl.title);
-    setFormDifficulty(tpl.difficulty || 'easy');
-    setFormTargetAccuracy(tpl.targetAccuracy || 75);
-    setFormSvgData(tpl.svgData || '');
+    setFormRepeatCount(Number(tpl.repeatCount) || 1);
+    setFormDifficulty(tpl.difficulty || 'سهل');
     setIsAddModalOpen(true);
   };
 
   // Open modal for adding
   const handleOpenAdd = () => {
     setEditingTemplate(null);
+    setOriginalTitle('');
+    setFormTopic(selectedTopic || 'خط النسخ');
+    setFormCategory(selectedCategory || 'حروف');
+    setFormImageUrl('');
     setFormTitle('');
-    setFormTitleEn('');
-    setFormCategory('letters');
-    setFormDescription('');
     setFormAudioText('');
-    setFormDifficulty('easy');
-    setFormTargetAccuracy(75);
-    setFormSvgData(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="500" height="500">
-  <path d="M 150 250 L 350 250" fill="none" stroke="currentColor" stroke-width="24" stroke-linecap="round"/>
-</svg>`);
+    setFormRepeatCount(1);
+    setFormDifficulty('سهل');
     setIsAddModalOpen(true);
   };
 
   // Save lesson (Add or Edit)
   const handleSaveLesson = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!formTopic.trim()) {
+      alert('يرجى تحديد أو إدخال الموضوع');
+      return;
+    }
+    if (!formCategory.trim()) {
+      alert('يرجى تحديد أو إدخال الفئة');
+      return;
+    }
     if (!formTitle.trim()) {
-      alert('يرجى إدخال عنوان الدرس');
+      alert('يرجى إدخال عنوان الصورة / اسم الدرس');
       return;
     }
 
+    const directImg = formatDirectImageUrl(formImageUrl.trim());
+
     const lessonData: DrawingTemplate = {
       id: editingTemplate ? editingTemplate.id : `lesson_${Date.now()}`,
+      topic: formTopic.trim(),
+      category: formCategory.trim(),
+      imageUrl: directImg || formImageUrl.trim(),
       title: formTitle.trim(),
-      titleEn: formTitleEn.trim(),
-      category: formCategory,
-      description: formDescription.trim(),
       arabicAudioText: formAudioText.trim() || formTitle.trim(),
+      repeatCount: Number(formRepeatCount) || 1,
       difficulty: formDifficulty,
-      targetAccuracy: formTargetAccuracy,
-      svgData: formSvgData.trim(),
-      isCustom: formCategory === 'custom',
-      tags: [formCategory, formDifficulty]
+      svgData: editingTemplate?.svgData || ''
     };
 
     let updatedList: DrawingTemplate[];
@@ -241,76 +272,75 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
     onUpdateTemplates(updatedList);
     sheetService.saveLocalTemplates(updatedList);
+
+    // Make sure the active topic/category match the newly saved item
+    setSelectedTopic(lessonData.topic || formTopic.trim());
+    setSelectedCategory(lessonData.category || formCategory.trim());
+
     setIsAddModalOpen(false);
 
-    // Sync with Sheet if connected
+    // Sync to Google Sheet if connected
     if (sheetUrl.trim()) {
       setIsConnecting(true);
-      await sheetService.saveLessonToSheet(lessonData);
+      await sheetService.saveLessonToSheet(lessonData, originalTitle);
       setIsConnecting(false);
     }
 
     audioService.speakArabic('تم حفظ الدرس بنجاح');
   };
 
-  // Filter templates for management view
-  const filteredTemplates = templates.filter(tpl => {
-    const matchCategory = categoryFilter === 'all' || tpl.category === categoryFilter;
-    const matchSearch =
-      tpl.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (tpl.description && tpl.description.toLowerCase().includes(searchQuery.toLowerCase()));
-    return matchCategory && matchSearch;
-  });
+  // Filter lessons for current topic and category
+  const displayedLessons = currentTopicLessons
+    .filter(t => (t.category || 'حروف').trim() === selectedCategory)
+    .filter(t => {
+      if (!searchQuery.trim()) return true;
+      const q = searchQuery.toLowerCase();
+      return (
+        t.title.toLowerCase().includes(q) ||
+        (t.arabicAudioText && t.arabicAudioText.toLowerCase().includes(q))
+      );
+    });
+
+  const previewDirectUrl = formatDirectImageUrl(formImageUrl);
+  const detectedDriveId = extractDriveFileId(formImageUrl);
 
   return (
     <div className="min-h-screen w-full bg-slate-950 text-slate-100 font-cairo flex flex-col">
-      {/* Top Navigation Bar */}
-      <header className="h-16 border-b border-slate-800 bg-slate-900/80 backdrop-blur-md px-4 sm:px-6 flex items-center justify-between sticky top-0 z-40">
+      {/* Top Header */}
+      <header className="h-16 border-b border-slate-800 bg-slate-900/90 backdrop-blur-md px-4 sm:px-6 flex items-center justify-between sticky top-0 z-40">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-yellow-600 flex items-center justify-center text-slate-950 font-bold text-xl shadow-lg shadow-amber-500/20">
             ض
           </div>
           <div>
             <h1 className="text-base sm:text-lg font-bold text-slate-100 flex items-center gap-2">
-              <span>استوديو الإعدادات والربط السحابي</span>
-              <span className="text-xs font-normal px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                لوحة المعلم والخطاط
+              <span>لوحة إعدادات الدروس وقاعدة البيانات</span>
+              <span className="text-xs font-normal px-2.5 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                الهيكل الأفقي
               </span>
             </h1>
             <p className="text-[11px] text-slate-400 hidden sm:block">
-              إدارة دروس الخط العربي والربط المباشر مع جداول بيانات Google Sheets
+              تسجيل وتنظيم دروس الخط العربي حسب المواضيع والفئات وربطها مع Google Sheets
             </p>
           </div>
         </div>
 
-        {/* Action: Return to Whiteboard */}
+        {/* Back to Whiteboard */}
         <button
           onClick={onBackToWhiteboard}
           className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs sm:text-sm shadow-md transition-all active:scale-95 cursor-pointer"
         >
-          <span>العودة إلى السبورة التفاعلية</span>
+          <span>العودة إلى السبورة</span>
           <ArrowRight className="w-4 h-4 rotate-180" />
         </button>
       </header>
 
-      {/* Main Workspace */}
+      {/* Main Container */}
       <div className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 flex flex-col gap-6">
 
         {/* Tabs Bar */}
         <div className="flex items-center justify-between border-b border-slate-800 pb-3">
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => setActiveTab('sheet')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
-                activeTab === 'sheet'
-                  ? 'bg-amber-500 text-slate-950 shadow-md'
-                  : 'bg-slate-900 hover:bg-slate-800 text-slate-300'
-              }`}
-            >
-              <FileSpreadsheet className="w-4 h-4" />
-              <span>ربط Google Sheets وتطبيق الويب</span>
-            </button>
-
             <button
               onClick={() => setActiveTab('lessons')}
               className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
@@ -320,18 +350,227 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               }`}
             >
               <BookOpen className="w-4 h-4" />
-              <span>إدارة وتعديل الدروس والرسومات ({templates.length})</span>
+              <span>إدارة وتعديل الدروس ({templates.length})</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('sheet')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+                activeTab === 'sheet'
+                  ? 'bg-amber-500 text-slate-950 shadow-md'
+                  : 'bg-slate-900 hover:bg-slate-800 text-slate-300'
+              }`}
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+              <span>ربط ورقة ArabicLessons السحابية</span>
             </button>
           </div>
 
           <div className="hidden sm:flex items-center gap-2">
             <span className="text-xs text-slate-400 font-mono">
-              رابط القسم: <code className="text-amber-400 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">#/settings</code>
+              الرابط السريع: <code className="text-amber-400 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">#/settings</code>
             </span>
           </div>
         </div>
 
-        {/* ======================= TAB 1: GOOGLE SHEETS SETUP ======================= */}
+        {/* ======================= TAB: LESSONS MANAGEMENT ======================= */}
+        {activeTab === 'lessons' && (
+          <div className="space-y-6">
+
+            {/* TOPIC SELECTOR & TOOLBAR */}
+            <div className="p-4 sm:p-5 bg-slate-900 rounded-2xl border border-slate-800 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                {/* 1. Topic Dropdown */}
+                <div className="flex items-center gap-3 flex-1">
+                  <div className="flex items-center gap-2 text-amber-400 font-bold text-xs sm:text-sm shrink-0">
+                    <FolderOpen className="w-4 h-4" />
+                    <span>الموضوع:</span>
+                  </div>
+                  <select
+                    value={selectedTopic}
+                    onChange={(e) => setSelectedTopic(e.target.value)}
+                    className="w-full max-w-xs px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-700 text-slate-100 font-bold text-xs sm:text-sm focus:outline-hidden focus:border-amber-500 cursor-pointer"
+                  >
+                    {topics.map(top => (
+                      <option key={top} value={top}>{top}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Actions: Sync & Add */}
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleTestConnection}
+                    disabled={isConnecting || !sheetUrl.trim()}
+                    title="مزامنة من الشيت"
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold border border-slate-700 transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isConnecting ? 'animate-spin' : ''}`} />
+                    <span className="hidden sm:inline">مزامنة من الشيت</span>
+                  </button>
+
+                  <button
+                    onClick={handleSyncAllToSheet}
+                    disabled={isConnecting || !sheetUrl.trim()}
+                    title="حفظ الكل في الشيت"
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 text-xs font-bold transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">حفظ في الشيت</span>
+                  </button>
+
+                  <button
+                    onClick={handleOpenAdd}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs sm:text-sm shadow-md transition-all active:scale-95 cursor-pointer"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>إضافة درس جديد</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* 2. Category Tabs under Selected Topic */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-slate-800">
+                <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
+                  <span className="text-xs text-slate-400 shrink-0 font-medium ml-1">الفئات:</span>
+                  {categoriesInTopic.map(cat => (
+                    <button
+                      key={cat}
+                      onClick={() => setSelectedCategory(cat)}
+                      className={`px-3.5 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+                        selectedCategory === cat
+                          ? 'bg-amber-500 text-slate-950 shadow-md'
+                          : 'bg-slate-950 text-slate-300 hover:bg-slate-800 border border-slate-800'
+                      }`}
+                    >
+                      <span>{cat}</span>
+                      <span className="mr-1.5 text-[10px] opacity-75">
+                        ({currentTopicLessons.filter(l => (l.category || 'حروف').trim() === cat).length})
+                      </span>
+                    </button>
+                  ))}
+                </div>
+
+                {/* Search */}
+                <div className="relative min-w-[200px]">
+                  <Search className="w-3.5 h-3.5 absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="بحث في دروس هذه الفئة..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full pr-8 pl-3 py-1.5 rounded-xl bg-slate-950 border border-slate-700 text-xs text-slate-100 placeholder-slate-500 focus:outline-hidden focus:border-amber-500"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* LESSONS LIST */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+              {displayedLessons.map((tpl) => {
+                const directUrl = formatDirectImageUrl(tpl.imageUrl);
+                return (
+                  <div
+                    key={tpl.id}
+                    className="group relative p-4 bg-slate-900/90 rounded-2xl border border-slate-800 hover:border-amber-500/40 transition-all flex flex-col justify-between shadow-lg"
+                  >
+                    <div>
+                      {/* Image Thumbnail / SVG Preview */}
+                      <div className="w-full h-32 rounded-xl bg-slate-950 border border-slate-800/80 flex items-center justify-center p-2 mb-3 overflow-hidden text-amber-400 relative">
+                        {directUrl ? (
+                          <img
+                            src={directUrl}
+                            alt={tpl.title}
+                            className="max-h-full max-w-full object-contain filter drop-shadow group-hover:scale-105 transition-transform"
+                            crossOrigin="anonymous"
+                            onError={(e) => {
+                              // Fallback if blocked
+                              (e.target as HTMLElement).style.display = 'none';
+                            }}
+                          />
+                        ) : tpl.svgData ? (
+                          <div
+                            className="w-full h-full flex items-center justify-center [&>svg]:max-h-full [&>svg]:max-w-full [&>svg]:w-auto [&>svg]:h-auto"
+                            dangerouslySetInnerHTML={{ __html: tpl.svgData }}
+                          />
+                        ) : (
+                          <div className="flex flex-col items-center text-slate-500">
+                            <ImageIcon className="w-8 h-8 mb-1" />
+                            <span className="text-[10px]">بدون صورة</span>
+                          </div>
+                        )}
+
+                        {/* Repeat count badge */}
+                        <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-slate-900/90 text-amber-400 border border-slate-700 text-[10px] font-bold flex items-center gap-1">
+                          <Repeat className="w-3 h-3" />
+                          <span>تكرار: {tpl.repeatCount || 1}</span>
+                        </div>
+                      </div>
+
+                      {/* Title & Difficulty */}
+                      <div className="flex items-start justify-between gap-2 mb-1">
+                        <h3 className="font-bold text-sm text-slate-100 group-hover:text-amber-400 transition-colors">
+                          {tpl.title}
+                        </h3>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-amber-400 font-bold shrink-0 border border-slate-700">
+                          {tpl.difficulty || 'سهل'}
+                        </span>
+                      </div>
+
+                      <p className="text-[11px] text-slate-400 line-clamp-2 mb-3">
+                        {tpl.arabicAudioText || 'نص النطق مطابق للعنوان'}
+                      </p>
+                    </div>
+
+                    {/* Actions Toolbar */}
+                    <div className="flex items-center justify-between pt-3 border-t border-slate-800/80">
+                      <button
+                        onClick={() => audioService.speakArabic(tpl.arabicAudioText || tpl.title)}
+                        title="سماع النطق الصوتي"
+                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-amber-400 cursor-pointer transition-colors"
+                      >
+                        <Volume2 className="w-4 h-4" />
+                      </button>
+
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => handleOpenEdit(tpl)}
+                          title="تعديل بيانات الدرس"
+                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-slate-300 cursor-pointer transition-colors"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                        </button>
+
+                        <button
+                          onClick={() => handleDeleteLesson(tpl)}
+                          title="حذف الدرس"
+                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-500 hover:text-white text-rose-400 cursor-pointer transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {displayedLessons.length === 0 && (
+              <div className="p-12 text-center text-slate-400 bg-slate-900/50 rounded-2xl border border-slate-800 space-y-3">
+                <BookOpen className="w-8 h-8 mx-auto text-slate-500" />
+                <p className="text-sm font-bold text-slate-300">
+                  لا توجد دروس مسجلة في الفئة &quot;{selectedCategory}&quot; ضمن موضوع &quot;{selectedTopic}&quot;
+                </p>
+                <p className="text-xs text-slate-500">
+                  اضغط على زر &quot;إضافة درس جديد&quot; بالأعلى لبدء تسجيل أول درس في هذه الفئة.
+                </p>
+              </div>
+            )}
+
+          </div>
+        )}
+
+        {/* ======================= TAB: GOOGLE SHEETS SETUP ======================= */}
         {activeTab === 'sheet' && (
           <div className="space-y-6">
 
@@ -340,10 +579,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
                 <div className="flex items-center gap-2.5 text-amber-400 font-bold">
                   <Database className="w-5 h-5" />
-                  <span className="text-base font-ruqaa">ربط جدول البيانات عبر Google Apps Script</span>
+                  <span className="text-base font-ruqaa">ربط ورقة ArabicLessons الأفقية</span>
                 </div>
 
-                {/* Status Indicator */}
                 <div className="flex items-center gap-2">
                   {connectionStatus === 'success' && (
                     <span className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
@@ -395,34 +633,25 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 )}
               </div>
 
-              {/* Action Buttons */}
+              {/* Actions */}
               <div className="flex flex-wrap items-center gap-3 pt-2">
-                <button
-                  onClick={handleSeedDefaultsToSheet}
-                  disabled={isConnecting || !sheetUrl.trim()}
-                  className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-400 border border-amber-500/20 font-bold text-xs shadow-sm transition-all active:scale-95 disabled:opacity-50 cursor-pointer"
-                >
-                  <Sparkles className="w-3.5 h-3.5" />
-                  <span>تهيئة وحفظ الحروف الـ 28 التلقائية في الشيت</span>
-                </button>
-
                 <button
                   onClick={handleSyncAllToSheet}
                   disabled={isConnecting || !sheetUrl.trim()}
                   className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-bold text-xs shadow-sm transition-all active:scale-95 disabled:opacity-50 cursor-pointer"
                 >
                   <Save className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>رفع وتحديث كافة الدروس الحالية ({templates.length}) في الشيت</span>
+                  <span>رفع وتحديث كافة الدروس الحالية ({templates.length}) في الشيت أفقياً</span>
                 </button>
               </div>
             </div>
 
-            {/* Step-by-Step Instructions & Backend Code Box */}
+            {/* Apps Script Guide */}
             <div className="p-5 sm:p-6 bg-slate-900/80 rounded-2xl border border-slate-800 space-y-4">
               <div className="flex items-center justify-between pb-3 border-b border-slate-800">
                 <div className="flex items-center gap-2 text-slate-100 font-bold text-sm sm:text-base">
                   <Info className="w-4 h-4 text-amber-400" />
-                  <span>خطوات إعداد الكود الخلفي في Google Sheets (في دقيقة واحدة)</span>
+                  <span>كود ورقة ArabicLessons الأفقية (Google Apps Script)</span>
                 </div>
 
                 <button
@@ -434,299 +663,225 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </button>
               </div>
 
-              {/* Instructions Steps */}
+              {/* Steps */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-slate-300 leading-relaxed">
                 <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80">
-                  <strong className="text-amber-400 block mb-1">١. افتح جدول Google Sheets:</strong>
-                  أنشئ جدول بيانات جديد على Google Drive بأي اسم (مثل: "قاعدة دروس الخط العربي").
+                  <strong className="text-amber-400 block mb-1">١. العامود A: الموضوع:</strong>
+                  كل صف في الورقة يمثل موضوعاً رئيسياً (مثل: خط النسخ، خط الرقعة).
                 </div>
                 <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80">
-                  <strong className="text-amber-400 block mb-1">٢. الدخول لمحرر Apps Script:</strong>
-                  من القائمة العلوية للجدول، اختر <strong>امتدادات (Extensions)</strong> ثم <strong>Apps Script</strong>.
+                  <strong className="text-amber-400 block mb-1">٢. ٦ أعمدة لكل درس أفقياً:</strong>
+                  الدرس 1 (B:G)، الدرس 2 (H:M)، الدرس 3 (N:S)، وهكذا (الفئة، رابط الصورة، عنوان الصورة، نص القراءة، التكرار، المستوى).
                 </div>
                 <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80">
                   <strong className="text-amber-400 block mb-1">٣. لصق الكود وحفظه:</strong>
-                  امسح أي كود موجود في المحرر، واضغط زر <strong>"نسخ الكود الخلفي"</strong> بالأعلى ثم الصقه واضغط حفظ (Ctrl + S).
+                  في Apps Script، امسح الكود القديم والصق هذا الكود المحدث بالكامل واحفظه (Ctrl + S).
                 </div>
                 <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80">
-                  <strong className="text-amber-400 block mb-1">٤. النشر كتطبيق ويب (Web App):</strong>
-                  اضغط الزر الأزرق <strong>نشر (Deploy)</strong> &gt; <strong>نشر جديد (New deployment)</strong> &gt; اختر <strong>تطبيق ويب (Web app)</strong>.
-                </div>
-                <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80 md:col-span-2">
-                  <strong className="text-amber-400 block mb-1">٥. ضبط صلاحية الوصول (مهم جداً):</strong>
-                  اجعل <strong>تنفيذ التطبيق كـ: أنا (Me)</strong>، واجعل <strong>من يملك حق الوصول: أي شخص (Anyone)</strong>. ثم اضغط <strong>نشر</strong>، وانسخ رابط تطبيق الويب والصقه في خانة الرابط أعلاه!
+                  <strong className="text-amber-400 block mb-1">٤. النشر كتطبيق ويب (Web app):</strong>
+                  نشر جديد &gt; تطبيق ويب &gt; التنفيذ كـ: أنا (Me) &gt; الصلاحية: أي شخص (Anyone) &gt; ثم انسخ الرابط.
                 </div>
               </div>
 
-              {/* Code Preview Box */}
+              {/* Code Box */}
               <div className="mt-4">
-                <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono mb-1.5 px-1">
-                  <span>كود Google Apps Script (جاهز للنسخ المباشر):</span>
-                  <span>Google Apps Script (.gs)</span>
-                </div>
-                <div className="relative">
-                  <pre className="p-4 rounded-xl bg-slate-950 border border-slate-800 text-[11px] font-mono text-slate-300 overflow-x-auto max-h-64 scrollbar-thin">
-                    <code>{GOOGLE_APPS_SCRIPT_CODE}</code>
-                  </pre>
-                </div>
+                <pre className="p-4 rounded-xl bg-slate-950 border border-slate-800 text-[11px] font-mono text-slate-300 overflow-x-auto max-h-64 scrollbar-thin">
+                  <code>{GOOGLE_APPS_SCRIPT_CODE}</code>
+                </pre>
               </div>
             </div>
-
-          </div>
-        )}
-
-        {/* ======================= TAB 2: LESSONS & TEMPLATES MANAGEMENT ======================= */}
-        {activeTab === 'lessons' && (
-          <div className="space-y-6">
-
-            {/* Top Toolbar: Search, Category Filter, and Add Lesson */}
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-4 bg-slate-900 rounded-2xl border border-slate-800">
-              <div className="flex flex-1 items-center gap-2">
-                <div className="relative flex-1 max-w-sm">
-                  <Search className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder="ابحث عن درس أو حرف..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full pr-9 pl-4 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-slate-100 placeholder-slate-500 focus:outline-hidden focus:border-amber-500"
-                  />
-                </div>
-
-                <select
-                  value={categoryFilter}
-                  onChange={(e) => setCategoryFilter(e.target.value as any)}
-                  className="px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-slate-200 focus:outline-hidden focus:border-amber-500 cursor-pointer"
-                >
-                  <option value="all">جميع الأقسام</option>
-                  <option value="letters">الحروف العربية</option>
-                  <option value="words">الكلمات والعبارات</option>
-                  <option value="shapes">الأشكال والزخارف</option>
-                  <option value="custom">النماذج المخصصة</option>
-                </select>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={handleTestConnection}
-                  disabled={isConnecting || !sheetUrl.trim()}
-                  title="مزامنة وجلب من الشيت"
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold border border-slate-700 transition-all cursor-pointer"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isConnecting ? 'animate-spin' : ''}`} />
-                  <span className="hidden sm:inline">مزامنة من الشيت</span>
-                </button>
-
-                <button
-                  onClick={handleSyncAllToSheet}
-                  disabled={isConnecting || !sheetUrl.trim()}
-                  title="حفظ الكل في الشيت"
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 text-xs font-bold transition-all cursor-pointer"
-                >
-                  <Save className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">حفظ في الشيت</span>
-                </button>
-
-                <button
-                  onClick={handleOpenAdd}
-                  className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs sm:text-sm shadow-md transition-all active:scale-95 cursor-pointer"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>إضافة درس جديد</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Lessons Cards Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-              {filteredTemplates.map((tpl) => (
-                <div
-                  key={tpl.id}
-                  className="group relative p-4 bg-slate-900/90 rounded-2xl border border-slate-800 hover:border-amber-500/40 transition-all flex flex-col justify-between shadow-lg"
-                >
-                  <div>
-                    {/* SVG Thumbnail Preview */}
-                    <div className="w-full h-32 rounded-xl bg-slate-950 border border-slate-800/80 flex items-center justify-center p-2 mb-3 overflow-hidden text-amber-400">
-                      {tpl.svgData ? (
-                        <div
-                          className="w-full h-full flex items-center justify-center [&>svg]:max-h-full [&>svg]:max-w-full [&>svg]:w-auto [&>svg]:h-auto"
-                          dangerouslySetInnerHTML={{ __html: tpl.svgData }}
-                        />
-                      ) : (
-                        <span className="text-xs text-slate-500">بدون رسمة</span>
-                      )}
-                    </div>
-
-                    {/* Lesson Title & Category */}
-                    <div className="flex items-start justify-between gap-2 mb-1">
-                      <h3 className="font-bold text-sm text-slate-100 group-hover:text-amber-400 transition-colors">
-                        {tpl.title}
-                      </h3>
-                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 shrink-0">
-                        {tpl.category === 'letters' ? 'حرف' : tpl.category === 'words' ? 'كلمة' : 'شكل'}
-                      </span>
-                    </div>
-
-                    <p className="text-[11px] text-slate-400 line-clamp-2 mb-3">
-                      {tpl.description || 'لا يوجد وصف مضاف'}
-                    </p>
-                  </div>
-
-                  {/* Actions & Pronounce */}
-                  <div className="flex items-center justify-between pt-3 border-t border-slate-800/80">
-                    <button
-                      onClick={() => audioService.speakArabic(tpl.arabicAudioText || tpl.title)}
-                      title="سماع النطق الصوتي"
-                      className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-amber-400 cursor-pointer transition-colors"
-                    >
-                      <Volume2 className="w-4 h-4" />
-                    </button>
-
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        onClick={() => handleOpenEdit(tpl)}
-                        title="تعديل الدرس"
-                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-slate-300 cursor-pointer transition-colors"
-                      >
-                        <Edit3 className="w-3.5 h-3.5" />
-                      </button>
-
-                      <button
-                        onClick={() => handleDeleteLesson(tpl.id, tpl.title)}
-                        title="حذف الدرس"
-                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-500 hover:text-white text-rose-400 cursor-pointer transition-colors"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {filteredTemplates.length === 0 && (
-              <div className="p-12 text-center text-slate-400 bg-slate-900/50 rounded-2xl border border-slate-800">
-                <BookOpen className="w-8 h-8 mx-auto mb-2 text-slate-500" />
-                <p className="text-sm">لم يتم العثور على دروس مطابقة لبحثك</p>
-              </div>
-            )}
 
           </div>
         )}
 
       </div>
 
-      {/* ======================= ADD / EDIT LESSON MODAL ======================= */}
+      {/* ======================= ADD / EDIT MODAL ======================= */}
       {isAddModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-150">
-          <div className="relative w-full max-w-xl bg-slate-900 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-2xl text-slate-100 max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-150">
+          <div className="relative w-full max-w-xl bg-slate-900 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-2xl text-slate-100 max-h-[92vh] overflow-y-auto">
             <h2 className="text-base sm:text-lg font-bold text-amber-400 pb-3 border-b border-slate-800 flex items-center gap-2">
               <Edit3 className="w-5 h-5" />
               <span>{editingTemplate ? 'تعديل بيانات الدرس' : 'إضافة درس خط عربي جديد'}</span>
             </h2>
 
             <form onSubmit={handleSaveLesson} className="space-y-4 mt-4 text-xs sm:text-sm">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1">اسم الدرس / الحرف بالعربية *:</label>
+              
+              {/* 1. Topic input + registered topics dropdown */}
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1">
+                  ١. الموضوع (العامود A) *:
+                </label>
+                <div className="flex items-center gap-2">
                   <input
                     type="text"
                     required
-                    value={formTitle}
-                    onChange={(e) => setFormTitle(e.target.value)}
-                    placeholder="مثال: حرف الجيم (ج)"
+                    value={formTopic}
+                    onChange={(e) => setFormTopic(e.target.value)}
+                    placeholder="مثال: خط النسخ، خط الرقعة، أساسيات الخط"
                     className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-slate-100 text-xs focus:outline-hidden focus:border-amber-500"
                   />
+                  {topics.length > 0 && (
+                    <select
+                      onChange={(e) => {
+                        if (e.target.value) setFormTopic(e.target.value);
+                      }}
+                      className="px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-slate-200 text-xs cursor-pointer shrink-0"
+                    >
+                      <option value="">اختيار مسجل...</option>
+                      {topics.map(t => (
+                        <option key={t} value={t}>{t}</option>
+                      ))}
+                    </select>
+                  )}
                 </div>
+              </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1">الاسم بالإنجليزية (اختياري):</label>
+              {/* 2. Category input + registered categories dropdown */}
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1">
+                  ٢. الفئة (العامود B) *:
+                </label>
+                <div className="flex items-center gap-2">
                   <input
                     type="text"
-                    dir="ltr"
-                    value={formTitleEn}
-                    onChange={(e) => setFormTitleEn(e.target.value)}
-                    placeholder="e.g. Letter Jeem"
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-slate-100 text-xs focus:outline-hidden focus:border-amber-500 font-mono"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1">القسم / التصنيف:</label>
-                  <select
+                    required
                     value={formCategory}
-                    onChange={(e) => setFormCategory(e.target.value as any)}
+                    onChange={(e) => setFormCategory(e.target.value)}
+                    placeholder="مثال: حروف، كلمات، رسمة، أشكال"
                     className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-slate-100 text-xs focus:outline-hidden focus:border-amber-500"
-                  >
-                    <option value="letters">حروف الخط العربي</option>
-                    <option value="words">كلمات وعبارات</option>
-                    <option value="shapes">أشكال وزخارف</option>
-                    <option value="custom">مخصص</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1">مستوى الصعوبة:</label>
-                  <select
-                    value={formDifficulty}
-                    onChange={(e) => setFormDifficulty(e.target.value as any)}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-slate-100 text-xs focus:outline-hidden focus:border-amber-500"
-                  >
-                    <option value="easy">مبتدئ (سهل)</option>
-                    <option value="normal">متوسط</option>
-                    <option value="advanced">متقدم (محترف)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1">نسبة الإتقان المطلوبة:</label>
-                  <input
-                    type="number"
-                    min="50"
-                    max="95"
-                    value={formTargetAccuracy}
-                    onChange={(e) => setFormTargetAccuracy(Number(e.target.value))}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-slate-100 text-xs focus:outline-hidden focus:border-amber-500 font-mono"
                   />
+                  <select
+                    onChange={(e) => {
+                      if (e.target.value) setFormCategory(e.target.value);
+                    }}
+                    className="px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-slate-200 text-xs cursor-pointer shrink-0"
+                  >
+                    <option value="">اختيار مسجل...</option>
+                    {allKnownCategories.map(c => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
+              {/* 3. Image URL (Google Drive share link or direct link) */}
               <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1">النطق الصوتي التوجيهي (تشجيع الطالب):</label>
+                <label className="block text-xs font-bold text-slate-300 mb-1">
+                  ٣. رابط الصورة (من Google Drive أو رابط مباشر) (العامود C):
+                </label>
+                <input
+                  type="url"
+                  dir="ltr"
+                  value={formImageUrl}
+                  onChange={(e) => setFormImageUrl(e.target.value)}
+                  placeholder="https://drive.google.com/file/d/.../view?usp=sharing"
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-hidden focus:border-amber-500"
+                />
+                <p className="text-[11px] text-slate-400 mt-1">
+                  يدعم روابط Google Drive (صورة سوداء بخلفية شفافة) أو أي رابط صورة مباشر.
+                </p>
+
+                {/* Live Preview */}
+                {formImageUrl.trim() && (
+                  <div className="mt-2.5 p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center gap-4">
+                    <div className="w-20 h-20 rounded-lg bg-slate-900 border border-slate-700 flex items-center justify-center p-1 overflow-hidden shrink-0">
+                      {previewDirectUrl ? (
+                        <img
+                          src={previewDirectUrl}
+                          alt="معاينة"
+                          crossOrigin="anonymous"
+                          className="max-h-full max-w-full object-contain filter drop-shadow"
+                          onError={(e) => {
+                            (e.target as HTMLElement).style.display = 'none';
+                          }}
+                        />
+                      ) : (
+                        <ImageIcon className="w-6 h-6 text-slate-600" />
+                      )}
+                    </div>
+                    <div className="text-xs space-y-1">
+                      <div className="text-amber-400 font-bold flex items-center gap-1.5">
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>معاينة الصورة المباشرة</span>
+                      </div>
+                      {detectedDriveId && (
+                        <p className="text-[10px] text-slate-400 font-mono">
+                          معرف درايف: {detectedDriveId}
+                        </p>
+                      )}
+                      <p className="text-[11px] text-slate-300">
+                        سيقوم النظام بتحويل الخطوط السوداء إلى لون خفيف شفاف للشف والتدريب على السبورة.
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* 4. Lesson Title */}
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1">
+                  ٤. عنوان الصورة / اسم الدرس (العامود D) *:
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={formTitle}
+                  onChange={(e) => setFormTitle(e.target.value)}
+                  placeholder="مثال: حرف الألف، كلمة السلام، رسمة نخلة"
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-slate-100 text-xs focus:outline-hidden focus:border-amber-500"
+                />
+              </div>
+
+              {/* 5. TTS Text */}
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1">
+                  ٥. نص للقراءة الآلية (العامود E):
+                </label>
                 <input
                   type="text"
                   value={formAudioText}
                   onChange={(e) => setFormAudioText(e.target.value)}
-                  placeholder="مثال: جِيمْ، حَرْفُ الجِيم، رَائِعْ!"
+                  placeholder="اتركه فارغاً ليقوم النظام بنطق عنوان الصورة تلقائياً"
                   className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-slate-100 text-xs focus:outline-hidden focus:border-amber-500"
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1">وصف وتوجيه كتابة الحرف:</label>
-                <textarea
-                  rows={2}
-                  value={formDescription}
-                  onChange={(e) => setFormDescription(e.target.value)}
-                  placeholder="مثال: ابدأ برسم رأس الجيم الموجي، ثم انزل بقوس نصف دائري كبير للبطن مع نقطة في المنتصف"
-                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-slate-100 text-xs focus:outline-hidden focus:border-amber-500"
-                />
+              {/* 6 & 7: Repeat Count & Difficulty */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1">
+                    ٦. عدد التكرار (العامود F) *:
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="50"
+                    value={formRepeatCount}
+                    onChange={(e) => setFormRepeatCount(Math.max(1, parseInt(e.target.value) || 1))}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-slate-100 text-xs focus:outline-hidden focus:border-amber-500 font-mono"
+                  />
+                  <p className="text-[10px] text-slate-500 mt-0.5">الافتراضي: 1 تكرار</p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1">
+                    ٧. مستوى الدرس (العامود G) *:
+                  </label>
+                  <select
+                    value={formDifficulty}
+                    onChange={(e) => setFormDifficulty(e.target.value as any)}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-slate-100 text-xs focus:outline-hidden focus:border-amber-500 cursor-pointer"
+                  >
+                    <option value="سهل">سهل</option>
+                    <option value="متوسط">متوسط</option>
+                    <option value="متقدم">متقدم</option>
+                    <option value="صعب">صعب</option>
+                  </select>
+                </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1">كود رسمة الحرف (SVG Vector Code):</label>
-                <textarea
-                  rows={4}
-                  dir="ltr"
-                  value={formSvgData}
-                  onChange={(e) => setFormSvgData(e.target.value)}
-                  placeholder="<svg viewBox='0 0 500 500'>...</svg>"
-                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-slate-100 font-mono text-[11px] focus:outline-hidden focus:border-amber-500"
-                />
-              </div>
-
+              {/* Submit / Cancel Buttons */}
               <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
                 <button
                   type="button"
@@ -737,11 +892,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold shadow-md cursor-pointer"
+                  className="px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold shadow-md cursor-pointer transition-all active:scale-95"
                 >
                   حفظ في النظام والشيت
                 </button>
               </div>
+
             </form>
           </div>
         </div>

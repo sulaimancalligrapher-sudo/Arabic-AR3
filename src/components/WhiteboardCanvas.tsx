@@ -1,6 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback, useImperativeHandle, forwardRef } from 'react';
 import { BoardStyle, PenType, Stroke, Point, DrawingTemplate, GuideColor } from '../types/drawing';
 import { audioService } from '../services/audioService';
+import { formatDirectImageUrl } from '../utils/urlHelper';
 import confetti from 'canvas-confetti';
 
 export interface WhiteboardCanvasRef {
@@ -209,7 +210,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     ctx.restore();
   };
 
-  // Draw Template Guide Layer
+  // Draw Template Guide Layer (Supports both Google Drive image links and SVG data)
   const drawTemplateGuide = () => {
     const tCanvas = templateCanvasRef.current;
     if (!tCanvas) return;
@@ -219,7 +220,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     ctx.clearRect(0, 0, tCanvas.width, tCanvas.height);
     guidePointsRef.current = [];
 
-    if (!template || !template.svgData) return;
+    if (!template) return;
 
     const colorHexMap: Record<GuideColor, string> = {
       yellow: '#facc15',
@@ -231,54 +232,114 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
 
     const activeColor = colorHexMap[guideColor] || '#facc15';
 
-    // Inject active guide color into SVG
-    let coloredSvg = template.svgData
-      .replace(/stroke="currentColor"/g, `stroke="${activeColor}"`)
-      .replace(/fill="currentColor"/g, `fill="${activeColor}"`);
+    // 1. Direct Image URL (Google Drive transparent PNG or web URL)
+    if (template.imageUrl && template.imageUrl.trim()) {
+      const directUrl = formatDirectImageUrl(template.imageUrl);
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.src = directUrl;
 
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(coloredSvg);
+      img.onload = () => {
+        ctx.save();
+        ctx.globalAlpha = templateOpacity;
 
-    img.onload = () => {
-      ctx.save();
-      ctx.globalAlpha = templateOpacity;
+        const padding = Math.min(tCanvas.width, tCanvas.height) * 0.08;
+        const availW = tCanvas.width - padding * 2;
+        const availH = tCanvas.height - padding * 2;
+        const scale = Math.min(availW / (img.width || 500), availH / (img.height || 500));
+        const drawW = (img.width || 500) * scale;
+        const drawH = (img.height || 500) * scale;
+        const drawX = (tCanvas.width - drawW) / 2;
+        const drawY = (tCanvas.height - drawH) / 2;
 
-      // Fit template nicely in canvas center with padding
-      const padding = Math.min(tCanvas.width, tCanvas.height) * 0.08;
-      const availW = tCanvas.width - padding * 2;
-      const availH = tCanvas.height - padding * 2;
-      const scale = Math.min(availW / img.width, availH / img.height);
-      const drawW = img.width * scale;
-      const drawH = img.height * scale;
-      const drawX = (tCanvas.width - drawW) / 2;
-      const drawY = (tCanvas.height - drawH) / 2;
+        // Draw image onto an offscreen canvas to tint black calligraphy lines into active guide color
+        try {
+          const offscreen = document.createElement('canvas');
+          offscreen.width = drawW;
+          offscreen.height = drawH;
+          const offCtx = offscreen.getContext('2d');
+          if (offCtx) {
+            offCtx.drawImage(img, 0, 0, drawW, drawH);
+            offCtx.globalCompositeOperation = 'source-in';
+            offCtx.fillStyle = activeColor;
+            offCtx.fillRect(0, 0, drawW, drawH);
+            ctx.drawImage(offscreen, drawX, drawY);
+          } else {
+            ctx.drawImage(img, drawX, drawY, drawW, drawH);
+          }
+        } catch {
+          ctx.drawImage(img, drawX, drawY, drawW, drawH);
+        }
 
-      // Render glowing template
-      ctx.shadowColor = activeColor;
-      ctx.shadowBlur = 8;
-      ctx.drawImage(img, drawX, drawY, drawW, drawH);
-      ctx.restore();
+        ctx.restore();
 
-      // Extract template pixels for accuracy scoring
-      try {
-        const imgData = ctx.getImageData(0, 0, tCanvas.width, tCanvas.height);
-        const data = imgData.data;
-        const pts: { x: number; y: number }[] = [];
-        // Sample every 8th pixel to be lightning fast
-        for (let y = 0; y < tCanvas.height; y += 8) {
-          for (let x = 0; x < tCanvas.width; x += 8) {
-            const idx = (y * tCanvas.width + x) * 4;
-            if (data[idx + 3] > 40) {
-              pts.push({ x, y });
+        // Sample guide points for accuracy evaluation
+        try {
+          const imgData = ctx.getImageData(0, 0, tCanvas.width, tCanvas.height);
+          const data = imgData.data;
+          const pts: { x: number; y: number }[] = [];
+          for (let y = 0; y < tCanvas.height; y += 8) {
+            for (let x = 0; x < tCanvas.width; x += 8) {
+              const idx = (y * tCanvas.width + x) * 4;
+              if (data[idx + 3] > 35) {
+                pts.push({ x, y });
+              }
             }
           }
+          guidePointsRef.current = pts;
+        } catch (err) {
+          console.warn('Guide point sampling error (CORS or empty):', err);
         }
-        guidePointsRef.current = pts;
-      } catch (err) {
-        console.warn('Guide point sampling error:', err);
-      }
-    };
+      };
+      return;
+    }
+
+    // 2. SVG Vector Code
+    if (template.svgData && template.svgData.trim()) {
+      let coloredSvg = template.svgData
+        .replace(/stroke="currentColor"/g, `stroke="${activeColor}"`)
+        .replace(/fill="currentColor"/g, `fill="${activeColor}"`);
+
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(coloredSvg);
+
+      img.onload = () => {
+        ctx.save();
+        ctx.globalAlpha = templateOpacity;
+
+        const padding = Math.min(tCanvas.width, tCanvas.height) * 0.08;
+        const availW = tCanvas.width - padding * 2;
+        const availH = tCanvas.height - padding * 2;
+        const scale = Math.min(availW / (img.width || 500), availH / (img.height || 500));
+        const drawW = (img.width || 500) * scale;
+        const drawH = (img.height || 500) * scale;
+        const drawX = (tCanvas.width - drawW) / 2;
+        const drawY = (tCanvas.height - drawH) / 2;
+
+        ctx.shadowColor = activeColor;
+        ctx.shadowBlur = 8;
+        ctx.drawImage(img, drawX, drawY, drawW, drawH);
+        ctx.restore();
+
+        try {
+          const imgData = ctx.getImageData(0, 0, tCanvas.width, tCanvas.height);
+          const data = imgData.data;
+          const pts: { x: number; y: number }[] = [];
+          for (let y = 0; y < tCanvas.height; y += 8) {
+            for (let x = 0; x < tCanvas.width; x += 8) {
+              const idx = (y * tCanvas.width + x) * 4;
+              if (data[idx + 3] > 40) {
+                pts.push({ x, y });
+              }
+            }
+          }
+          guidePointsRef.current = pts;
+        } catch (err) {
+          console.warn('Guide point sampling error:', err);
+        }
+      };
+    }
   };
 
   // Evaluate drawing accuracy against template

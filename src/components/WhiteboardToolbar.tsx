@@ -185,9 +185,9 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
           {/* 1. Lesson / Template Library Icon (Icon only, no text) */}
           <button
             onClick={onOpenLibrary}
-            title={template ? `الدرس الحالي: ${template.title} (اضغط لتغيير الدرس)` : 'اختيار الدرس أو نموذج الشف'}
+            title={template ? `الدرس الحالي: ${template.title} (اضغط لفتح قائمة الدروس)` : 'الدروس'}
             className="p-2 sm:p-2.5 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-amber-400 border border-slate-700 transition-all active:scale-95 cursor-pointer relative"
-            aria-label="اختيار الدرس"
+            aria-label="الدروس"
           >
             <FolderOpen className="w-5 h-5 text-amber-400" />
             {template && (

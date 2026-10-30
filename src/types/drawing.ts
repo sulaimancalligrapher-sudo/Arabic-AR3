@@ -1,4 +1,4 @@
-export type DrawingCategory = 'letters' | 'words' | 'shapes' | 'custom' | 'freehand';
+export type DrawingCategory = 'letters' | 'words' | 'shapes' | 'custom' | 'freehand' | string;
 
 export type BoardStyle = 'white' | 'dark' | 'green' | 'grid' | 'ar_camera';
 
@@ -8,15 +8,20 @@ export type PenType = 'calligraphy' | 'marker' | 'brush' | 'eraser';
 
 export type GuideColor = 'yellow' | 'green' | 'white' | 'cyan' | 'black';
 
+export type LessonDifficulty = 'سهل' | 'متوسط' | 'متقدم' | 'صعب' | 'easy' | 'normal' | 'advanced';
+
 export interface DrawingTemplate {
   id: string;
-  title: string;
-  titleEn: string;
-  category: DrawingCategory;
-  description: string;
-  svgData: string;
-  arabicAudioText?: string;
-  difficulty?: 'easy' | 'normal' | 'advanced';
+  topic?: string;            // العامود A: الموضوع (مثل: خط النسخ، خط الرقعة، رسم وزخرفة)
+  category: string;          // العامود B: الفئة (مثل: حروف، كلمات، رسمة)
+  imageUrl?: string;         // العامود C: رابط الصورة (من قوقل درايف أو رابط مباشر)
+  title: string;             // العامود D: عنوان الصورة / اسم الدرس
+  titleEn?: string;
+  arabicAudioText?: string;  // العامود E: نص للقراءة الآلية (إذا فارغ يُقرأ العنوان)
+  repeatCount?: number;      // العامود F: عدد التكرار (الافتراضي 1)
+  difficulty?: LessonDifficulty; // العامود G: المستوى (سهل / متوسط / متقدم / صعب)
+  description?: string;
+  svgData?: string;
   guideColor?: GuideColor;
   targetAccuracy?: number;
   tags?: string[];

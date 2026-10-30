@@ -15,7 +15,8 @@ import {
   X,
   Maximize2,
   Minimize2,
-  Lightbulb
+  Lightbulb,
+  Repeat
 } from 'lucide-react';
 
 export default function App() {
@@ -95,13 +96,13 @@ export default function App() {
     fps: number;
   }>({ handsCount: 0, isPinching: false, faceDetected: false, fps: 0 });
 
-  // UI States
   const [isLibraryOpen, setIsLibraryOpen] = useState(false);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [historyCanUndo, setHistoryCanUndo] = useState(false);
   const [historyCanRedo, setHistoryCanRedo] = useState(false);
   const [celebrationMessage, setCelebrationMessage] = useState<string | null>(null);
+  const [currentRepetition, setCurrentRepetition] = useState<number>(1);
 
   // Synchronize initial pen color when board changes to ensure contrast
   useEffect(() => {
@@ -246,10 +247,22 @@ export default function App() {
 
   // Handle goal achieved (accuracy goal passed)
   const handleGoalAchieved = (acc: number) => {
-    setCelebrationMessage(`ما شاء الله! حققت نسبة إتقان ${acc}% 🌟`);
-    setTimeout(() => {
-      setCelebrationMessage(null);
-    }, 6000);
+    const totalReps = Number(selectedTemplate?.repeatCount) || 1;
+    if (currentRepetition < totalReps) {
+      setCelebrationMessage(`أحسنت! أنهيت التكرار ${currentRepetition} من ${totalReps} 🌟 تابع للتكرار التالي!`);
+      audioService.speakArabic(`رائع! أنهيت التكرار ${currentRepetition}، واصل للمرة التالية`);
+      setTimeout(() => {
+        setCurrentRepetition(prev => prev + 1);
+        canvasRef.current?.clearCanvas();
+        setCelebrationMessage(null);
+      }, 3000);
+    } else {
+      setCelebrationMessage(`ما شاء الله! حققت إتقان ${acc}% وأتممت كافة التكرارات (${totalReps}) بنجاح 🏆`);
+      audioService.speakArabic('مبارك! أتممت جميع التكرارات بنجاح تام');
+      setTimeout(() => {
+        setCelebrationMessage(null);
+      }, 6000);
+    }
   };
 
   // If in Settings route, display Settings Studio View completely isolated from the whiteboard
@@ -395,11 +408,26 @@ export default function App() {
             </button>
           </div>
 
-          {/* AR Mode Active Badge */}
-          {boardStyle === 'ar_camera' && (
-            <div className="absolute top-3 right-3 z-30 flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-500 text-slate-950 font-bold text-xs shadow-lg animate-pulse pointer-events-none">
-              <Camera className="w-3.5 h-3.5" />
-              <span>وضع الواقع المعزز AR نشط</span>
+          {/* Active Lesson Topic & Repetition Badge */}
+          {selectedTemplate && (
+            <div className="absolute top-3 right-3 z-30 flex items-center gap-2 pointer-events-none">
+              {boardStyle === 'ar_camera' && (
+                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-amber-500 text-slate-950 font-bold text-xs shadow-lg animate-pulse">
+                  <Camera className="w-3.5 h-3.5" />
+                  <span>AR</span>
+                </div>
+              )}
+              <div className="px-3 py-1 rounded-xl bg-slate-900/85 backdrop-blur-md border border-slate-700/80 shadow-md flex items-center gap-2 text-xs">
+                <span className="font-bold text-slate-100">{selectedTemplate.title}</span>
+                <span className="h-3 w-px bg-slate-700" />
+                <span className="text-amber-400 font-bold flex items-center gap-1">
+                  <Repeat className="w-3 h-3" />
+                  <span>{currentRepetition} / {selectedTemplate.repeatCount || 1}</span>
+                </span>
+                <span className="px-1.5 py-0.5 rounded bg-slate-800 text-[10px] text-slate-300 font-bold border border-slate-700">
+                  {selectedTemplate.difficulty || 'سهل'}
+                </span>
+              </div>
             </div>
           )}
 
@@ -492,6 +520,7 @@ export default function App() {
         templates={allTemplates}
         onSelectTemplate={(tpl) => {
           setSelectedTemplate(tpl);
+          setCurrentRepetition(1);
           setCelebrationMessage(null);
           canvasRef.current?.clearCanvas();
           syncHistoryState();
