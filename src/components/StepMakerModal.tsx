@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { DrawingTemplate, LessonStep } from '../types/drawing';
 import { formatDirectImageUrl } from '../utils/urlHelper';
 import { audioService } from '../services/audioService';
+import { getArabicOrdinal } from '../services/sheetService';
 import {
   X,
   Play,
@@ -41,8 +42,6 @@ export const StepMakerModal: React.FC<StepMakerModalProps> = ({
 
   // Pending start point in image-relative coordinates [0, 1]
   const [pendingStartRel, setPendingStartRel] = useState<{ x: number; y: number } | null>(null);
-  const [activeStepTitle, setActiveStepTitle] = useState('');
-  const [activeStepAudioHint, setActiveStepAudioHint] = useState('');
   const [previewingStepIndex, setPreviewingStepIndex] = useState<number | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -162,18 +161,17 @@ export const StepMakerModal: React.FC<StepMakerModalProps> = ({
       const ex = dx + s.endX * dw;
       const ey = dy + s.endY * dh;
 
-      drawStepPoints(ctx, sx, sy, ex, ey, s.stepNumber, isHighlighted);
+      drawStepPoints(ctx, sx, sy, ex, ey, isHighlighted);
     });
 
-    // 5. Draw pending start point if waiting for second click
+    // 5. Draw pending start point if waiting for second click (only glowing green dot 🟢)
     if (pendingStartRel) {
       const psx = dx + pendingStartRel.x * dw;
       const psy = dy + pendingStartRel.y * dh;
 
       ctx.save();
-      // Glowing green start dot
-      ctx.shadowColor = 'rgba(16, 185, 129, 0.8)';
-      ctx.shadowBlur = 8;
+      ctx.shadowColor = 'rgba(16, 185, 129, 0.9)';
+      ctx.shadowBlur = 10;
       ctx.fillStyle = '#10b981';
       ctx.beginPath();
       ctx.arc(psx, psy, 6.5, 0, Math.PI * 2);
@@ -182,94 +180,49 @@ export const StepMakerModal: React.FC<StepMakerModalProps> = ({
       ctx.strokeStyle = '#ffffff';
       ctx.lineWidth = 2;
       ctx.stroke();
-
-      // Number badge next to it
-      drawStepBadge(ctx, psx, psy, steps.length + 1, true);
       ctx.restore();
     }
   };
 
-  // Helper to draw clean dots and outer step number badge without any arrows
+  // Helper to draw clean dots ONLY - NO LINES, NO NUMBERS, NO ARROWS
   const drawStepPoints = (
     ctx: CanvasRenderingContext2D,
     sx: number,
     sy: number,
     ex: number,
     ey: number,
-    stepNum: number,
     isHighlighted: boolean
   ) => {
     ctx.save();
 
-    // 1. Ultra-thin faint dashed guide line between start and end (very subtle, non-intrusive)
-    ctx.strokeStyle = isHighlighted ? 'rgba(244, 63, 94, 0.5)' : 'rgba(148, 163, 184, 0.4)';
-    ctx.lineWidth = isHighlighted ? 1.5 : 1;
-    ctx.setLineDash([3, 4]);
-    ctx.beginPath();
-    ctx.moveTo(sx, sy);
-    ctx.lineTo(ex, ey);
-    ctx.stroke();
-    ctx.setLineDash([]); // Reset line dash
-
-    // 2. Start Point: Small Green Dot 🟢
-    ctx.shadowColor = 'rgba(16, 185, 129, 0.5)';
-    ctx.shadowBlur = isHighlighted ? 8 : 4;
+    // 1. Start Point: Small Green Dot 🟢
+    ctx.shadowColor = 'rgba(16, 185, 129, 0.7)';
+    ctx.shadowBlur = isHighlighted ? 10 : 4;
     ctx.fillStyle = '#10b981';
     ctx.beginPath();
-    ctx.arc(sx, sy, 5.5, 0, Math.PI * 2);
+    ctx.arc(sx, sy, isHighlighted ? 7 : 5.5, 0, Math.PI * 2);
     ctx.fill();
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 1.5;
     ctx.stroke();
 
-    // 3. End Point: Small Red Dot 🔴
-    ctx.shadowColor = 'rgba(239, 68, 68, 0.5)';
-    ctx.shadowBlur = isHighlighted ? 8 : 4;
+    // 2. End Point: Small Red Dot 🔴
+    ctx.shadowColor = 'rgba(239, 68, 68, 0.7)';
+    ctx.shadowBlur = isHighlighted ? 10 : 4;
     ctx.fillStyle = '#ef4444';
     ctx.beginPath();
-    ctx.arc(ex, ey, 5.5, 0, Math.PI * 2);
+    ctx.arc(ex, ey, isHighlighted ? 7 : 5.5, 0, Math.PI * 2);
     ctx.fill();
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 1.5;
     ctx.stroke();
-
-    // 4. Step Number Badge: Sits OUTSIDE the green dot (above/offset)
-    drawStepBadge(ctx, sx, sy, stepNum, isHighlighted);
 
     ctx.restore();
   };
 
-  // Draw clean circular step number badge outside the start dot
-  const drawStepBadge = (
-    ctx: CanvasRenderingContext2D,
-    sx: number,
-    sy: number,
-    num: number,
-    isHighlighted: boolean
-  ) => {
-    const badgeX = sx - 16;
-    const badgeY = sy - 14;
-
-    ctx.save();
-    ctx.shadowColor = 'rgba(0,0,0,0.25)';
-    ctx.shadowBlur = 4;
-
-    ctx.fillStyle = isHighlighted ? '#e11d48' : '#0f172a';
-    ctx.beginPath();
-    ctx.arc(badgeX, badgeY, 10, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.strokeStyle = isHighlighted ? '#fda4af' : '#f8fafc';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 10px Cairo, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(String(num), badgeX, badgeY);
-
-    ctx.restore();
+  // Update audio hint text for a specific step
+  const handleUpdateStepAudio = (stepId: string, audioHint: string) => {
+    setSteps(prev => prev.map(s => s.id === stepId ? { ...s, audioHint } : s));
   };
 
   // Canvas Click: Computes coordinates RELATIVE TO THE IMAGE BOUNDS [0, 1]
@@ -286,15 +239,13 @@ export const StepMakerModal: React.FC<StepMakerModalProps> = ({
     const relY = Math.max(0, Math.min(1, (clickY - b.y) / b.height));
 
     if (!pendingStartRel) {
-      // First click: Start Point (Green)
+      // First click: Start Point (Green 🟢)
       setPendingStartRel({ x: relX, y: relY });
       audioService.playStrokeStart();
     } else {
-      // Second click: End Point (Red) -> Create Step
+      // Second click: End Point (Red 🔴) -> Create Step
       const newStepNumber = steps.length + 1;
-      const defaultTitle = `الخطوة ${newStepNumber}`;
-      const title = activeStepTitle.trim() || defaultTitle;
-      const audioHint = activeStepAudioHint.trim() || `الخطوة ${newStepNumber}، ابدأ من النقطة الخضراء وانتهِ عند النقطة الحمراء`;
+      const title = `الخطوة ${newStepNumber}`;
 
       const newStep: LessonStep = {
         id: `step_${Date.now()}_${newStepNumber}`,
@@ -304,18 +255,16 @@ export const StepMakerModal: React.FC<StepMakerModalProps> = ({
         startY: pendingStartRel.y,
         endX: relX,
         endY: relY,
-        audioHint
+        audioHint: '' // user can fill in the dedicated field or leave empty
       };
 
-      setSteps([...steps, newStep]);
+      setSteps(prev => [...prev, newStep]);
       setPendingStartRel(null);
-      setActiveStepTitle('');
-      setActiveStepAudioHint('');
-      audioService.speakArabic(`تمت إضافة ${title}`);
+      audioService.speakArabic(getArabicOrdinal(newStepNumber));
     }
   };
 
-  // Preview steps
+  // Preview steps sequence with audio reading
   const handlePreviewSteps = () => {
     if (steps.length === 0) {
       audioService.speakArabic('لم تقم بإضافة أي خطوات بعد');
@@ -327,7 +276,8 @@ export const StepMakerModal: React.FC<StepMakerModalProps> = ({
       if (idx < steps.length) {
         setPreviewingStepIndex(idx);
         const s = steps[idx];
-        audioService.speakArabic(s.audioHint || s.title);
+        const textToSpeak = (s.audioHint && s.audioHint.trim()) ? s.audioHint.trim() : getArabicOrdinal(s.stepNumber);
+        audioService.speakArabic(textToSpeak);
         idx++;
         setTimeout(playNext, 2200);
       } else {
@@ -449,17 +399,11 @@ export const StepMakerModal: React.FC<StepMakerModalProps> = ({
             <div className="flex items-center gap-4 text-[11px] text-slate-300 mt-2.5">
               <span className="flex items-center gap-1.5">
                 <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 border border-white" />
-                <span>نقطة الانطلاق (البداية)</span>
+                <span>نقطة الانطلاق (البداية 🟢)</span>
               </span>
               <span className="flex items-center gap-1.5">
                 <span className="w-2.5 h-2.5 rounded-full bg-rose-500 border border-white" />
-                <span>نقطة الوقوف (النهاية)</span>
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="w-4 h-4 rounded-full bg-slate-900 text-white font-bold text-[9px] flex items-center justify-center border border-slate-400">
-                  ١
-                </span>
-                <span>رقم الخطوة</span>
+                <span>نقطة الوقوف (النهاية 🔴)</span>
               </span>
             </div>
           </div>
@@ -476,11 +420,11 @@ export const StepMakerModal: React.FC<StepMakerModalProps> = ({
                 <button
                   onClick={handlePreviewSteps}
                   disabled={steps.length === 0}
-                  title="معاينة تسلسل الخطوات"
+                  title="معاينة تسلسل قراءة الخطوات"
                   className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold border border-slate-700 disabled:opacity-40 cursor-pointer"
                 >
                   <Play className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>معاينة</span>
+                  <span>معاينة النطق</span>
                 </button>
 
                 <button
@@ -494,69 +438,73 @@ export const StepMakerModal: React.FC<StepMakerModalProps> = ({
               </div>
             </div>
 
-            {/* Quick Name and Audio Input for Next Step */}
-            <div className="my-3 p-3 rounded-xl bg-slate-950 border border-slate-800/80 space-y-2">
-              <span className="text-[11px] font-bold text-amber-400 block">
-                تخصيص الخطوة {steps.length + 1} (اختياري قبل النقر):
-              </span>
-              <input
-                type="text"
-                value={activeStepTitle}
-                onChange={(e) => setActiveStepTitle(e.target.value)}
-                placeholder={`اسم الخطوة (مثال: السن الأولى، بطن الحرف)`}
-                className="w-full px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs text-slate-100 placeholder-slate-500 focus:outline-hidden focus:border-amber-500"
-              />
-              <input
-                type="text"
-                value={activeStepAudioHint}
-                onChange={(e) => setActiveStepAudioHint(e.target.value)}
-                placeholder="التوجيه الصوتي (مثال: ابدأ من السن بانحدار خفيف)"
-                className="w-full px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs text-slate-100 placeholder-slate-500 focus:outline-hidden focus:border-amber-500"
-              />
+            {/* Instruction Helper */}
+            <div className="my-2.5 p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 text-[11px] text-slate-300 leading-relaxed">
+              <span className="text-amber-400 font-bold block mb-0.5">طريقة الإضافة المباشرة:</span>
+              انقر على الحرف لتحديد نقطة البداية (🟢) ثم نقطة النهاية (🔴). ستظهر الخطوة فوراً بالقائمة أدناه مع حقل نص القراءة الآلية.
             </div>
 
             {/* Steps Scrollable List */}
-            <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+            <div className="flex-1 overflow-y-auto space-y-2.5 pr-1">
               {steps.map((s, index) => {
                 const isSelected = previewingStepIndex === index;
+                const defaultLabel = getArabicOrdinal(s.stepNumber);
                 return (
                   <div
                     key={s.id}
-                    className={`p-2.5 rounded-xl border transition-all flex items-center justify-between gap-2 ${
+                    className={`p-3 rounded-2xl border transition-all space-y-2 ${
                       isSelected
-                        ? 'bg-amber-500/10 border-amber-500 shadow-sm'
-                        : 'bg-slate-950/60 border-slate-800 hover:border-slate-700'
+                        ? 'bg-amber-500/10 border-amber-500 shadow-md'
+                        : 'bg-slate-950/70 border-slate-800 hover:border-slate-700'
                     }`}
                   >
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <div className="w-6 h-6 rounded-full bg-slate-900 text-amber-400 font-bold flex items-center justify-center text-xs shrink-0 font-mono border border-slate-700">
-                        {s.stepNumber}
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className="w-6 h-6 rounded-full bg-slate-900 text-amber-400 font-bold flex items-center justify-center text-xs font-mono border border-slate-700 shrink-0">
+                          {s.stepNumber}
+                        </div>
+                        <span className="text-xs font-bold text-slate-200">
+                          {defaultLabel}
+                        </span>
+                        <span className="flex items-center gap-1 text-[10px] text-slate-400 font-normal">
+                          (<span>🟢 بداية</span>
+                          <span>←</span>
+                          <span>🔴 نهاية</span>)
+                        </span>
                       </div>
-                      <div className="min-w-0">
-                        <h4 className="text-xs font-bold text-slate-100 truncate">
-                          {s.title}
-                        </h4>
-                        <p className="text-[10px] text-slate-400 truncate">
-                          {s.audioHint || 'توجيه افتراضي'}
-                        </p>
+
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const textToSpeak = (s.audioHint && s.audioHint.trim()) ? s.audioHint.trim() : defaultLabel;
+                            audioService.speakArabic(textToSpeak);
+                          }}
+                          title="استماع للتوجيه الصوتي"
+                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-amber-400 cursor-pointer transition-colors"
+                        >
+                          <Volume2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteStep(s.id)}
+                          title="حذف الخطوة"
+                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 cursor-pointer transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-1 shrink-0">
-                      <button
-                        onClick={() => audioService.speakArabic(s.audioHint || s.title)}
-                        title="استماع للتوجيه"
-                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-amber-400 cursor-pointer"
-                      >
-                        <Volume2 className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteStep(s.id)}
-                        title="حذف الخطوة"
-                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 cursor-pointer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                    {/* Audio Hint Input Field for This Specific Step */}
+                    <div>
+                      <input
+                        type="text"
+                        value={s.audioHint || ''}
+                        onChange={(e) => handleUpdateStepAudio(s.id, e.target.value)}
+                        placeholder={`نص القراءة الآلية (اتركه فارغاً لنطق: ${defaultLabel})`}
+                        className="w-full px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700/80 text-xs text-slate-100 placeholder-slate-500 focus:outline-hidden focus:border-amber-500"
+                      />
                     </div>
                   </div>
                 );

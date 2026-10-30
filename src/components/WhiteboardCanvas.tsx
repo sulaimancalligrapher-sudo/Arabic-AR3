@@ -210,7 +210,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     ctx.restore();
   };
 
-  // Helper to draw step markers (green start dot, red end dot, outer circular step number badge - NO ARROWS)
+  // Helper to draw step markers (green start dot and red end dot ONLY - NO LINES, NO NUMBERS, NO ARROWS)
   const drawStepMarkers = (
     ctx: CanvasRenderingContext2D,
     steps: LessonStep[],
@@ -229,26 +229,16 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
       ctx.shadowBlur = 4;
 
-      // Subtle faint dashed guide between start and end
+      // 1. End point: Small Red Dot (نقطة حمراء صغيرة لنهاية الجرة 🔴)
       ctx.beginPath();
-      ctx.setLineDash([3, 4]);
-      ctx.strokeStyle = 'rgba(16, 185, 129, 0.45)';
-      ctx.lineWidth = 1.5;
-      ctx.moveTo(sx, sy);
-      ctx.lineTo(ex, ey);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      // 1. End point: Small Red Dot (نقطة حمراء صغيرة لنهاية الجرة)
-      ctx.beginPath();
-      ctx.arc(ex, ey, 5, 0, Math.PI * 2);
+      ctx.arc(ex, ey, 5.5, 0, Math.PI * 2);
       ctx.fillStyle = '#ef4444';
       ctx.fill();
       ctx.lineWidth = 1.5;
       ctx.strokeStyle = '#ffffff';
       ctx.stroke();
 
-      // 2. Start point: Small Green Dot (نقطة خضراء صغيرة لبداية الجرة)
+      // 2. Start point: Small Green Dot (نقطة خضراء صغيرة لبداية الجرة 🟢)
       ctx.beginPath();
       ctx.arc(sx, sy, 5.5, 0, Math.PI * 2);
       ctx.fillStyle = '#10b981';
@@ -256,24 +246,6 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       ctx.lineWidth = 1.5;
       ctx.strokeStyle = '#ffffff';
       ctx.stroke();
-
-      // 3. Step Number Badge placed OUTSIDE the green dot (الرقم خارج النقطة كعلامة خطوات)
-      const badgeX = sx - 15;
-      const badgeY = sy - 14;
-
-      ctx.beginPath();
-      ctx.arc(badgeX, badgeY, 9.5, 0, Math.PI * 2);
-      ctx.fillStyle = '#0f172a';
-      ctx.fill();
-      ctx.lineWidth = 1.5;
-      ctx.strokeStyle = '#10b981';
-      ctx.stroke();
-
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 10px Cairo, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(String(s.stepNumber), badgeX, badgeY);
 
       ctx.restore();
     });

@@ -6,7 +6,7 @@ import { ARCameraOverlay } from './components/ARCameraOverlay';
 import { WhiteboardToolbar } from './components/WhiteboardToolbar';
 import { TemplateLibraryModal } from './components/TemplateLibraryModal';
 import { SettingsView } from './components/SettingsView';
-import { sheetService } from './services/sheetService';
+import { sheetService, getArabicOrdinal } from './services/sheetService';
 import { audioService } from './services/audioService';
 import {
   Camera,
@@ -201,10 +201,25 @@ export default function App() {
     audioService.speakArabic('تم حفظ لوحتك بنجاح!');
   };
 
-  // Pronounce template name
+  // Pronounce template name and sequential steps instructions
   const handlePronounce = () => {
-    if (selectedTemplate?.arabicAudioText) {
-      audioService.speakArabic(selectedTemplate.arabicAudioText);
+    if (!selectedTemplate) return;
+    const mainTitle = selectedTemplate.arabicAudioText || selectedTemplate.title;
+    audioService.speakArabic(mainTitle);
+
+    if (selectedTemplate.steps && selectedTemplate.steps.length > 0) {
+      const stepsList = selectedTemplate.steps;
+      let idx = 0;
+      const playNextStep = () => {
+        if (idx < stepsList.length) {
+          const s = stepsList[idx];
+          const text = (s.audioHint && s.audioHint.trim()) ? s.audioHint.trim() : getArabicOrdinal(s.stepNumber);
+          audioService.speakArabic(text);
+          idx++;
+          setTimeout(playNextStep, 2400);
+        }
+      };
+      setTimeout(playNextStep, 1600);
     }
   };
 

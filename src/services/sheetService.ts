@@ -9,6 +9,62 @@ const LOCAL_STEPS_CACHE_KEY = 'arabic_ar_steps_backup_cache';
 // Default built-in Google Apps Script URL so all devices (mobile, tablet, PC) connect automatically
 export const DEFAULT_SHEET_URL = 'https://script.google.com/macros/s/AKfycbw3_rZtsYcs4OLZU242sU6Kgc6OHWc6sSQ-EmLsJT4yOUCkHVP38ootritf_vnRmG1Oug/exec';
 
+/**
+ * Return authentic Arabic ordinal word for steps
+ */
+export function getArabicOrdinal(num: number): string {
+  const ordinals: Record<number, string> = {
+    1: 'الخطوة الأولى',
+    2: 'الخطوة الثانية',
+    3: 'الخطوة الثالثة',
+    4: 'الخطوة الرابعة',
+    5: 'الخطوة الخامسة',
+    6: 'الخطوة السادسة',
+    7: 'الخطوة السابعة',
+    8: 'الخطوة الثامنة',
+    9: 'الخطوة التاسعة',
+    10: 'الخطوة العاشرة',
+    11: 'الخطوة الحادية عشرة',
+    12: 'الخطوة الثانية عشرة',
+    13: 'الخطوة الثالثة عشرة',
+    14: 'الخطوة الرابعة عشرة',
+    15: 'الخطوة الخامسة عشرة',
+  };
+  return ordinals[num] || `الخطوة ${num}`;
+}
+
+/**
+ * Parse steps JSON from Sheet column or cache in a completely resilient way
+ */
+export function parseStepsData(raw: any): LessonStep[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'object' && Array.isArray((raw as any).steps)) return (raw as any).steps;
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed || trimmed === 'سهل' || trimmed === 'متوسط' || trimmed === 'متقدم' || trimmed === 'صعب') {
+      return [];
+    }
+    try {
+      let parsed = JSON.parse(trimmed);
+      if (typeof parsed === 'string') {
+        try {
+          parsed = JSON.parse(parsed);
+        } catch {}
+      }
+      if (Array.isArray(parsed)) return parsed;
+      if (parsed && Array.isArray(parsed.steps)) return parsed.steps;
+    } catch {
+      try {
+        const cleaned = trimmed.replace(/'/g, '"');
+        const parsed = JSON.parse(cleaned);
+        if (Array.isArray(parsed)) return parsed;
+      } catch {}
+    }
+  }
+  return [];
+}
+
 export interface SheetSyncStatus {
   connected: boolean;
   lastSyncTime: Date | null;
@@ -349,6 +405,15 @@ class SheetService {
   public getStoredSheetUrl(): string {
     if (typeof window === 'undefined') return DEFAULT_SHEET_URL;
     const stored = localStorage.getItem(SHEET_URL_KEY);
+    // If the browser on this or other devices still has the old 6-column script URL stored,
+    // automatically migrate it to the active 7-column URL so steps sync across all devices!
+    if (stored && (
+      stored.includes('AKfycbwjtf7BiA8k5BEQgw1n0s_VYeBNzTmL-IitZ8m_YKjbnVfd_dZHL4svN08x4jNfw3LNqA') ||
+      !stored.trim()
+    )) {
+      localStorage.setItem(SHEET_URL_KEY, DEFAULT_SHEET_URL);
+      return DEFAULT_SHEET_URL;
+    }
     if (stored && stored.trim()) {
       return stored.trim();
     }
@@ -432,11 +497,8 @@ class SheetService {
       let parsedSteps: LessonStep[] = [];
       if (Array.isArray(item.steps) && item.steps.length > 0) {
         parsedSteps = item.steps;
-      } else if (item.stepsData && item.stepsData.trim()) {
-        try {
-          const p = JSON.parse(item.stepsData);
-          if (Array.isArray(p)) parsedSteps = p;
-        } catch {}
+      } else if (item.stepsData) {
+        parsedSteps = parseStepsData(item.stepsData);
       }
 
       // Check persistent fallback cache if still empty
@@ -503,13 +565,8 @@ class SheetService {
           const title = String(item.title || 'درس بدون عنوان').trim();
           const tts = String(item.arabicAudioText || title).trim();
 
-          let steps: LessonStep[] = [];
-          if (item.stepsData) {
-            try {
-              const p = JSON.parse(item.stepsData);
-              if (Array.isArray(p)) steps = p;
-            } catch {}
-          }
+          // Parse steps from stepsData using resilient parser
+          const steps: LessonStep[] = parseStepsData(item.stepsData);
 
           return {
             id: String(item.id || `sheet_${topic}_${title}`),
