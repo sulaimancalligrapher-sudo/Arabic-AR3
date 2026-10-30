@@ -54,13 +54,20 @@ export default function App() {
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
 
-  // Background sync on load if Google Sheet URL is configured
+  // Background sync on load with default or stored Google Sheet URL
   useEffect(() => {
     const url = sheetService.getStoredSheetUrl();
     if (url) {
       sheetService.fetchLessonsFromSheet().then((res) => {
         if (res.success && res.lessons.length > 0) {
           setAllTemplates(res.lessons);
+          setSelectedTemplate(prev => {
+            if (!prev || prev.id.startsWith('letter_alif')) {
+              return res.lessons[0];
+            }
+            const found = res.lessons.find(l => l.id === prev.id);
+            return found || res.lessons[0];
+          });
         }
       }).catch(() => {});
     }

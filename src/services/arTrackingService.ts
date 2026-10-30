@@ -98,6 +98,14 @@ class ARTrackingService {
     });
   }
 
+  private isMobileDevice(): boolean {
+    if (typeof window === 'undefined') return false;
+    return (
+      /Android|iPhone|iPad|iPod|Tablet/i.test(navigator.userAgent) ||
+      (Boolean(navigator.maxTouchPoints) && navigator.maxTouchPoints > 1 && window.innerWidth <= 1024)
+    );
+  }
+
   public async initMediaPipe(): Promise<void> {
     try {
       await Promise.all([
@@ -106,6 +114,8 @@ class ARTrackingService {
         this.ensureScript('https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js'),
       ]);
 
+      const isMobile = this.isMobileDevice();
+
       if ((window as any).Hands && !this.handsInstance) {
         const HandsClass = (window as any).Hands;
         this.handsInstance = new HandsClass({
@@ -113,7 +123,7 @@ class ARTrackingService {
         });
         this.handsInstance.setOptions({
           maxNumHands: 2,
-          modelComplexity: 1,
+          modelComplexity: isMobile ? 0 : 1, // modelComplexity 0 (Lite) is 3x faster and designed for mobile GPUs
           minDetectionConfidence: 0.5,
           minTrackingConfidence: 0.5
         });
@@ -156,12 +166,15 @@ class ARTrackingService {
 
     try {
       let stream: MediaStream | null = null;
+      const isMobile = this.isMobileDevice();
+
       try {
         stream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: this.facingMode,
-            width: { ideal: 1280 },
-            height: { ideal: 720 }
+            // 640x480 on mobile cuts memory bandwidth and GPU load drastically, eliminating tracking lag
+            width: { ideal: isMobile ? 640 : 1280 },
+            height: { ideal: isMobile ? 480 : 720 }
           },
           audio: false
         });
@@ -197,14 +210,20 @@ class ARTrackingService {
       if (!this.isRunning || !this.videoElement) return;
 
       if (this.videoElement.readyState >= 2) {
-        if (this.trackHands && this.handsInstance && timestamp - lastHandProcess >= 32) {
+        const isMobile = this.isMobileDevice();
+        // Hands tracking interval: full frame rate
+        const handInterval = isMobile ? 25 : 30;
+        // Face tracking interval (Crown): on mobile, run at ~6-7 FPS to free GPU/CPU for finger tracing
+        const faceInterval = isMobile ? 150 : 45;
+
+        if (this.trackHands && this.handsInstance && timestamp - lastHandProcess >= handInterval) {
           lastHandProcess = timestamp;
           try {
             await this.handsInstance.send({ image: this.videoElement });
           } catch {}
         }
 
-        if (this.trackFace && this.faceMeshInstance && timestamp - lastFaceProcess >= 45) {
+        if (this.trackFace && this.faceMeshInstance && timestamp - lastFaceProcess >= faceInterval) {
           lastFaceProcess = timestamp;
           try {
             await this.faceMeshInstance.send({ image: this.videoElement });

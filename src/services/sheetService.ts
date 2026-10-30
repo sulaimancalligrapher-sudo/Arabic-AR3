@@ -5,6 +5,9 @@ import { formatDirectImageUrl } from '../utils/urlHelper';
 const SHEET_URL_KEY = 'arabic_ar_sheet_url';
 const LOCAL_TEMPLATES_KEY = 'arabic_ar_horizontal_templates_v2';
 
+// Default built-in Google Apps Script URL so all devices (mobile, tablet, PC) connect automatically
+export const DEFAULT_SHEET_URL = 'https://script.google.com/macros/s/AKfycbwjtf7BiA8k5BEQgw1n0s_VYeBNzTmL-IitZ8m_YKjbnVfd_dZHL4svN08x4jNfw3LNqA/exec';
+
 export interface SheetSyncStatus {
   connected: boolean;
   lastSyncTime: Date | null;
@@ -336,15 +339,22 @@ class SheetService {
 
   constructor() {
     this.sheetUrl = this.getStoredSheetUrl();
+    if (typeof window !== 'undefined' && !localStorage.getItem(SHEET_URL_KEY)) {
+      localStorage.setItem(SHEET_URL_KEY, DEFAULT_SHEET_URL);
+    }
   }
 
   public getStoredSheetUrl(): string {
-    if (typeof window === 'undefined') return '';
-    return localStorage.getItem(SHEET_URL_KEY) || '';
+    if (typeof window === 'undefined') return DEFAULT_SHEET_URL;
+    const stored = localStorage.getItem(SHEET_URL_KEY);
+    if (stored && stored.trim()) {
+      return stored.trim();
+    }
+    return DEFAULT_SHEET_URL;
   }
 
   public setStoredSheetUrl(url: string): void {
-    const trimmed = url.trim();
+    const trimmed = url.trim() || DEFAULT_SHEET_URL;
     this.sheetUrl = trimmed;
     if (typeof window !== 'undefined') {
       localStorage.setItem(SHEET_URL_KEY, trimmed);
