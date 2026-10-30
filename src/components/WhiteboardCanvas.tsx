@@ -53,7 +53,8 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
   // Stroke histories for Undo / Redo
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const [redoStack, setRedoStack] = useState<Stroke[]>([]);
-  const activeStrokeRef = useRef<Stroke | null>(null);
+  const activePointerStrokeRef = useRef<Stroke | null>(null);
+  const activeAirStrokeRef = useRef<Stroke | null>(null);
 
   // Template guide points cache for accuracy evaluation
   const guidePointsRef = useRef<{ x: number; y: number }[]>([]);
@@ -366,7 +367,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       nibAngle: calligraphyAngle
     };
 
-    activeStrokeRef.current = newStroke;
+    activePointerStrokeRef.current = newStroke;
 
     const ctx = canvas.getContext('2d');
     if (ctx) {
@@ -377,7 +378,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
   // Handle pointer move
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     e.preventDefault();
-    if (!activeStrokeRef.current) return;
+    if (!activePointerStrokeRef.current) return;
 
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -387,7 +388,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     const y = e.clientY - rect.top;
     const pressure = e.pressure > 0 ? e.pressure : 1;
 
-    const curStroke = activeStrokeRef.current;
+    const curStroke = activePointerStrokeRef.current;
     const lastPt = curStroke.points[curStroke.points.length - 1];
 
     // Filter tiny micro-movements for smooth performance
@@ -407,11 +408,11 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
   // Handle pointer up
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
     e.preventDefault();
-    if (activeStrokeRef.current) {
-      const finishedStroke = activeStrokeRef.current;
+    if (activePointerStrokeRef.current) {
+      const finishedStroke = activePointerStrokeRef.current;
       setStrokes(prev => [...prev, finishedStroke]);
       setRedoStack([]); // Clear redo history on new stroke
-      activeStrokeRef.current = null;
+      activePointerStrokeRef.current = null;
       redrawCanvas();
     }
   };
@@ -419,9 +420,9 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
   // Handle Air-Drawing from AR Hand Tracking
   useEffect(() => {
     if (!isARMode || !virtualCursor) {
-      if (activeStrokeRef.current) {
-        setStrokes(prev => [...prev, activeStrokeRef.current!]);
-        activeStrokeRef.current = null;
+      if (activeAirStrokeRef.current) {
+        setStrokes(prev => [...prev, activeAirStrokeRef.current!]);
+        activeAirStrokeRef.current = null;
         redrawCanvas();
       }
       return;
@@ -434,10 +435,10 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     const y = virtualCursor.y * dimensions.height;
 
     if (isAirDrawing) {
-      if (!activeStrokeRef.current) {
+      if (!activeAirStrokeRef.current) {
         // Start air stroke
         audioService.playStrokeStart();
-        activeStrokeRef.current = {
+        activeAirStrokeRef.current = {
           id: `air_stroke_${Date.now()}`,
           points: [{ x, y, pressure: 1, time: Date.now() }],
           penType,
@@ -448,7 +449,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         };
       } else {
         // Continue air stroke
-        const curStroke = activeStrokeRef.current;
+        const curStroke = activeAirStrokeRef.current;
         const lastPt = curStroke.points[curStroke.points.length - 1];
         if (Math.hypot(x - lastPt.x, y - lastPt.y) >= 3) {
           curStroke.points.push({ x, y, pressure: 1, time: Date.now() });
@@ -462,9 +463,9 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         }
       }
     } else {
-      if (activeStrokeRef.current) {
-        setStrokes(prev => [...prev, activeStrokeRef.current!]);
-        activeStrokeRef.current = null;
+      if (activeAirStrokeRef.current) {
+        setStrokes(prev => [...prev, activeAirStrokeRef.current!]);
+        activeAirStrokeRef.current = null;
         redrawCanvas();
       }
     }
@@ -476,6 +477,8 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       audioService.playEraserSound();
       setStrokes([]);
       setRedoStack([]);
+      activePointerStrokeRef.current = null;
+      activeAirStrokeRef.current = null;
       hasAchievedGoalRef.current = false;
       const canvas = canvasRef.current;
       if (canvas) {

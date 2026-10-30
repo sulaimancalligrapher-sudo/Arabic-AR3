@@ -137,25 +137,34 @@ export const ARCameraOverlay: React.FC<ARCameraOverlayProps> = ({
           const videoW = (vid && vid.videoWidth > 0) ? vid.videoWidth : (state.videoWidth || 1280);
           const videoH = (vid && vid.videoHeight > 0) ? vid.videoHeight : (state.videoHeight || 720);
 
+          // If no hands detected, immediately clear cursor and stop any air drawing
+          if (!state.hands || state.hands.length === 0) {
+            cursorCallbackRef.current(null, false);
+            return;
+          }
+
           // Get active drawing hand (prefer pinching hand, then right hand, then first detected)
           const activeHand = state.hands.find(h => h.isPinching) || 
             (state.hands.length > 1 && state.hands[1].handedness === 'Right' ? state.hands[1] : state.hands[0]);
           
+          if (!activeHand || !activeHand.landmarks || !activeHand.landmarks[8]) {
+            cursorCallbackRef.current(null, false);
+            return;
+          }
+
           // Index tip landmark 8 is the exact drawing tip
-          const rawIndexTip = activeHand?.landmarks?.[8] || state.cursor;
+          const rawIndexTip = activeHand.landmarks[8];
 
-          const screenCursor = rawIndexTip
-            ? getScreenPointFromVideo(
-                rawIndexTip,
-                containerW,
-                containerH,
-                videoW,
-                videoH,
-                isMirroredRef.current
-              )
-            : null;
+          const screenCursor = getScreenPointFromVideo(
+            rawIndexTip,
+            containerW,
+            containerH,
+            videoW,
+            videoH,
+            isMirroredRef.current
+          );
 
-          cursorCallbackRef.current(screenCursor, state.isPinching);
+          cursorCallbackRef.current(screenCursor, activeHand.isPinching);
         }
       );
 

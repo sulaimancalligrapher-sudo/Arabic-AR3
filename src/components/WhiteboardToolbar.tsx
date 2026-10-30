@@ -22,7 +22,9 @@ import {
   SlidersHorizontal,
   X,
   Compass,
-  Check
+  Check,
+  Menu,
+  ChevronDown
 } from 'lucide-react';
 
 interface WhiteboardToolbarProps {
@@ -106,6 +108,7 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
   arDetectionStatus,
 }) => {
   const [activePopover, setActivePopover] = useState<ActivePopover>(null);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
   const [lastStandardBoard, setLastStandardBoard] = useState<BoardStyle>('grid');
   const toolbarRef = useRef<HTMLDivElement>(null);
 
@@ -116,11 +119,12 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
     }
   }, [boardStyle]);
 
-  // Close popover when clicking outside or pressing Escape
+  // Close popovers and mobile menu when clicking outside or pressing Escape
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setActivePopover(null);
+        setIsMobileMenuOpen(false);
       }
     };
 
@@ -129,11 +133,13 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
   }, []);
 
   const togglePopover = (popover: ActivePopover) => {
+    setIsMobileMenuOpen(false);
     setActivePopover(prev => (prev === popover ? null : popover));
   };
 
   // Toggle AR mode vs standard board
   const handleToggleAR = () => {
+    setIsMobileMenuOpen(false);
     if (boardStyle === 'ar_camera') {
       onSelectBoardStyle(lastStandardBoard || 'grid');
       setActivePopover(null);
@@ -145,6 +151,7 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
 
   // Switch to Mouse / Finger touch drawing
   const handleSelectMouseMode = () => {
+    setIsMobileMenuOpen(false);
     if (boardStyle === 'ar_camera') {
       onSelectBoardStyle(lastStandardBoard || 'grid');
     }
@@ -156,8 +163,10 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
       ref={toolbarRef}
       className="relative w-full bg-slate-900/95 backdrop-blur-md border-b border-slate-800 text-slate-100 z-50 select-none shadow-md"
     >
-      {/* Top Main Row: Icons Only */}
-      <div className="max-w-7xl mx-auto px-2 sm:px-4 py-2 flex items-center justify-between gap-1.5 sm:gap-3 overflow-x-auto scrollbar-none">
+      {/* ======================================================== */}
+      {/* DESKTOP TOOLBAR (الشاشات الكبيرة: صف الأيقونات المباشر)   */}
+      {/* ======================================================== */}
+      <div className="hidden sm:flex max-w-7xl mx-auto px-2 sm:px-4 py-2 items-center justify-between gap-1.5 sm:gap-3 overflow-x-auto scrollbar-none">
         
         {/* Right Section: Brand & Lesson Folder & Tool Windows (RTL layout) */}
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
@@ -263,7 +272,7 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
               className={`p-2 sm:p-2.5 rounded-xl border transition-all active:scale-95 cursor-pointer relative ${
                 activePopover === 'ar_settings'
                   ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-md'
-                  : 'bg-slate-800/90 hover:bg-slate-700 text-amber-300 border-amber-500/40'
+                  : 'bg-slate-800/90 hover:bg-slate-750 text-amber-300 border-amber-500/40'
               }`}
               aria-label="خيارات الواقع المعزز"
             >
@@ -305,7 +314,7 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
             </button>
           )}
 
-          <div className="h-5 w-px bg-slate-800 mx-0.5 hidden xs:block" />
+          <div className="h-5 w-px bg-slate-800 mx-0.5" />
 
           {/* Undo / Redo (Icons only) */}
           <div className="flex items-center bg-slate-950/70 p-1 rounded-xl border border-slate-800 shrink-0">
@@ -353,10 +362,290 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
 
       </div>
 
-      {/* Backdrop overlay for small screens when any popover is open */}
-      {activePopover && (
+      {/* ======================================================== */}
+      {/* MOBILE TOOLBAR (الشاشات الصغيرة / الجوال)                 */}
+      {/* صف أنيق مدمج: زر القائمة المنسدلة يجمع كل الأدوات         */}
+      {/* ======================================================== */}
+      <div className="flex sm:hidden max-w-full px-2.5 py-2 items-center justify-between gap-2">
+        
+        {/* Brand & Active Status Badge */}
+        <div className="flex items-center gap-2 min-w-0">
+          <div
+            title="السبورة التفاعلية للخط العربي"
+            className="w-8 h-8 rounded-xl bg-gradient-to-br from-amber-500 to-amber-700 flex items-center justify-center text-slate-950 font-bold shadow-md shadow-amber-500/20 shrink-0 cursor-default"
+          >
+            <span className="font-ruqaa text-lg font-black">ض</span>
+          </div>
+
+          {template ? (
+            <span className="text-xs font-bold text-amber-300 truncate max-w-[130px]">
+              {template.title}
+            </span>
+          ) : (
+            <span className="text-xs font-bold text-slate-300">
+              خط عربي تفاعلي
+            </span>
+          )}
+
+          {boardStyle === 'ar_camera' && (
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center gap-1 shrink-0">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+              AR
+            </span>
+          )}
+        </div>
+
+        {/* Left Side: Accuracy + Quick Undo + Mobile Dropdown Trigger */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {/* Accuracy pill on mobile */}
+          {template && template.category !== 'freehand' && (
+            <div
+              title={`نسبة التطابق: ${accuracy}%`}
+              className="flex items-center gap-1 px-2 py-1 bg-slate-950/70 border border-slate-800 rounded-lg text-xs font-mono font-bold"
+            >
+              <Sparkles className="w-3 h-3 text-amber-400" />
+              <span className={accuracy >= 70 ? 'text-emerald-400' : 'text-amber-400'}>
+                {accuracy}%
+              </span>
+            </div>
+          )}
+
+          {/* Quick Undo on mobile */}
+          <button
+            onClick={onUndo}
+            disabled={!canUndo}
+            title="تراجع"
+            className="p-2 rounded-xl bg-slate-800/90 text-slate-300 border border-slate-700 disabled:opacity-20 disabled:pointer-events-none active:scale-90 transition-all cursor-pointer"
+            aria-label="تراجع"
+          >
+            <Undo2 className="w-4 h-4" />
+          </button>
+
+          {/* The Single Master Dropdown Button (زر قائمة الأدوات) */}
+          <button
+            onClick={() => {
+              setIsMobileMenuOpen(prev => !prev);
+              setActivePopover(null);
+            }}
+            title="قائمة الأدوات والخيارات"
+            className={`px-2.5 py-2 rounded-xl border flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer ${
+              isMobileMenuOpen
+                ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-md font-bold'
+                : 'bg-slate-800/90 text-amber-400 border-slate-700 hover:bg-slate-750'
+            }`}
+            aria-label="قائمة أدوات الرسم والخيارات"
+          >
+            <Menu className="w-4.5 h-4.5" />
+            <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${isMobileMenuOpen ? 'rotate-180' : ''}`} />
+          </button>
+        </div>
+
+      </div>
+
+      {/* ======================================================== */}
+      {/* MOBILE DROPDOWN PANEL (القائمة المنسدلة لأدوات الجوال)    */}
+      {/* ======================================================== */}
+      {isMobileMenuOpen && (
         <div
-          onClick={() => setActivePopover(null)}
+          className="sm:hidden absolute top-full inset-x-2 mt-1 z-50 bg-slate-900/98 backdrop-blur-xl border border-slate-700 rounded-2xl shadow-2xl p-3 text-slate-100 animate-in fade-in slide-in-from-top-2 duration-150"
+        >
+          {/* Header */}
+          <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-slate-800">
+            <span className="text-xs font-bold text-amber-400 flex items-center gap-1.5">
+              <span>أدوات وخيارات السبورة</span>
+            </span>
+            <button
+              onClick={() => setIsMobileMenuOpen(false)}
+              className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
+              aria-label="إغلاق"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Grid of Main Icons */}
+          <div className="grid grid-cols-3 gap-2 mb-2.5">
+            {/* 1. الدروس */}
+            <button
+              onClick={() => {
+                setIsMobileMenuOpen(false);
+                onOpenLibrary();
+              }}
+              className="flex flex-col items-center justify-center p-2.5 rounded-xl bg-slate-800/90 hover:bg-slate-750 border border-slate-700 text-amber-400 active:scale-95 transition-all cursor-pointer"
+            >
+              <FolderOpen className="w-5 h-5 mb-1 text-amber-400" />
+              <span className="text-[11px] font-bold">الدروس</span>
+            </button>
+
+            {/* 2. أدوات الرسم */}
+            <button
+              onClick={() => {
+                setIsMobileMenuOpen(false);
+                setActivePopover('drawing_tools');
+              }}
+              className={`flex flex-col items-center justify-center p-2.5 rounded-xl border active:scale-95 transition-all cursor-pointer ${
+                activePopover === 'drawing_tools'
+                  ? 'bg-amber-500 text-slate-950 border-amber-400 font-bold'
+                  : 'bg-slate-800/90 hover:bg-slate-750 text-slate-200 border-slate-700'
+              }`}
+            >
+              <div className="relative mb-1">
+                {penType === 'calligraphy' && <PenTool className="w-5 h-5" />}
+                {penType === 'marker' && <span className="w-4 h-4 rounded-full bg-current block" />}
+                {penType === 'brush' && <Paintbrush className="w-5 h-5" />}
+                {penType === 'eraser' && <Eraser className="w-5 h-5" />}
+                <span
+                  className="absolute -bottom-0.5 -left-1 w-2.5 h-2.5 rounded-full border border-slate-900"
+                  style={{ backgroundColor: penColor }}
+                />
+              </div>
+              <span className="text-[11px] font-bold">أدوات الرسم</span>
+            </button>
+
+            {/* 3. السبورة */}
+            <button
+              onClick={() => {
+                setIsMobileMenuOpen(false);
+                setActivePopover('board_settings');
+              }}
+              className={`flex flex-col items-center justify-center p-2.5 rounded-xl border active:scale-95 transition-all cursor-pointer ${
+                activePopover === 'board_settings'
+                  ? 'bg-amber-500 text-slate-950 border-amber-400 font-bold'
+                  : 'bg-slate-800/90 hover:bg-slate-750 text-slate-200 border-slate-700'
+              }`}
+            >
+              <Layers className="w-5 h-5 mb-1" />
+              <span className="text-[11px] font-bold">السبورة</span>
+            </button>
+
+            {/* 4. وضع الفأرة واللمس */}
+            <button
+              onClick={() => {
+                setIsMobileMenuOpen(false);
+                handleSelectMouseMode();
+              }}
+              className={`flex flex-col items-center justify-center p-2.5 rounded-xl border active:scale-95 transition-all cursor-pointer ${
+                boardStyle !== 'ar_camera'
+                  ? 'bg-amber-500 text-slate-950 border-amber-400 font-bold'
+                  : 'bg-slate-800/90 hover:bg-slate-750 text-slate-300 border-slate-700'
+              }`}
+            >
+              <MousePointer className="w-5 h-5 mb-1" />
+              <span className="text-[11px] font-bold">فأرة / لمس</span>
+            </button>
+
+            {/* 5. الواقع المعزز AR */}
+            <button
+              onClick={() => {
+                setIsMobileMenuOpen(false);
+                handleToggleAR();
+              }}
+              className={`flex flex-col items-center justify-center p-2.5 rounded-xl border active:scale-95 transition-all cursor-pointer relative ${
+                boardStyle === 'ar_camera'
+                  ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 border-amber-400 font-bold'
+                  : 'bg-slate-800/90 hover:bg-slate-750 text-amber-400 border-slate-700'
+              }`}
+            >
+              <Camera className="w-5 h-5 mb-1" />
+              <span className="text-[11px] font-bold">واقع معزز</span>
+              {boardStyle === 'ar_camera' && (
+                <span className="absolute top-1.5 left-1.5 w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+              )}
+            </button>
+
+            {/* 6. خيارات الواقع المعزز (عند تفعيل AR) أو نطق الحرف */}
+            {boardStyle === 'ar_camera' ? (
+              <button
+                onClick={() => {
+                  setIsMobileMenuOpen(false);
+                  setActivePopover('ar_settings');
+                }}
+                className={`flex flex-col items-center justify-center p-2.5 rounded-xl border active:scale-95 transition-all cursor-pointer ${
+                  activePopover === 'ar_settings'
+                    ? 'bg-amber-500 text-slate-950 border-amber-400 font-bold'
+                    : 'bg-slate-800/90 hover:bg-slate-750 text-amber-300 border-amber-500/40'
+                }`}
+              >
+                <SlidersHorizontal className="w-5 h-5 mb-1" />
+                <span className="text-[11px] font-bold">خيارات AR</span>
+              </button>
+            ) : (
+              template?.arabicAudioText ? (
+                <button
+                  onClick={() => onPronounce()}
+                  className="flex flex-col items-center justify-center p-2.5 rounded-xl bg-slate-800/90 hover:bg-slate-750 border border-slate-700 text-amber-400 active:scale-95 transition-all cursor-pointer"
+                >
+                  <Volume2 className="w-5 h-5 mb-1" />
+                  <span className="text-[11px] font-bold">نطق الحرف</span>
+                </button>
+              ) : (
+                <button
+                  onClick={() => {
+                    setIsMobileMenuOpen(false);
+                    onExport();
+                  }}
+                  className="flex flex-col items-center justify-center p-2.5 rounded-xl bg-slate-800/90 hover:bg-slate-750 border border-slate-700 text-emerald-400 active:scale-95 transition-all cursor-pointer"
+                >
+                  <Download className="w-5 h-5 mb-1" />
+                  <span className="text-[11px] font-bold">حفظ كصورة</span>
+                </button>
+              )
+            )}
+          </div>
+
+          {/* Quick Actions Footer */}
+          <div className="pt-2 border-t border-slate-800 flex items-center justify-between gap-2">
+            {template?.arabicAudioText && boardStyle === 'ar_camera' && (
+              <button
+                onClick={onPronounce}
+                title="استمع للنطق"
+                className="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-400 border border-slate-700 active:scale-95 transition-all cursor-pointer"
+              >
+                <Volume2 className="w-5 h-5" />
+              </button>
+            )}
+
+            <button
+              onClick={onRedo}
+              disabled={!canRedo}
+              title="إعادة"
+              className="flex-1 p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 disabled:opacity-20 disabled:pointer-events-none active:scale-95 transition-all flex items-center justify-center cursor-pointer"
+            >
+              <Redo2 className="w-5 h-5" />
+            </button>
+
+            <button
+              onClick={() => {
+                setIsMobileMenuOpen(false);
+                onClear();
+              }}
+              title="مسح السبورة"
+              className="flex-1 p-2.5 rounded-xl bg-slate-800 hover:bg-red-950/50 hover:text-red-400 text-slate-400 border border-slate-700 active:scale-95 transition-all flex items-center justify-center cursor-pointer"
+            >
+              <Trash2 className="w-5 h-5" />
+            </button>
+
+            <button
+              onClick={() => {
+                setIsMobileMenuOpen(false);
+                onExport();
+              }}
+              title="حفظ اللوحة كصورة"
+              className="flex-1 p-2.5 rounded-xl bg-slate-800 hover:bg-emerald-950/50 hover:text-emerald-400 text-emerald-400 border border-slate-700 active:scale-95 transition-all flex items-center justify-center cursor-pointer"
+            >
+              <Download className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Backdrop overlay for small screens when any popover or mobile menu is open */}
+      {(activePopover || isMobileMenuOpen) && (
+        <div
+          onClick={() => {
+            setActivePopover(null);
+            setIsMobileMenuOpen(false);
+          }}
           className="fixed inset-0 bg-slate-950/50 backdrop-blur-xs z-40 transition-opacity"
         />
       )}
@@ -463,7 +752,7 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
               <input
                 type="range"
                 min="0"
-                max="90"
+                max="180"
                 step="5"
                 value={calligraphyAngle}
                 onChange={(e) => onChangeCalligraphyAngle(Number(e.target.value))}
@@ -471,17 +760,19 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
               />
 
               {/* Angle Quick Presets */}
-              <div className="flex items-center justify-between gap-1.5 mt-2.5">
+              <div className="grid grid-cols-3 gap-1.5 mt-2.5">
                 {[
                   { angle: 30, label: '30° نسخ' },
                   { angle: 45, label: '45° رقعة' },
-                  { angle: 60, label: '60° ثلث' },
-                  { angle: 75, label: '75° فارسي' },
+                  { angle: 70, label: '70° ثلث' },
+                  { angle: 90, label: '90° عمودي' },
+                  { angle: 135, label: '135° مائل' },
+                  { angle: 180, label: '180° أفقي' },
                 ].map(p => (
                   <button
                     key={p.angle}
                     onClick={() => onChangeCalligraphyAngle(p.angle)}
-                    className={`flex-1 py-1 px-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
+                    className={`py-1 px-1 rounded-lg text-[10px] font-bold text-center transition-all cursor-pointer ${
                       calligraphyAngle === p.angle
                         ? 'bg-amber-500 text-slate-950 shadow-xs'
                         : 'bg-slate-800 hover:bg-slate-700 text-slate-300'

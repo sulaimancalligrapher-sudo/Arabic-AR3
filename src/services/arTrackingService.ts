@@ -218,6 +218,8 @@ class ARTrackingService {
     this.animFrameId = requestAnimationFrame(loop);
   }
 
+  private previousPinchMap: Map<number, boolean> = new Map();
+
   private onHandsResults(results: any) {
     const now = performance.now();
     if (this.lastTimestamp) {
@@ -227,6 +229,9 @@ class ARTrackingService {
 
     if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
       this.latestHands = [];
+      this.activeDrawingHand = null;
+      this.hasInitialCursor = false;
+      this.previousPinchMap.clear();
       this.emitUpdate();
       return;
     }
@@ -245,14 +250,20 @@ class ARTrackingService {
       const dy = thumbTip.y - indexTip.y;
       const directDist = Math.hypot(dx, dy);
       const normalizedDistance = directDist / palmLength;
-      const isPinching = normalizedDistance < 0.38;
+
+      // Hysteresis for intentional pinching:
+      // Requires closer contact to initiate drawing (< 0.22), remains drawing until fingers spread apart (> 0.28)
+      const prevPinch = this.previousPinchMap.get(hIdx) || false;
+      const pinchThreshold = prevPinch ? 0.28 : 0.22;
+      const isPinching = normalizedDistance < pinchThreshold;
+      this.previousPinchMap.set(hIdx, isPinching);
 
       let handedness: 'Right' | 'Left' = 'Right';
       if (results.multiHandedness && results.multiHandedness[hIdx]) {
         handedness = results.multiHandedness[hIdx].label as 'Right' | 'Left';
       }
 
-      // Preserve raw coordinates in video frame space!
+      // Preserve raw coordinates in video frame space
       parsedHands.push({
         index: hIdx,
         cursor: { x: indexTip.x, y: indexTip.y },
@@ -281,7 +292,7 @@ class ARTrackingService {
         this.smoothedCursor.y = targetY;
         this.hasInitialCursor = true;
       } else {
-        // High responsiveness factor (0.85) to eliminate any lagging behind index finger
+        // High responsiveness factor (0.85) to eliminate lagging behind index finger
         const alpha = 0.85;
         this.smoothedCursor.x += (targetX - this.smoothedCursor.x) * alpha;
         this.smoothedCursor.y += (targetY - this.smoothedCursor.y) * alpha;
@@ -330,14 +341,14 @@ class ARTrackingService {
   }
 
   private emitUpdate() {
-    const primaryHand = this.activeDrawingHand || this.latestHands[0];
+    const primaryHand = this.latestHands.length > 0 ? (this.activeDrawingHand || this.latestHands[0]) : null;
     const vw = this.videoElement?.videoWidth || 640;
     const vh = this.videoElement?.videoHeight || 480;
 
     const state: ARTrackingState = {
       hands: this.latestHands,
       face: this.latestFace,
-      cursor: primaryHand ? { x: this.smoothedCursor.x, y: this.smoothedCursor.y } : null,
+      cursor: (primaryHand && this.hasInitialCursor) ? { x: this.smoothedCursor.x, y: this.smoothedCursor.y } : null,
       isPinching: primaryHand ? primaryHand.isPinching : false,
       videoWidth: vw,
       videoHeight: vh,
