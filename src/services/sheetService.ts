@@ -7,7 +7,7 @@ const LOCAL_TEMPLATES_KEY = 'arabic_ar_horizontal_templates_v2';
 const LOCAL_STEPS_CACHE_KEY = 'arabic_ar_steps_backup_cache';
 
 // Default built-in Google Apps Script URL so all devices (mobile, tablet, PC) connect automatically
-export const DEFAULT_SHEET_URL = 'https://script.google.com/macros/s/AKfycbwjtf7BiA8k5BEQgw1n0s_VYeBNzTmL-IitZ8m_YKjbnVfd_dZHL4svN08x4jNfw3LNqA/exec';
+export const DEFAULT_SHEET_URL = 'https://script.google.com/macros/s/AKfycbw3_rZtsYcs4OLZU242sU6Kgc6OHWc6sSQ-EmLsJT4yOUCkHVP38ootritf_vnRmG1Oug/exec';
 
 export interface SheetSyncStatus {
   connected: boolean;
