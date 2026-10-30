@@ -3,6 +3,7 @@ import { DrawingTemplate, LessonDifficulty } from '../types/drawing';
 import { sheetService, GOOGLE_APPS_SCRIPT_CODE } from '../services/sheetService';
 import { audioService } from '../services/audioService';
 import { formatDirectImageUrl, extractDriveFileId } from '../utils/urlHelper';
+import { StepMakerModal } from './StepMakerModal';
 import {
   ArrowRight,
   Database,
@@ -23,9 +24,10 @@ import {
   Info,
   FolderOpen,
   Image as ImageIcon,
-  Layers,
+  Table,
   Repeat,
-  Gauge
+  Compass,
+  Footprints
 } from 'lucide-react';
 
 interface SettingsViewProps {
@@ -39,8 +41,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   templates,
   onUpdateTemplates,
 }) => {
-  // Tabs
-  const [activeTab, setActiveTab] = useState<'sheet' | 'lessons'>('lessons');
+  // Tabs: 'lessons' (إدارة وتعديل), 'table' (ورقة الدروس), 'sheet' (ربط الشيت)
+  const [activeTab, setActiveTab] = useState<'lessons' | 'table' | 'sheet'>('lessons');
 
   // Sheet connection states
   const [sheetUrl, setSheetUrl] = useState<string>(() => sheetService.getStoredSheetUrl());
@@ -61,7 +63,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [editingTemplate, setEditingTemplate] = useState<DrawingTemplate | null>(null);
   const [originalTitle, setOriginalTitle] = useState<string>('');
 
-  // Form Fields as specified by user
+  // Step Maker Modal state
+  const [stepMakerLesson, setStepMakerLesson] = useState<DrawingTemplate | null>(null);
+
+  // Form Fields
   const [formTopic, setFormTopic] = useState('');
   const [formCategory, setFormCategory] = useState('');
   const [formImageUrl, setFormImageUrl] = useState('');
@@ -103,7 +108,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
   }, [selectedTopic, categoriesInTopic, selectedCategory]);
 
-  // All registered categories across the whole system (for modal dropdown helper)
+  // All registered categories across the whole system
   const allKnownCategories = Array.from(
     new Set([
       'حروف',
@@ -155,11 +160,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         setStatusMessage(`تم الاتصال بنجاح! تم جلب ومزامنة ${result.lessons.length} درساً عبر الهيكل الأفقي.`);
         audioService.speakArabic('تمت مزامنة الدروس من جدول البيانات بنجاح');
       } else {
-        setStatusMessage('تم الاتصال بنجاح! جدول البيانات متصل ولكنه فارغ حالياً. يمكنك تهيئة الدروس بالضغط على زر "تهيئة وحفظ الدروس".');
+        setStatusMessage('تم الاتصال بنجاح! جدول البيانات متصل ولكنه فارغ حالياً.');
       }
     } else {
       setConnectionStatus('error');
-      setStatusMessage(result.error || 'فشل الاتصال بالشيت. يرجى التأكد من نشر تطبيق الويب واختيار حق الوصول: أي شخص (Anyone)');
+      setStatusMessage(result.error || 'فشل الاتصال بالشيت.');
     }
   };
 
@@ -171,7 +176,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
 
     setIsConnecting(true);
-    setStatusMessage('جاري رفع ومزامنة الدروس إلى ورقة ArabicLessons...');
+    setStatusMessage('جاري رفع ومزامنة كافة الدروس إلى ورقة ArabicLessons...');
 
     const res = await sheetService.syncAllLessonsToSheet(templates);
     setIsConnecting(false);
@@ -260,7 +265,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       arabicAudioText: formAudioText.trim() || formTitle.trim(),
       repeatCount: Number(formRepeatCount) || 1,
       difficulty: formDifficulty,
-      svgData: editingTemplate?.svgData || ''
+      svgData: editingTemplate?.svgData || '',
+      steps: editingTemplate?.steps || [],
+      stepsData: editingTemplate?.stepsData || ''
     };
 
     let updatedList: DrawingTemplate[];
@@ -273,13 +280,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     onUpdateTemplates(updatedList);
     sheetService.saveLocalTemplates(updatedList);
 
-    // Make sure the active topic/category match the newly saved item
     setSelectedTopic(lessonData.topic || formTopic.trim());
     setSelectedCategory(lessonData.category || formCategory.trim());
 
     setIsAddModalOpen(false);
 
-    // Sync to Google Sheet if connected
     if (sheetUrl.trim()) {
       setIsConnecting(true);
       await sheetService.saveLessonToSheet(lessonData, originalTitle);
@@ -287,6 +292,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
 
     audioService.speakArabic('تم حفظ الدرس بنجاح');
+  };
+
+  // Save updated steps from StepMakerModal
+  const handleSaveStepsFromModal = async (updatedLesson: DrawingTemplate) => {
+    const updatedList = templates.map(t => t.id === updatedLesson.id ? updatedLesson : t);
+    onUpdateTemplates(updatedList);
+    sheetService.saveLocalTemplates(updatedList);
+
+    if (sheetUrl.trim()) {
+      setIsConnecting(true);
+      await sheetService.saveLessonToSheet(updatedLesson, updatedLesson.title);
+      setIsConnecting(false);
+    }
   };
 
   // Filter lessons for current topic and category
@@ -316,11 +334,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <h1 className="text-base sm:text-lg font-bold text-slate-100 flex items-center gap-2">
               <span>لوحة إعدادات الدروس وقاعدة البيانات</span>
               <span className="text-xs font-normal px-2.5 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                الهيكل الأفقي
+                لوحة المعلم
               </span>
             </h1>
             <p className="text-[11px] text-slate-400 hidden sm:block">
-              تسجيل وتنظيم دروس الخط العربي حسب المواضيع والفئات وربطها مع Google Sheets
+              إدارة دروس الخط العربي، صانع خطوات الحرف، واستعراض ورقة الدروس السحابية
             </p>
           </div>
         </div>
@@ -338,12 +356,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       {/* Main Container */}
       <div className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 flex flex-col gap-6">
 
-        {/* Tabs Bar */}
-        <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-          <div className="flex items-center gap-2">
+        {/* 3 Tabs Bar: 1. إدارة وتعديل / 2. ورقة الدروس / 3. ربط الشيت */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-800 pb-3 gap-3">
+          <div className="flex items-center gap-2 overflow-x-auto scrollbar-none pb-1">
             <button
               onClick={() => setActiveTab('lessons')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap ${
                 activeTab === 'lessons'
                   ? 'bg-amber-500 text-slate-950 shadow-md'
                   : 'bg-slate-900 hover:bg-slate-800 text-slate-300'
@@ -354,15 +372,27 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </button>
 
             <button
+              onClick={() => setActiveTab('table')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap ${
+                activeTab === 'table'
+                  ? 'bg-amber-500 text-slate-950 shadow-md'
+                  : 'bg-slate-900 hover:bg-slate-800 text-slate-300'
+              }`}
+            >
+              <Table className="w-4 h-4" />
+              <span>ورقة الدروس (جدول الشيت)</span>
+            </button>
+
+            <button
               onClick={() => setActiveTab('sheet')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap ${
                 activeTab === 'sheet'
                   ? 'bg-amber-500 text-slate-950 shadow-md'
                   : 'bg-slate-900 hover:bg-slate-800 text-slate-300'
               }`}
             >
               <FileSpreadsheet className="w-4 h-4" />
-              <span>ربط ورقة ArabicLessons السحابية</span>
+              <span>ربط Google Sheets</span>
             </button>
           </div>
 
@@ -373,14 +403,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         </div>
 
-        {/* ======================= TAB: LESSONS MANAGEMENT ======================= */}
+        {/* ======================= TAB 1: LESSONS MANAGEMENT (LIST VIEW) ======================= */}
         {activeTab === 'lessons' && (
           <div className="space-y-6">
 
             {/* TOPIC SELECTOR & TOOLBAR */}
             <div className="p-4 sm:p-5 bg-slate-900 rounded-2xl border border-slate-800 space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                {/* 1. Topic Dropdown */}
+                {/* Topic Dropdown */}
                 <div className="flex items-center gap-3 flex-1">
                   <div className="flex items-center gap-2 text-amber-400 font-bold text-xs sm:text-sm shrink-0">
                     <FolderOpen className="w-4 h-4" />
@@ -397,7 +427,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </select>
                 </div>
 
-                {/* Actions: Sync & Add */}
+                {/* Actions */}
                 <div className="flex items-center gap-2">
                   <button
                     onClick={handleTestConnection}
@@ -410,16 +440,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </button>
 
                   <button
-                    onClick={handleSyncAllToSheet}
-                    disabled={isConnecting || !sheetUrl.trim()}
-                    title="حفظ الكل في الشيت"
-                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 text-xs font-bold transition-all cursor-pointer disabled:opacity-50"
-                  >
-                    <Save className="w-3.5 h-3.5" />
-                    <span className="hidden sm:inline">حفظ في الشيت</span>
-                  </button>
-
-                  <button
                     onClick={handleOpenAdd}
                     className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs sm:text-sm shadow-md transition-all active:scale-95 cursor-pointer"
                   >
@@ -429,7 +449,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
               </div>
 
-              {/* 2. Category Tabs under Selected Topic */}
+              {/* Category Tabs */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-slate-800">
                 <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
                   <span className="text-xs text-slate-400 shrink-0 font-medium ml-1">الفئات:</span>
@@ -465,90 +485,111 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
             </div>
 
-            {/* LESSONS LIST */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            {/* LESSONS LIST VIEW (With Crisp White Thumbnail Background for Black Calligraphy) */}
+            <div className="flex flex-col gap-3">
               {displayedLessons.map((tpl) => {
                 const directUrl = formatDirectImageUrl(tpl.imageUrl);
+                const stepsCount = tpl.steps?.length || 0;
+
                 return (
                   <div
                     key={tpl.id}
-                    className="group relative p-4 bg-slate-900/90 rounded-2xl border border-slate-800 hover:border-amber-500/40 transition-all flex flex-col justify-between shadow-lg"
+                    className="group p-3 sm:p-4 bg-slate-900/90 rounded-2xl border border-slate-800 hover:border-amber-500/40 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-md"
                   >
-                    <div>
-                      {/* Image Thumbnail / SVG Preview */}
-                      <div className="w-full h-32 rounded-xl bg-slate-950 border border-slate-800/80 flex items-center justify-center p-2 mb-3 overflow-hidden text-amber-400 relative">
+                    {/* Right side: Thumbnail on CRISP WHITE BACKGROUND + Info (RTL) */}
+                    <div className="flex items-center gap-3.5 min-w-0">
+                      {/* White Background Thumbnail Box for Black Calligraphy Artwork */}
+                      <div className="w-16 h-16 sm:w-20 sm:h-20 bg-white rounded-2xl border border-slate-300 shadow-inner flex items-center justify-center p-2 shrink-0 overflow-hidden group-hover:scale-105 transition-transform">
                         {directUrl ? (
                           <img
                             src={directUrl}
                             alt={tpl.title}
-                            className="max-h-full max-w-full object-contain filter drop-shadow group-hover:scale-105 transition-transform"
+                            className="max-h-full max-w-full object-contain filter drop-shadow"
                             crossOrigin="anonymous"
                             onError={(e) => {
-                              // Fallback if blocked
                               (e.target as HTMLElement).style.display = 'none';
                             }}
                           />
                         ) : tpl.svgData ? (
                           <div
-                            className="w-full h-full flex items-center justify-center [&>svg]:max-h-full [&>svg]:max-w-full [&>svg]:w-auto [&>svg]:h-auto"
+                            className="w-full h-full flex items-center justify-center text-slate-950 [&>svg]:max-h-full [&>svg]:max-w-full [&>svg]:w-auto [&>svg]:h-auto"
                             dangerouslySetInnerHTML={{ __html: tpl.svgData }}
                           />
                         ) : (
-                          <div className="flex flex-col items-center text-slate-500">
-                            <ImageIcon className="w-8 h-8 mb-1" />
-                            <span className="text-[10px]">بدون صورة</span>
-                          </div>
+                          <ImageIcon className="w-6 h-6 text-slate-400" />
                         )}
+                      </div>
 
-                        {/* Repeat count badge */}
-                        <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-slate-900/90 text-amber-400 border border-slate-700 text-[10px] font-bold flex items-center gap-1">
-                          <Repeat className="w-3 h-3" />
-                          <span>تكرار: {tpl.repeatCount || 1}</span>
+                      {/* Title & Badges */}
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h3 className="font-bold text-sm sm:text-base text-slate-100 group-hover:text-amber-400 transition-colors">
+                            {tpl.title}
+                          </h3>
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-amber-400 font-bold border border-slate-700">
+                            {tpl.difficulty || 'سهل'}
+                          </span>
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 font-bold border border-slate-700 flex items-center gap-1">
+                            <Repeat className="w-2.5 h-2.5" />
+                            <span>تكرار: {tpl.repeatCount || 1}</span>
+                          </span>
+                          {/* Steps badge */}
+                          {stepsCount > 0 ? (
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 font-bold border border-emerald-500/30 flex items-center gap-1">
+                              <Footprints className="w-2.5 h-2.5" />
+                              <span>{stepsCount} خطوات مرقمة</span>
+                            </span>
+                          ) : (
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800/80 text-slate-400 border border-slate-700/60">
+                              بدون خطوات محددة
+                            </span>
+                          )}
                         </div>
-                      </div>
 
-                      {/* Title & Difficulty */}
-                      <div className="flex items-start justify-between gap-2 mb-1">
-                        <h3 className="font-bold text-sm text-slate-100 group-hover:text-amber-400 transition-colors">
-                          {tpl.title}
-                        </h3>
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-amber-400 font-bold shrink-0 border border-slate-700">
-                          {tpl.difficulty || 'سهل'}
-                        </span>
+                        <p className="text-xs text-slate-400 mt-1 truncate">
+                          {tpl.arabicAudioText || 'النطق مطابق للعنوان'}
+                        </p>
                       </div>
-
-                      <p className="text-[11px] text-slate-400 line-clamp-2 mb-3">
-                        {tpl.arabicAudioText || 'نص النطق مطابق للعنوان'}
-                      </p>
                     </div>
 
-                    {/* Actions Toolbar */}
-                    <div className="flex items-center justify-between pt-3 border-t border-slate-800/80">
+                    {/* Left side: Step Maker Button + Actions */}
+                    <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                      {/* 1. Step Maker Studio Button (صانع خطوات الحرف) */}
+                      <button
+                        onClick={() => setStepMakerLesson(tpl)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs font-bold transition-all cursor-pointer active:scale-95"
+                        title="تحديد خطوات كتابة الحرف ونقاط الانطلاق وسهام الاتجاه"
+                      >
+                        <Footprints className="w-3.5 h-3.5" />
+                        <span>صانع الخطوات ({stepsCount})</span>
+                      </button>
+
+                      {/* 2. Audio Speak */}
                       <button
                         onClick={() => audioService.speakArabic(tpl.arabicAudioText || tpl.title)}
                         title="سماع النطق الصوتي"
-                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-amber-400 cursor-pointer transition-colors"
+                        className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-amber-400 cursor-pointer transition-colors"
                       >
                         <Volume2 className="w-4 h-4" />
                       </button>
 
-                      <div className="flex items-center gap-1.5">
-                        <button
-                          onClick={() => handleOpenEdit(tpl)}
-                          title="تعديل بيانات الدرس"
-                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-slate-300 cursor-pointer transition-colors"
-                        >
-                          <Edit3 className="w-3.5 h-3.5" />
-                        </button>
+                      {/* 3. Edit */}
+                      <button
+                        onClick={() => handleOpenEdit(tpl)}
+                        title="تعديل بيانات الدرس"
+                        className="p-2 rounded-xl bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-slate-300 cursor-pointer transition-colors"
+                      >
+                        <Edit3 className="w-4 h-4" />
+                      </button>
 
-                        <button
-                          onClick={() => handleDeleteLesson(tpl)}
-                          title="حذف الدرس"
-                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-500 hover:text-white text-rose-400 cursor-pointer transition-colors"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
+                      {/* 4. Delete */}
+                      <button
+                        onClick={() => handleDeleteLesson(tpl)}
+                        title="حذف الدرس"
+                        className="p-2 rounded-xl bg-slate-800 hover:bg-rose-500 hover:text-white text-rose-400 cursor-pointer transition-colors"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     </div>
                   </div>
                 );
@@ -562,7 +603,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   لا توجد دروس مسجلة في الفئة &quot;{selectedCategory}&quot; ضمن موضوع &quot;{selectedTopic}&quot;
                 </p>
                 <p className="text-xs text-slate-500">
-                  اضغط على زر &quot;إضافة درس جديد&quot; بالأعلى لبدء تسجيل أول درس في هذه الفئة.
+                  اضغط على زر &quot;إضافة درس جديد&quot; بالأعلى لبدء تسجيل أول درس.
                 </p>
               </div>
             )}
@@ -570,7 +611,138 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         )}
 
-        {/* ======================= TAB: GOOGLE SHEETS SETUP ======================= */}
+        {/* ======================= TAB 2: SHEET LESSONS TABLE VIEW (ورقة الدروس) ======================= */}
+        {activeTab === 'table' && (
+          <div className="space-y-4">
+            <div className="p-4 sm:p-5 bg-slate-900 rounded-2xl border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="font-bold text-sm sm:text-base text-amber-400 flex items-center gap-2">
+                  <Table className="w-5 h-5" />
+                  <span>جدول ورقة الدروس المسجلة في Google Sheets</span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  عرض شامل لكافة الدروس عبر ورقة ArabicLessons الأفقية ({templates.length} درس مسجل)
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleTestConnection}
+                  disabled={isConnecting || !sheetUrl.trim()}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold border border-slate-700 cursor-pointer"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isConnecting ? 'animate-spin' : ''}`} />
+                  <span>تحديث الجدول</span>
+                </button>
+
+                <button
+                  onClick={handleSyncAllToSheet}
+                  disabled={isConnecting || !sheetUrl.trim()}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 text-xs font-bold cursor-pointer"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>حفظ ومزامنة الشيت</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Responsive Table */}
+            <div className="rounded-2xl border border-slate-800 bg-slate-900 overflow-hidden shadow-xl">
+              <div className="overflow-x-auto">
+                <table className="w-full text-right text-xs">
+                  <thead className="bg-slate-950 border-b border-slate-800 text-slate-300 font-bold">
+                    <tr>
+                      <th className="p-3.5">#</th>
+                      <th className="p-3.5">الموضوع (A)</th>
+                      <th className="p-3.5">الفئة (B)</th>
+                      <th className="p-3.5">الصورة (C)</th>
+                      <th className="p-3.5">عنوان الدرس (D)</th>
+                      <th className="p-3.5">نص القراءة الآلية (E)</th>
+                      <th className="p-3.5">التكرار (F)</th>
+                      <th className="p-3.5">المستوى (G)</th>
+                      <th className="p-3.5">خطوات الحرف</th>
+                      <th className="p-3.5 text-center">إجراءات</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/80">
+                    {templates.map((l, idx) => {
+                      const directUrl = formatDirectImageUrl(l.imageUrl);
+                      const stepsCount = l.steps?.length || 0;
+                      return (
+                        <tr key={l.id || idx} className="hover:bg-slate-850/60 transition-colors">
+                          <td className="p-3.5 text-slate-400 font-mono">{idx + 1}</td>
+                          <td className="p-3.5 font-bold text-amber-400">{l.topic || 'خط النسخ'}</td>
+                          <td className="p-3.5 text-slate-200">
+                            <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 text-[11px]">
+                              {l.category || 'حروف'}
+                            </span>
+                          </td>
+                          <td className="p-3.5">
+                            {/* Crisp White Thumbnail in Table */}
+                            <div className="w-12 h-12 bg-white rounded-xl border border-slate-300 shadow-inner flex items-center justify-center p-1 overflow-hidden">
+                              {directUrl ? (
+                                <img
+                                  src={directUrl}
+                                  alt={l.title}
+                                  className="max-h-full max-w-full object-contain filter drop-shadow"
+                                  crossOrigin="anonymous"
+                                  onError={(e) => {
+                                    (e.target as HTMLElement).style.display = 'none';
+                                  }}
+                                />
+                              ) : (
+                                <ImageIcon className="w-4 h-4 text-slate-400" />
+                              )}
+                            </div>
+                          </td>
+                          <td className="p-3.5 font-bold text-slate-100">{l.title}</td>
+                          <td className="p-3.5 text-slate-400 max-w-[180px] truncate">
+                            {l.arabicAudioText || l.title}
+                          </td>
+                          <td className="p-3.5 font-mono text-amber-400">{l.repeatCount || 1}</td>
+                          <td className="p-3.5">
+                            <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-200 font-bold text-[10px]">
+                              {l.difficulty || 'سهل'}
+                            </span>
+                          </td>
+                          <td className="p-3.5">
+                            <button
+                              onClick={() => setStepMakerLesson(l)}
+                              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 text-[11px] font-bold cursor-pointer"
+                            >
+                              <Footprints className="w-3 h-3" />
+                              <span>{stepsCount > 0 ? `${stepsCount} خطوات` : 'إضافة خطوات'}</span>
+                            </button>
+                          </td>
+                          <td className="p-3.5">
+                            <div className="flex items-center justify-center gap-1.5">
+                              <button
+                                onClick={() => handleOpenEdit(l)}
+                                className="p-1.5 rounded-lg bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-slate-300 cursor-pointer"
+                                title="تعديل"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteLesson(l)}
+                                className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-500 hover:text-white text-rose-400 cursor-pointer"
+                                title="حذف"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ======================= TAB 3: GOOGLE SHEETS SETUP ======================= */}
         {activeTab === 'sheet' && (
           <div className="space-y-6">
 
@@ -707,7 +879,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
             <form onSubmit={handleSaveLesson} className="space-y-4 mt-4 text-xs sm:text-sm">
               
-              {/* 1. Topic input + registered topics dropdown */}
+              {/* 1. Topic input */}
               <div>
                 <label className="block text-xs font-bold text-slate-300 mb-1">
                   ١. الموضوع (العامود A) *:
@@ -737,7 +909,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
               </div>
 
-              {/* 2. Category input + registered categories dropdown */}
+              {/* 2. Category input */}
               <div>
                 <label className="block text-xs font-bold text-slate-300 mb-1">
                   ٢. الفئة (العامود B) *:
@@ -765,7 +937,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
               </div>
 
-              {/* 3. Image URL (Google Drive share link or direct link) */}
+              {/* 3. Image URL */}
               <div>
                 <label className="block text-xs font-bold text-slate-300 mb-1">
                   ٣. رابط الصورة (من Google Drive أو رابط مباشر) (العامود C):
@@ -778,14 +950,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   placeholder="https://drive.google.com/file/d/.../view?usp=sharing"
                   className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-hidden focus:border-amber-500"
                 />
-                <p className="text-[11px] text-slate-400 mt-1">
-                  يدعم روابط Google Drive (صورة سوداء بخلفية شفافة) أو أي رابط صورة مباشر.
-                </p>
 
-                {/* Live Preview */}
+                {/* Live Preview with Crisp White Background */}
                 {formImageUrl.trim() && (
                   <div className="mt-2.5 p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center gap-4">
-                    <div className="w-20 h-20 rounded-lg bg-slate-900 border border-slate-700 flex items-center justify-center p-1 overflow-hidden shrink-0">
+                    <div className="w-20 h-20 bg-white rounded-xl border border-slate-300 shadow-inner flex items-center justify-center p-1.5 overflow-hidden shrink-0">
                       {previewDirectUrl ? (
                         <img
                           src={previewDirectUrl}
@@ -797,7 +966,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                           }}
                         />
                       ) : (
-                        <ImageIcon className="w-6 h-6 text-slate-600" />
+                        <ImageIcon className="w-6 h-6 text-slate-400" />
                       )}
                     </div>
                     <div className="text-xs space-y-1">
@@ -811,7 +980,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         </p>
                       )}
                       <p className="text-[11px] text-slate-300">
-                        سيقوم النظام بتحويل الخطوط السوداء إلى لون خفيف شفاف للشف والتدريب على السبورة.
+                        تظهر الصورة بخلفية بيضاء نقية لرؤية الخطوط السوداء بوضوح تام.
                       </p>
                     </div>
                   </div>
@@ -901,6 +1070,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </form>
           </div>
         </div>
+      )}
+
+      {/* ======================= STEP MAKER STUDIO MODAL ======================= */}
+      {stepMakerLesson && (
+        <StepMakerModal
+          isOpen={Boolean(stepMakerLesson)}
+          onClose={() => setStepMakerLesson(null)}
+          lesson={stepMakerLesson}
+          onSaveSteps={handleSaveStepsFromModal}
+        />
       )}
 
     </div>

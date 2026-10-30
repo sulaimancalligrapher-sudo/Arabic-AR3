@@ -273,6 +273,57 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
 
         ctx.restore();
 
+        // Render Step Maker arrows if lesson has defined steps
+        if (template.steps && template.steps.length > 0) {
+          template.steps.forEach(s => {
+            const sx = s.startX * drawW + drawX;
+            const sy = s.startY * drawH + drawY;
+            const ex = s.endX * drawW + drawX;
+            const ey = s.endY * drawH + drawY;
+
+            ctx.save();
+            ctx.shadowColor = 'rgba(0,0,0,0.4)';
+            ctx.shadowBlur = 4;
+
+            // Directional line
+            ctx.strokeStyle = '#2563eb';
+            ctx.lineWidth = 3.5;
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            ctx.moveTo(sx, sy);
+            ctx.lineTo(ex, ey);
+            ctx.stroke();
+
+            // Arrowhead
+            const angle = Math.atan2(ey - sy, ex - sx);
+            const arrowLen = 14;
+            ctx.fillStyle = '#2563eb';
+            ctx.beginPath();
+            ctx.moveTo(ex, ey);
+            ctx.lineTo(ex - arrowLen * Math.cos(angle - Math.PI / 6), ey - arrowLen * Math.sin(angle - Math.PI / 6));
+            ctx.lineTo(ex - arrowLen * Math.cos(angle + Math.PI / 6), ey - arrowLen * Math.sin(angle + Math.PI / 6));
+            ctx.closePath();
+            ctx.fill();
+
+            // Starting point badge with step number
+            ctx.fillStyle = '#10b981';
+            ctx.beginPath();
+            ctx.arc(sx, sy, 12, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 11px Cairo, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(String(s.stepNumber), sx, sy);
+            ctx.restore();
+          });
+        }
+
         // Sample guide points for accuracy evaluation
         try {
           const imgData = ctx.getImageData(0, 0, tCanvas.width, tCanvas.height);
@@ -321,6 +372,54 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         ctx.shadowBlur = 8;
         ctx.drawImage(img, drawX, drawY, drawW, drawH);
         ctx.restore();
+
+        // Render Step Maker arrows if lesson has defined steps
+        if (template.steps && template.steps.length > 0) {
+          template.steps.forEach(s => {
+            const sx = s.startX * drawW + drawX;
+            const sy = s.startY * drawH + drawY;
+            const ex = s.endX * drawW + drawX;
+            const ey = s.endY * drawH + drawY;
+
+            ctx.save();
+            ctx.shadowColor = 'rgba(0,0,0,0.4)';
+            ctx.shadowBlur = 4;
+
+            ctx.strokeStyle = '#2563eb';
+            ctx.lineWidth = 3.5;
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            ctx.moveTo(sx, sy);
+            ctx.lineTo(ex, ey);
+            ctx.stroke();
+
+            const angle = Math.atan2(ey - sy, ex - sx);
+            const arrowLen = 14;
+            ctx.fillStyle = '#2563eb';
+            ctx.beginPath();
+            ctx.moveTo(ex, ey);
+            ctx.lineTo(ex - arrowLen * Math.cos(angle - Math.PI / 6), ey - arrowLen * Math.sin(angle - Math.PI / 6));
+            ctx.lineTo(ex - arrowLen * Math.cos(angle + Math.PI / 6), ey - arrowLen * Math.sin(angle + Math.PI / 6));
+            ctx.closePath();
+            ctx.fill();
+
+            ctx.fillStyle = '#10b981';
+            ctx.beginPath();
+            ctx.arc(sx, sy, 12, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 11px Cairo, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(String(s.stepNumber), sx, sy);
+            ctx.restore();
+          });
+        }
 
         try {
           const imgData = ctx.getImageData(0, 0, tCanvas.width, tCanvas.height);

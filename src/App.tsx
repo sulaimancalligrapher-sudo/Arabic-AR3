@@ -93,7 +93,7 @@ export default function App() {
 
   // AR Tracking & Camera Options (controlled from outside the whiteboard with the tools)
   const [trackingMode, setTrackingMode] = useState<HandTrackingDisplayMode>('one_hand');
-  const [showCrown, setShowCrown] = useState<boolean>(true);
+  const [showCrown, setShowCrown] = useState<boolean>(false); // Crown appears as reward upon mastery!
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
   const [isMirrored, setIsMirrored] = useState<boolean>(true);
   const [arDetectionStatus, setArDetectionStatus] = useState<{
@@ -186,6 +186,7 @@ export default function App() {
     canvasRef.current?.clearCanvas();
     setAccuracy(0);
     setCelebrationMessage(null);
+    setShowCrown(false);
     syncHistoryState();
   };
 
@@ -264,11 +265,13 @@ export default function App() {
         setCelebrationMessage(null);
       }, 3000);
     } else {
-      setCelebrationMessage(`ما شاء الله! حققت إتقان ${acc}% وأتممت كافة التكرارات (${totalReps}) بنجاح 🏆`);
-      audioService.speakArabic('مبارك! أتممت جميع التكرارات بنجاح تام');
+      setShowCrown(true); // 👑 Crown reward granted upon mastery!
+      setCelebrationMessage(`👑 ما شاء الله! حققت إتقان ${acc}% وتوجت بتاج الخطاط الملكي! 🌟`);
+      audioService.playSuccessFanfare();
+      audioService.speakArabic('مبارك عليك! أتقنت رسم الحرف وتُوجت بجائزة التاج الملكي!');
       setTimeout(() => {
         setCelebrationMessage(null);
-      }, 6000);
+      }, 8000);
     }
   };
 
@@ -529,6 +532,7 @@ export default function App() {
           setSelectedTemplate(tpl);
           setCurrentRepetition(1);
           setCelebrationMessage(null);
+          setShowCrown(false);
           canvasRef.current?.clearCanvas();
           syncHistoryState();
         }}

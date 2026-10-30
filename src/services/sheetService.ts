@@ -1,4 +1,4 @@
-import { DrawingTemplate } from '../types/drawing';
+import { DrawingTemplate, LessonStep } from '../types/drawing';
 import { DRAWING_TEMPLATES } from '../data/drawingTemplates';
 import { formatDirectImageUrl } from '../utils/urlHelper';
 
@@ -395,6 +395,14 @@ class SheetService {
       if (category === 'shapes') category = 'رسمة وزخرفة';
 
       const directImg = formatDirectImageUrl(item.imageUrl);
+      let parsedSteps: LessonStep[] = [];
+      if (Array.isArray(item.steps) && item.steps.length > 0) {
+        parsedSteps = item.steps;
+      } else if (item.stepsData) {
+        try {
+          parsedSteps = JSON.parse(item.stepsData);
+        } catch {}
+      }
 
       return {
         ...item,
@@ -407,7 +415,9 @@ class SheetService {
         arabicAudioText: item.arabicAudioText || item.title || '',
         repeatCount: Number(item.repeatCount) || 1,
         difficulty: item.difficulty || 'سهل',
-        svgData: item.svgData || ''
+        svgData: item.svgData || '',
+        steps: parsedSteps,
+        stepsData: item.stepsData || (parsedSteps.length > 0 ? JSON.stringify(parsedSteps) : '')
       };
     });
   }

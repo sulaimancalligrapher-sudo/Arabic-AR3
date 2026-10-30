@@ -1109,15 +1109,15 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
               </div>
             </div>
 
-            {/* Royal Crown Feature (التاج الملكي فوق رأس الطالب) */}
+            {/* Royal Crown Feature (جائزة التاج الملكي عند إتقان الرسم) */}
             <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800 flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0 border border-amber-500/30">
                   <Crown className="w-4 h-4" />
                 </div>
                 <div>
-                  <div className="text-xs font-bold text-amber-300">التاج الملكي 👑</div>
-                  <div className="text-[10px] text-slate-400">يثبت فوق رأس الطالب عند تتبع الوجه</div>
+                  <div className="text-xs font-bold text-amber-300">جائزة التاج الملكي 👑</div>
+                  <div className="text-[10px] text-slate-400">يتوج رأس الطالب كجائزة ومكافأة عند إتقان الرسم بنجاح</div>
                 </div>
               </div>
 
@@ -1129,7 +1129,7 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
                     : 'bg-slate-800 text-slate-400 hover:text-white'
                 }`}
               >
-                {showCrown ? 'مفعّل' : 'معطّل'}
+                {showCrown ? 'معاينة التاج 👑' : 'تفعيل المعاينة'}
               </button>
             </div>
 

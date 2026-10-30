@@ -221,8 +221,8 @@ export const TemplateLibraryModal: React.FC<TemplateLibraryModalProps> = ({
                   >
                     {/* Right side: Thumbnail + Title & Info (RTL) */}
                     <div className="flex items-center gap-3 min-w-0">
-                      {/* Thumbnail */}
-                      <div className="w-14 h-14 rounded-xl bg-slate-950 border border-slate-800/80 flex items-center justify-center p-1.5 shrink-0 overflow-hidden text-amber-400 group-hover:scale-105 transition-transform">
+                      {/* Thumbnail on Crisp White Background for Black Calligraphy */}
+                      <div className="w-14 h-14 rounded-xl bg-white border border-slate-300 shadow-inner flex items-center justify-center p-1.5 shrink-0 overflow-hidden group-hover:scale-105 transition-transform">
                         {directUrl ? (
                           <img
                             src={directUrl}
@@ -235,11 +235,11 @@ export const TemplateLibraryModal: React.FC<TemplateLibraryModalProps> = ({
                           />
                         ) : item.svgData ? (
                           <div
-                            className="w-full h-full flex items-center justify-center [&>svg]:max-h-full [&>svg]:max-w-full [&>svg]:w-auto [&>svg]:h-auto"
+                            className="w-full h-full flex items-center justify-center text-slate-950 [&>svg]:max-h-full [&>svg]:max-w-full [&>svg]:w-auto [&>svg]:h-auto"
                             dangerouslySetInnerHTML={{ __html: item.svgData }}
                           />
                         ) : (
-                          <ImageIcon className="w-5 h-5 text-slate-500" />
+                          <ImageIcon className="w-5 h-5 text-slate-400" />
                         )}
                       </div>
 
@@ -306,8 +306,8 @@ export const TemplateLibraryModal: React.FC<TemplateLibraryModalProps> = ({
                         : 'bg-slate-800/50 hover:bg-slate-800 border-slate-700/60 hover:border-slate-600'
                     }`}
                   >
-                    {/* Thumbnail Preview */}
-                    <div className="relative w-full aspect-square rounded-xl bg-slate-950/60 flex items-center justify-center p-3 mb-2.5 overflow-hidden group-hover:scale-105 transition-transform duration-200">
+                    {/* Thumbnail Preview on Crisp White Background */}
+                    <div className="relative w-full aspect-square rounded-2xl bg-white border border-slate-300 shadow-inner flex items-center justify-center p-3 mb-2.5 overflow-hidden group-hover:scale-105 transition-transform duration-200">
                       {directUrl ? (
                         <img
                           src={directUrl}
@@ -320,11 +320,11 @@ export const TemplateLibraryModal: React.FC<TemplateLibraryModalProps> = ({
                         />
                       ) : item.svgData ? (
                         <div
-                          className="w-full h-full flex items-center justify-center text-amber-400 [&>svg]:w-full [&>svg]:h-full [&>svg]:max-h-full"
+                          className="w-full h-full flex items-center justify-center text-slate-950 [&>svg]:w-full [&>svg]:h-full [&>svg]:max-h-full"
                           dangerouslySetInnerHTML={{ __html: item.svgData }}
                         />
                       ) : (
-                        <ImageIcon className="w-8 h-8 text-slate-500" />
+                        <ImageIcon className="w-8 h-8 text-slate-400" />
                       )}
 
                       {/* Repeat count badge */}

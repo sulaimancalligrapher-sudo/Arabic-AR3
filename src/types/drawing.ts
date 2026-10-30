@@ -10,6 +10,17 @@ export type GuideColor = 'yellow' | 'green' | 'white' | 'cyan' | 'black';
 
 export type LessonDifficulty = 'سهل' | 'متوسط' | 'متقدم' | 'صعب' | 'easy' | 'normal' | 'advanced';
 
+export interface LessonStep {
+  id: string;
+  stepNumber: number;
+  title: string;
+  startX: number; // Normalized [0, 1]
+  startY: number; // Normalized [0, 1]
+  endX: number;   // Normalized [0, 1]
+  endY: number;   // Normalized [0, 1]
+  audioHint?: string;
+}
+
 export interface DrawingTemplate {
   id: string;
   topic?: string;            // العامود A: الموضوع (مثل: خط النسخ، خط الرقعة، رسم وزخرفة)
@@ -26,6 +37,8 @@ export interface DrawingTemplate {
   targetAccuracy?: number;
   tags?: string[];
   isCustom?: boolean;
+  steps?: LessonStep[];       // خطوات كتابة الحرف المرقمة
+  stepsData?: string;        // بيانات الخطوات كـ JSON للحفظ
 }
 
 export interface Point {
