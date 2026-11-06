@@ -2,6 +2,8 @@ import React, { useRef, useEffect, useState, useCallback, useImperativeHandle, f
 import { BoardStyle, PenType, Stroke, Point, DrawingTemplate, GuideColor, LessonStep } from '../types/drawing';
 import { audioService } from '../services/audioService';
 import { formatDirectImageUrl } from '../utils/urlHelper';
+import { getArabicOrdinal, getStepAudioPrompt } from '../services/sheetService';
+import { AlertCircle, CheckCircle2, Volume2, RotateCcw, Sparkles } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
 export interface WhiteboardCanvasRef {
@@ -57,6 +59,19 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
   const activePointerStrokeRef = useRef<Stroke | null>(null);
   const activeAirStrokeRef = useRef<Stroke | null>(null);
 
+  // Sequential Step-by-Step Learning State
+  const [currentStepIndex, setCurrentStepIndex] = useState(0);
+  const [stepAlert, setStepAlert] = useState<{ type: 'error' | 'success'; message: string; timestamp: number } | null>(null);
+  const activeStepPointsRef = useRef<{
+    sx: number;
+    sy: number;
+    ex: number;
+    ey: number;
+    step: LessonStep;
+    stepIndex: number;
+  } | null>(null);
+  const strokeStartedAtGreenRef = useRef(false);
+
   // Template guide points cache for accuracy evaluation
   const guidePointsRef = useRef<{ x: number; y: number }[]>([]);
   const hasAchievedGoalRef = useRef(false);
@@ -80,7 +95,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     return () => window.removeEventListener('resize', updateSize);
   }, []);
 
-  // Sync canvas width/height attributes with display dimensions
+  // Sync canvas width/height attributes with display dimensions and step index
   useEffect(() => {
     const canvas = canvasRef.current;
     const tCanvas = templateCanvasRef.current;
@@ -92,13 +107,37 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       redrawCanvas();
       drawTemplateGuide();
     }
-  }, [dimensions, template, guideColor, templateOpacity]);
+  }, [dimensions, template, guideColor, templateOpacity, currentStepIndex]);
 
-  // Reset goal achieved state when template changes
+  // Reset goal achieved state and step progression when template changes
   useEffect(() => {
     hasAchievedGoalRef.current = false;
+    setCurrentStepIndex(0);
+    setStepAlert(null);
+    strokeStartedAtGreenRef.current = false;
+    activeStepPointsRef.current = null;
     drawTemplateGuide();
+
+    if (template?.steps && template.steps.length > 0) {
+      const firstStep = template.steps[0];
+      const timer = setTimeout(() => {
+        if (firstStep) {
+          const prompt = getStepAudioPrompt(firstStep);
+          audioService.speakArabic(prompt);
+        }
+      }, 500);
+      return () => clearTimeout(timer);
+    }
   }, [template]);
+
+  // Auto-dismiss transient step alerts
+  useEffect(() => {
+    if (!stepAlert) return;
+    const timer = setTimeout(() => {
+      setStepAlert(null);
+    }, 3800);
+    return () => clearTimeout(timer);
+  }, [stepAlert]);
 
   // Redraw all strokes onto canvas
   const redrawCanvas = useCallback(() => {
@@ -210,45 +249,75 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     ctx.restore();
   };
 
-  // Helper to draw step markers (green start dot and red end dot ONLY - NO LINES, NO NUMBERS, NO ARROWS)
-  const drawStepMarkers = (
+  // Helper to draw ONLY the active step markers (Green Start Dot 🟢 and Red End Dot 🔴)
+  // Strictly NO ARROWS, NO CONNECTING LINES, NO LETTERS LABELS ON CANVAS.
+  const drawActiveStepMarker = (
     ctx: CanvasRenderingContext2D,
     steps: LessonStep[],
+    stepIndex: number,
     drawX: number,
     drawY: number,
     drawW: number,
     drawH: number
   ) => {
-    steps.forEach(s => {
-      const sx = drawX + s.startX * drawW;
-      const sy = drawY + s.startY * drawH;
-      const ex = drawX + s.endX * drawW;
-      const ey = drawY + s.endY * drawH;
+    if (!steps || steps.length === 0 || stepIndex >= steps.length) {
+      activeStepPointsRef.current = null;
+      return;
+    }
 
-      ctx.save();
-      ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
-      ctx.shadowBlur = 4;
+    const s = steps[stepIndex];
+    const sx = drawX + s.startX * drawW;
+    const sy = drawY + s.startY * drawH;
+    const ex = drawX + s.endX * drawW;
+    const ey = drawY + s.endY * drawH;
 
-      // 1. End point: Small Red Dot (نقطة حمراء صغيرة لنهاية الجرة 🔴)
-      ctx.beginPath();
-      ctx.arc(ex, ey, 5.5, 0, Math.PI * 2);
-      ctx.fillStyle = '#ef4444';
-      ctx.fill();
-      ctx.lineWidth = 1.5;
-      ctx.strokeStyle = '#ffffff';
-      ctx.stroke();
+    // Cache exact canvas coordinates for stroke constraint checking
+    activeStepPointsRef.current = {
+      sx,
+      sy,
+      ex,
+      ey,
+      step: s,
+      stepIndex
+    };
 
-      // 2. Start point: Small Green Dot (نقطة خضراء صغيرة لبداية الجرة 🟢)
-      ctx.beginPath();
-      ctx.arc(sx, sy, 5.5, 0, Math.PI * 2);
-      ctx.fillStyle = '#10b981';
-      ctx.fill();
-      ctx.lineWidth = 1.5;
-      ctx.strokeStyle = '#ffffff';
-      ctx.stroke();
+    ctx.save();
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.45)';
+    ctx.shadowBlur = 6;
 
-      ctx.restore();
-    });
+    // 1. End point: Small Red Dot 🔴 (نقطة حمراء لنهاية الجرة)
+    // Soft red glow
+    ctx.beginPath();
+    ctx.arc(ex, ey, 11, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(239, 68, 68, 0.28)';
+    ctx.fill();
+
+    // Solid core red dot
+    ctx.beginPath();
+    ctx.arc(ex, ey, 6, 0, Math.PI * 2);
+    ctx.fillStyle = '#ef4444';
+    ctx.fill();
+    ctx.lineWidth = 1.8;
+    ctx.strokeStyle = '#ffffff';
+    ctx.stroke();
+
+    // 2. Start point: Small Green Dot 🟢 (نقطة خضراء لبداية الجرة)
+    // Soft green glow
+    ctx.beginPath();
+    ctx.arc(sx, sy, 12, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(16, 185, 129, 0.35)';
+    ctx.fill();
+
+    // Solid core green dot
+    ctx.beginPath();
+    ctx.arc(sx, sy, 6.5, 0, Math.PI * 2);
+    ctx.fillStyle = '#10b981';
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#ffffff';
+    ctx.stroke();
+
+    ctx.restore();
   };
 
   // Draw Template Guide Layer (Supports both Google Drive image links and SVG data)
@@ -261,7 +330,10 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     ctx.clearRect(0, 0, tCanvas.width, tCanvas.height);
     guidePointsRef.current = [];
 
-    if (!template) return;
+    if (!template) {
+      activeStepPointsRef.current = null;
+      return;
+    }
 
     const colorHexMap: Record<GuideColor, string> = {
       yellow: '#facc15',
@@ -314,9 +386,9 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
 
         ctx.restore();
 
-        // Render Step Maker steps (No arrows: green start dot, red end dot, outer badge)
+        // Render ONLY the active step marker (No arrows, green start dot & red end dot)
         if (template.steps && template.steps.length > 0) {
-          drawStepMarkers(ctx, template.steps, drawX, drawY, drawW, drawH);
+          drawActiveStepMarker(ctx, template.steps, currentStepIndex, drawX, drawY, drawW, drawH);
         }
 
         // Sample guide points for accuracy evaluation
@@ -368,9 +440,9 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         ctx.drawImage(img, drawX, drawY, drawW, drawH);
         ctx.restore();
 
-        // Render Step Maker steps (No arrows: green start dot, red end dot, outer badge)
+        // Render ONLY the active step marker (No arrows, green start dot & red end dot)
         if (template.steps && template.steps.length > 0) {
-          drawStepMarkers(ctx, template.steps, drawX, drawY, drawW, drawH);
+          drawActiveStepMarker(ctx, template.steps, currentStepIndex, drawX, drawY, drawW, drawH);
         }
 
         try {
@@ -467,7 +539,30 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     const y = e.clientY - rect.top;
     const pressure = e.pressure > 0 ? e.pressure : 1;
 
-    audioService.playStrokeStart();
+    // Step constraint check: Student must start at the green launch dot 🟢
+    if (template?.steps && template.steps.length > 0 && activeStepPointsRef.current && penType !== 'eraser') {
+      const active = activeStepPointsRef.current;
+      const startDist = Math.hypot(x - active.sx, y - active.sy);
+      const startThreshold = Math.max(38, penSize * 2.2);
+
+      if (startDist <= startThreshold) {
+        strokeStartedAtGreenRef.current = true;
+        setStepAlert(null);
+        audioService.playStrokeStart();
+      } else {
+        strokeStartedAtGreenRef.current = false;
+        audioService.playErrorSound();
+        setStepAlert({
+          type: 'error',
+          message: 'تنبيه: ابدأ الرسم من النقطة الخضراء 🟢',
+          timestamp: Date.now()
+        });
+        audioService.speakArabic('ابدأ من النقطة الخضراء');
+      }
+    } else {
+      strokeStartedAtGreenRef.current = true;
+      audioService.playStrokeStart();
+    }
 
     const newStroke: Stroke = {
       id: `stroke_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -526,6 +621,63 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       setRedoStack([]); // Clear redo history on new stroke
       activePointerStrokeRef.current = null;
       redrawCanvas();
+
+      // Step constraint check: Validate reaching the red target dot 🔴
+      if (template?.steps && template.steps.length > 0 && activeStepPointsRef.current && penType !== 'eraser') {
+        if (strokeStartedAtGreenRef.current) {
+          const active = activeStepPointsRef.current;
+          const lastPt = finishedStroke.points[finishedStroke.points.length - 1];
+          const endDist = Math.hypot(lastPt.x - active.ex, lastPt.y - active.ey);
+          const endThreshold = Math.max(40, penSize * 2.4);
+
+          if (endDist <= endThreshold) {
+            // Reached red dot successfully!
+            audioService.playStepSuccessSound();
+            const nextIdx = currentStepIndex + 1;
+            if (nextIdx < template.steps.length) {
+              setCurrentStepIndex(nextIdx);
+              const nextStep = template.steps[nextIdx];
+              const stepName = getArabicOrdinal(currentStepIndex + 1);
+              setStepAlert({
+                type: 'success',
+                message: `رائع! أتممت ${stepName} بنجاح ✓`,
+                timestamp: Date.now()
+              });
+              const nextPrompt = getStepAudioPrompt(nextStep);
+              setTimeout(() => {
+                audioService.speakArabic(nextPrompt);
+              }, 400);
+            } else {
+              // All steps completed!
+              confetti({
+                particleCount: 90,
+                spread: 75,
+                origin: { y: 0.6 }
+              });
+              audioService.playSuccessFanfare();
+              audioService.speakArabic('ممتاز جداً! أتممت رسم جميع خطوات الحرف بنجاح');
+              setStepAlert({
+                type: 'success',
+                message: 'مبارك! أتممت جميع خطوات كتابة الحرف بنجاح 🎉',
+                timestamp: Date.now()
+              });
+              if (onGoalAchieved) {
+                onGoalAchieved(100);
+              }
+            }
+          } else {
+            // Stroke did not reach red dot
+            audioService.playErrorSound();
+            setStepAlert({
+              type: 'error',
+              message: 'تنبيه: يجب إيصال القلم إلى النقطة الحمراء 🔴 لإكمال الخطوة',
+              timestamp: Date.now()
+            });
+            audioService.speakArabic('واصل الرسم حتى النقطة الحمراء');
+          }
+        }
+        strokeStartedAtGreenRef.current = false;
+      }
     }
   };
 
@@ -548,8 +700,30 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
 
     if (isAirDrawing) {
       if (!activeAirStrokeRef.current) {
-        // Start air stroke
-        audioService.playStrokeStart();
+        // Start air stroke - validate green dot start
+        if (template?.steps && template.steps.length > 0 && activeStepPointsRef.current && penType !== 'eraser') {
+          const active = activeStepPointsRef.current;
+          const startDist = Math.hypot(x - active.sx, y - active.sy);
+          const startThreshold = Math.max(50, penSize * 2.8);
+          if (startDist <= startThreshold) {
+            strokeStartedAtGreenRef.current = true;
+            setStepAlert(null);
+            audioService.playStrokeStart();
+          } else {
+            strokeStartedAtGreenRef.current = false;
+            audioService.playErrorSound();
+            setStepAlert({
+              type: 'error',
+              message: 'تنبيه: ابدأ الرسم من النقطة الخضراء 🟢',
+              timestamp: Date.now()
+            });
+            audioService.speakArabic('ابدأ من النقطة الخضراء');
+          }
+        } else {
+          strokeStartedAtGreenRef.current = true;
+          audioService.playStrokeStart();
+        }
+
         activeAirStrokeRef.current = {
           id: `air_stroke_${Date.now()}`,
           points: [{ x, y, pressure: 1, time: Date.now() }],
@@ -576,12 +750,65 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       }
     } else {
       if (activeAirStrokeRef.current) {
-        setStrokes(prev => [...prev, activeAirStrokeRef.current!]);
+        const finishedAirStroke = activeAirStrokeRef.current;
+        setStrokes(prev => [...prev, finishedAirStroke]);
         activeAirStrokeRef.current = null;
         redrawCanvas();
+
+        // Validate red dot finish for air stroke
+        if (template?.steps && template.steps.length > 0 && activeStepPointsRef.current && penType !== 'eraser') {
+          if (strokeStartedAtGreenRef.current) {
+            const active = activeStepPointsRef.current;
+            const lastPt = finishedAirStroke.points[finishedAirStroke.points.length - 1];
+            const endDist = Math.hypot(lastPt.x - active.ex, lastPt.y - active.ey);
+            const endThreshold = Math.max(52, penSize * 3);
+
+            if (endDist <= endThreshold) {
+              audioService.playStepSuccessSound();
+              const nextIdx = currentStepIndex + 1;
+              if (nextIdx < template.steps.length) {
+                setCurrentStepIndex(nextIdx);
+                const nextStep = template.steps[nextIdx];
+                const stepName = getArabicOrdinal(currentStepIndex + 1);
+                setStepAlert({
+                  type: 'success',
+                  message: `رائع! أتممت ${stepName} بنجاح ✓`,
+                  timestamp: Date.now()
+                });
+                const nextPrompt = getStepAudioPrompt(nextStep);
+                setTimeout(() => {
+                  audioService.speakArabic(nextPrompt);
+                }, 400);
+              } else {
+                confetti({
+                  particleCount: 90,
+                  spread: 75,
+                  origin: { y: 0.6 }
+                });
+                audioService.playSuccessFanfare();
+                audioService.speakArabic('ممتاز جداً! أتممت رسم جميع خطوات الحرف بنجاح');
+                setStepAlert({
+                  type: 'success',
+                  message: 'مبارك! أتممت جميع خطوات كتابة الحرف بنجاح 🎉',
+                  timestamp: Date.now()
+                });
+                if (onGoalAchieved) onGoalAchieved(100);
+              }
+            } else {
+              audioService.playErrorSound();
+              setStepAlert({
+                type: 'error',
+                message: 'تنبيه: يجب إيصال القلم إلى النقطة الحمراء 🔴 لإكمال الخطوة',
+                timestamp: Date.now()
+              });
+              audioService.speakArabic('واصل الرسم حتى النقطة الحمراء');
+            }
+          }
+          strokeStartedAtGreenRef.current = false;
+        }
       }
     }
-  }, [virtualCursor, isAirDrawing, isARMode, dimensions, penType, penColor, penSize, calligraphyAngle, redrawCanvas]);
+  }, [virtualCursor, isAirDrawing, isARMode, dimensions, penType, penColor, penSize, calligraphyAngle, redrawCanvas, currentStepIndex, template, onGoalAchieved]);
 
   // Imperative actions exposed to parent component
   useImperativeHandle(ref, () => ({
@@ -592,12 +819,19 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       activePointerStrokeRef.current = null;
       activeAirStrokeRef.current = null;
       hasAchievedGoalRef.current = false;
+      setCurrentStepIndex(0);
+      setStepAlert(null);
+      strokeStartedAtGreenRef.current = false;
       const canvas = canvasRef.current;
       if (canvas) {
         const ctx = canvas.getContext('2d');
         ctx?.clearRect(0, 0, canvas.width, canvas.height);
       }
       if (onAccuracyUpdate) onAccuracyUpdate(0);
+      if (template?.steps && template.steps.length > 0) {
+        const prompt = getStepAudioPrompt(template.steps[0]);
+        audioService.speakArabic(prompt);
+      }
     },
     undo: () => {
       if (strokes.length === 0) return;
@@ -650,7 +884,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       return exportCanvas.toDataURL('image/png');
     },
     recalculateAccuracy: () => calculateAccuracy()
-  }), [strokes, redoStack, dimensions, boardStyle, calculateAccuracy, onAccuracyUpdate]);
+  }), [strokes, redoStack, dimensions, boardStyle, calculateAccuracy, onAccuracyUpdate, template]);
 
   // Board background classes and styles
   const getBoardBgStyle = () => {
@@ -713,7 +947,102 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         className="absolute inset-0 z-20 cursor-crosshair touch-none"
       />
 
-      {/* Layer 3: Virtual Air-Cursor Overlay (for AR Hand Tracking) */}
+      {/* Layer 3: Floating Step Guidance Bar (When Lesson Has Steps) */}
+      {template?.steps && template.steps.length > 0 && (
+        <div className="absolute top-3 inset-x-3 z-30 pointer-events-none flex justify-center">
+          <div className="pointer-events-auto flex items-center gap-2 sm:gap-3 px-3.5 py-1.5 sm:py-2 rounded-2xl bg-slate-900/90 backdrop-blur-md border border-slate-700/80 shadow-2xl text-white">
+            {/* Step Counter Badge */}
+            <div className="flex items-center gap-1.5">
+              <span className="text-amber-400 font-bold text-xs sm:text-sm">
+                {getArabicOrdinal(currentStepIndex + 1)}
+              </span>
+              <span className="text-slate-400 text-[11px] sm:text-xs">
+                من {template.steps.length}
+              </span>
+            </div>
+
+            {/* Step Progress Dots */}
+            <div className="flex items-center gap-1">
+              {template.steps.map((_, idx) => (
+                <div
+                  key={idx}
+                  className={`w-2 h-2 rounded-full transition-all duration-300 ${
+                    idx < currentStepIndex
+                      ? 'bg-emerald-500 scale-100'
+                      : idx === currentStepIndex
+                      ? 'bg-amber-400 scale-125 ring-2 ring-amber-400/40'
+                      : 'bg-slate-700 scale-90'
+                  }`}
+                />
+              ))}
+            </div>
+
+            {/* Visual start / end reminder */}
+            <div className="hidden sm:flex items-center gap-1.5 text-[11px] text-slate-300 border-r border-l border-slate-700/80 px-2.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block shadow-[0_0_6px_#10b981]" />
+              <span>ابدأ</span>
+              <span className="text-slate-500">←</span>
+              <span className="w-2 h-2 rounded-full bg-rose-500 inline-block shadow-[0_0_6px_#ef4444]" />
+              <span>انتهِ</span>
+            </div>
+
+            {/* Audio Voice Guidance Button */}
+            <button
+              type="button"
+              onClick={() => {
+                if (template.steps && template.steps[currentStepIndex]) {
+                  const prompt = getStepAudioPrompt(template.steps[currentStepIndex]);
+                  audioService.speakArabic(prompt);
+                }
+              }}
+              className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-400 hover:text-amber-300 transition-colors"
+              title="استمع لتوجيه الخطوة"
+            >
+              <Volume2 className="w-3.5 h-3.5" />
+            </button>
+
+            {/* Reset Step Progress Button */}
+            <button
+              type="button"
+              onClick={() => {
+                setCurrentStepIndex(0);
+                setStepAlert(null);
+                strokeStartedAtGreenRef.current = false;
+                if (template.steps && template.steps[0]) {
+                  const prompt = getStepAudioPrompt(template.steps[0]);
+                  audioService.speakArabic(prompt);
+                }
+              }}
+              className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+              title="إعادة من الخطوة الأولى"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Layer 4: Interactive Alert & Feedback Banner */}
+      {stepAlert && (
+        <div className="absolute bottom-4 inset-x-4 z-40 flex justify-center pointer-events-none animate-in fade-in slide-in-from-bottom-2 duration-200">
+          <div
+            className={`flex items-center gap-2.5 px-4 py-2.5 rounded-xl font-medium text-xs sm:text-sm shadow-xl backdrop-blur-sm pointer-events-auto transition-all ${
+              stepAlert.type === 'error'
+                ? 'bg-rose-600/95 text-white border border-rose-400/40'
+                : 'bg-emerald-600/95 text-white border border-emerald-400/40'
+            }`}
+          >
+            {stepAlert.type === 'error' ? (
+              <AlertCircle className="w-4 h-4 shrink-0 text-white" />
+            ) : (
+              <CheckCircle2 className="w-4 h-4 shrink-0 text-white" />
+            )}
+            <span>{stepAlert.message}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Layer 5: Virtual Air-Cursor Overlay (for AR Hand Tracking) */}
       {isARMode && virtualCursor && (
         <div
           className="absolute z-30 pointer-events-none"

@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { DrawingTemplate, LessonStep } from '../types/drawing';
 import { formatDirectImageUrl } from '../utils/urlHelper';
 import { audioService } from '../services/audioService';
-import { getArabicOrdinal } from '../services/sheetService';
+import { getArabicOrdinal, getStepAudioPrompt } from '../services/sheetService';
 import {
   X,
   Play,
@@ -276,7 +276,7 @@ export const StepMakerModal: React.FC<StepMakerModalProps> = ({
       if (idx < steps.length) {
         setPreviewingStepIndex(idx);
         const s = steps[idx];
-        const textToSpeak = (s.audioHint && s.audioHint.trim()) ? s.audioHint.trim() : getArabicOrdinal(s.stepNumber);
+        const textToSpeak = getStepAudioPrompt(s);
         audioService.speakArabic(textToSpeak);
         idx++;
         setTimeout(playNext, 2200);
@@ -477,7 +477,7 @@ export const StepMakerModal: React.FC<StepMakerModalProps> = ({
                         <button
                           type="button"
                           onClick={() => {
-                            const textToSpeak = (s.audioHint && s.audioHint.trim()) ? s.audioHint.trim() : defaultLabel;
+                            const textToSpeak = getStepAudioPrompt(s);
                             audioService.speakArabic(textToSpeak);
                           }}
                           title="استماع للتوجيه الصوتي"

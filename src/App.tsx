@@ -6,7 +6,7 @@ import { ARCameraOverlay } from './components/ARCameraOverlay';
 import { WhiteboardToolbar } from './components/WhiteboardToolbar';
 import { TemplateLibraryModal } from './components/TemplateLibraryModal';
 import { SettingsView } from './components/SettingsView';
-import { sheetService, getArabicOrdinal } from './services/sheetService';
+import { sheetService, getArabicOrdinal, getStepAudioPrompt } from './services/sheetService';
 import { audioService } from './services/audioService';
 import {
   Camera,
@@ -213,7 +213,7 @@ export default function App() {
       const playNextStep = () => {
         if (idx < stepsList.length) {
           const s = stepsList[idx];
-          const text = (s.audioHint && s.audioHint.trim()) ? s.audioHint.trim() : getArabicOrdinal(s.stepNumber);
+          const text = getStepAudioPrompt(s);
           audioService.speakArabic(text);
           idx++;
           setTimeout(playNextStep, 2400);

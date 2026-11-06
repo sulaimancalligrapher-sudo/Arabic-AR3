@@ -34,6 +34,26 @@ export function getArabicOrdinal(num: number): string {
 }
 
 /**
+ * Resolves the spoken text for a calligraphy step, ensuring words like 'الخطوة الأولى'
+ * instead of bare digits like '1' or 'الخطوة 1'
+ */
+export function getStepAudioPrompt(step: LessonStep): string {
+  if (step.audioHint && step.audioHint.trim()) {
+    const hint = step.audioHint.trim();
+    // If the hint is solely a number like "1" or "2"
+    if (/^\d+$/.test(hint)) {
+      return getArabicOrdinal(parseInt(hint, 10));
+    }
+    // If it contains "الخطوة X" or "خطوة X", replace digit with authentic Arabic ordinal word
+    const normalized = hint.replace(/(?:الخطوة|خطوة)\s*(\d+)/g, (_, d) => {
+      return getArabicOrdinal(parseInt(d, 10));
+    });
+    return normalized;
+  }
+  return getArabicOrdinal(step.stepNumber);
+}
+
+/**
  * Parse steps JSON from Sheet column or cache in a completely resilient way
  */
 export function parseStepsData(raw: any): LessonStep[] {
