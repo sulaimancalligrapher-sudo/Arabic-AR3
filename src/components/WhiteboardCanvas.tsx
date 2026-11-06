@@ -8,12 +8,10 @@ import {
   CheckCircle2, 
   Volume2, 
   RotateCcw, 
-  Sparkles, 
   Repeat, 
   HelpCircle, 
   Maximize2, 
   Minimize2, 
-  Play, 
   Award, 
   X,
   Camera
@@ -98,7 +96,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
 
   // Stroke point path tracking & evaluation modal
   const strokeStatsRef = useRef({ total: 0, onPath: 0, offPathConsecutive: 0 });
-  const [hasAudioStarted, setHasAudioStarted] = useState(false);
+  const [isLessonStarted, setIsLessonStarted] = useState(false);
   const [evaluationModal, setEvaluationModal] = useState<{
     isOpen: boolean;
     totalScore: number;
@@ -145,25 +143,17 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     }
   }, [dimensions, template, guideColor, templateOpacity, currentStepIndex]);
 
-  // Reset goal achieved state and step progression when template changes
+  // Reset goal achieved state and step progression when template changes (no auto-speech)
   useEffect(() => {
     hasAchievedGoalRef.current = false;
     setCurrentStepIndex(0);
     setStepAlert(null);
+    setEvaluationModal(null);
+    setIsLessonStarted(false);
     strokeStartedAtGreenRef.current = false;
     activeStepPointsRef.current = null;
+    strokeStatsRef.current = { total: 0, onPath: 0, offPathConsecutive: 0 };
     drawTemplateGuide();
-
-    if (template?.steps && template.steps.length > 0) {
-      const firstStep = template.steps[0];
-      const timer = setTimeout(() => {
-        if (firstStep) {
-          const prompt = getStepAudioPrompt(firstStep);
-          audioService.speakArabic(prompt);
-        }
-      }, 500);
-      return () => clearTimeout(timer);
-    }
   }, [template]);
 
   // Auto-dismiss transient step alerts
@@ -564,21 +554,56 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     calculateAccuracy();
   }, [strokes, calculateAccuracy]);
 
+  // Calculate perpendicular distance from point (px, py) to line segment (x1, y1) -> (x2, y2)
+  const distToSegment = (px: number, py: number, x1: number, y1: number, x2: number, y2: number): number => {
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const l2 = dx * dx + dy * dy;
+    if (l2 === 0) return Math.hypot(px - x1, py - y1);
+    let t = ((px - x1) * dx + (py - y1) * dy) / l2;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+  };
+
   // Helper to test if a drawn point (x, y) is on the calligraphy guide path
   const checkPointOnPath = useCallback((x: number, y: number) => {
+    const tol = Math.max(34, penSize * 2);
+
+    // 1. If we have sampled template guide points (black calligraphy pixels)
     const guides = guidePointsRef.current;
-    if (guides.length === 0) return true;
-    const tol = Math.max(38, penSize * 2.2);
-    for (let i = 0; i < guides.length; i += 3) {
-      const g = guides[i];
-      if (Math.abs(x - g.x) <= tol && Math.abs(y - g.y) <= tol) {
-        if (Math.hypot(x - g.x, y - g.y) <= tol) {
-          return true;
+    if (guides.length > 0) {
+      for (let i = 0; i < guides.length; i += 2) {
+        const g = guides[i];
+        if (Math.abs(x - g.x) <= tol && Math.abs(y - g.y) <= tol) {
+          if (Math.hypot(x - g.x, y - g.y) <= tol) {
+            return true;
+          }
         }
       }
     }
+
+    // 2. Strict step corridor check: point MUST be within corridor of active step start -> end
+    if (activeStepPointsRef.current) {
+      const active = activeStepPointsRef.current;
+      const d = distToSegment(x, y, active.sx, active.sy, active.ex, active.ey);
+      if (d <= tol) {
+        return true;
+      }
+    }
+
     return false;
   }, [penSize]);
+
+  // Start exercise with voice unlock and pronunciation
+  const handleStartLesson = async () => {
+    await audioService.unlockAudio();
+    setIsLessonStarted(true);
+    setStepAlert(null);
+    if (template?.steps && template.steps[currentStepIndex]) {
+      const prompt = getStepAudioPrompt(template.steps[currentStepIndex]);
+      audioService.speakArabic(prompt);
+    }
+  };
 
   // Handle pointer down (Mouse, Finger Touch, Apple Pencil Stylus)
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -612,7 +637,9 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
           message: 'تنبيه: ابدأ الرسم من النقطة الخضراء 🟢',
           timestamp: Date.now()
         });
-        audioService.speakArabic('ابدأ من النقطة الخضراء');
+        if (isLessonStarted) {
+          audioService.speakArabic('ابدأ من النقطة الخضراء');
+        }
       }
     } else {
       strokeStartedAtGreenRef.current = true;
@@ -705,61 +732,80 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
           const endThreshold = Math.max(40, penSize * 2.4);
 
           if (endDist <= endThreshold) {
-            // Reached red dot successfully!
-            audioService.playStepSuccessSound();
-            const nextIdx = currentStepIndex + 1;
+            // Check stroke adherence to letter path!
+            const pathRatio = strokeStatsRef.current.total > 0
+              ? (strokeStatsRef.current.onPath / strokeStatsRef.current.total)
+              : 1;
 
-            if (nextIdx < template.steps.length) {
-              setCurrentStepIndex(nextIdx);
-              const nextStep = template.steps[nextIdx];
-              const stepName = getArabicOrdinal(currentStepIndex + 1);
+            if (pathRatio < 0.55) {
+              // Stroke drew in empty space (deviated from letter path)
+              audioService.playErrorSound();
               setStepAlert({
-                type: 'success',
-                message: `رائع! أتممت ${stepName} بنجاح ✓`,
+                type: 'error',
+                message: 'تنبيه: يجب الرسم فوق مسار خط الحرف بدقة ✍️',
                 timestamp: Date.now()
               });
-              const nextPrompt = getStepAudioPrompt(nextStep);
-              setTimeout(() => {
-                audioService.speakArabic(nextPrompt);
-              }, 400);
+              if (isLessonStarted) {
+                audioService.speakArabic('ارسم فوق مسار الحرف بدقة');
+              }
             } else {
-              // ALL STEPS COMPLETED! Generate comprehensive evaluation scorecard
-              const startEndScore = 100; // Both start and end points satisfied
-              const pathRatio = strokeStatsRef.current.total > 0
-                ? (strokeStatsRef.current.onPath / strokeStatsRef.current.total)
-                : 1;
-              const pathScore = Math.min(100, Math.round(pathRatio * 100));
-              const coverageScore = calculateAccuracy();
-              const finalScore = Math.min(100, Math.max(60, Math.round(startEndScore * 0.3 + pathScore * 0.5 + coverageScore * 0.2)));
+              // Reached red dot AND followed path successfully!
+              audioService.playStepSuccessSound();
+              const nextIdx = currentStepIndex + 1;
 
-              let feedback = '';
-              if (finalScore >= 88) feedback = 'ما شاء الله! جريان قلم متقن ومسار متميز 🌟';
-              else if (finalScore >= 72) feedback = 'جيد جداً! رسم دقيق مع استقرار في القلم 👍';
-              else feedback = 'محاولة طيبة! حاول الالتزام بمسار الحرف أكثر ✍️';
+              if (nextIdx < template.steps.length) {
+                setCurrentStepIndex(nextIdx);
+                const nextStep = template.steps[nextIdx];
+                const stepName = getArabicOrdinal(currentStepIndex + 1);
+                setStepAlert({
+                  type: 'success',
+                  message: `رائع! أتممت ${stepName} بنجاح ✓`,
+                  timestamp: Date.now()
+                });
+                if (isLessonStarted) {
+                  const nextPrompt = getStepAudioPrompt(nextStep);
+                  setTimeout(() => {
+                    audioService.speakArabic(nextPrompt);
+                  }, 400);
+                }
+              } else {
+                // ALL STEPS COMPLETED! Generate comprehensive evaluation scorecard
+                const startEndScore = 100; // Both start and end points satisfied
+                const pathScore = Math.min(100, Math.round(pathRatio * 100));
+                const coverageScore = calculateAccuracy();
+                const finalScore = Math.min(100, Math.max(60, Math.round(startEndScore * 0.3 + pathScore * 0.5 + coverageScore * 0.2)));
 
-              setEvaluationModal({
-                isOpen: true,
-                totalScore: finalScore,
-                startEndScore,
-                pathScore,
-                coverageScore,
-                feedback
-              });
+                let feedback = '';
+                if (finalScore >= 88) feedback = 'ما شاء الله! جريان قلم متقن ومسار متميز 🌟';
+                else if (finalScore >= 72) feedback = 'جيد جداً! رسم دقيق مع استقرار في القلم 👍';
+                else feedback = 'محاولة طيبة! حاول الالتزام بمسار الحرف أكثر ✍️';
 
-              confetti({
-                particleCount: 90,
-                spread: 75,
-                origin: { y: 0.6 }
-              });
-              audioService.playSuccessFanfare();
-              audioService.speakArabic(`ممتاز جداً! حققت درجة ${finalScore} في المئة. ${feedback}`);
-              setStepAlert({
-                type: 'success',
-                message: `مبارك! أتممت كتابة الحرف بدرجة ${finalScore}% بنجاح 🎉`,
-                timestamp: Date.now()
-              });
-              if (onGoalAchieved) {
-                onGoalAchieved(finalScore);
+                setEvaluationModal({
+                  isOpen: true,
+                  totalScore: finalScore,
+                  startEndScore,
+                  pathScore,
+                  coverageScore,
+                  feedback
+                });
+
+                confetti({
+                  particleCount: 90,
+                  spread: 75,
+                  origin: { y: 0.6 }
+                });
+                audioService.playSuccessFanfare();
+                if (isLessonStarted) {
+                  audioService.speakArabic(`ممتاز جداً! حققت درجة ${finalScore} في المئة. ${feedback}`);
+                }
+                setStepAlert({
+                  type: 'success',
+                  message: `مبارك! أتممت كتابة الحرف بدرجة ${finalScore}% بنجاح 🎉`,
+                  timestamp: Date.now()
+                });
+                if (onGoalAchieved) {
+                  onGoalAchieved(finalScore);
+                }
               }
             }
           } else {
@@ -770,7 +816,9 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
               message: 'تنبيه: يجب إيصال القلم إلى النقطة الحمراء 🔴 لإكمال الخطوة',
               timestamp: Date.now()
             });
-            audioService.speakArabic('واصل الرسم حتى النقطة الحمراء');
+            if (isLessonStarted) {
+              audioService.speakArabic('واصل الرسم حتى النقطة الحمراء');
+            }
           }
         }
         strokeStartedAtGreenRef.current = false;
@@ -882,57 +930,74 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
             const endThreshold = Math.max(52, penSize * 3);
 
             if (endDist <= endThreshold) {
-              audioService.playStepSuccessSound();
-              const nextIdx = currentStepIndex + 1;
-              if (nextIdx < template.steps.length) {
-                setCurrentStepIndex(nextIdx);
-                const nextStep = template.steps[nextIdx];
-                const stepName = getArabicOrdinal(currentStepIndex + 1);
+              const pathRatio = strokeStatsRef.current.total > 0
+                ? (strokeStatsRef.current.onPath / strokeStatsRef.current.total)
+                : 1;
+
+              if (pathRatio < 0.55) {
+                audioService.playErrorSound();
                 setStepAlert({
-                  type: 'success',
-                  message: `رائع! أتممت ${stepName} بنجاح ✓`,
+                  type: 'error',
+                  message: 'تنبيه: يجب الرسم فوق مسار خط الحرف بدقة ✍️',
                   timestamp: Date.now()
                 });
-                const nextPrompt = getStepAudioPrompt(nextStep);
-                setTimeout(() => {
-                  audioService.speakArabic(nextPrompt);
-                }, 400);
+                if (isLessonStarted) {
+                  audioService.speakArabic('ارسم فوق مسار الحرف بدقة');
+                }
               } else {
-                const startEndScore = 100;
-                const pathRatio = strokeStatsRef.current.total > 0
-                  ? (strokeStatsRef.current.onPath / strokeStatsRef.current.total)
-                  : 1;
-                const pathScore = Math.min(100, Math.round(pathRatio * 100));
-                const coverageScore = calculateAccuracy();
-                const finalScore = Math.min(100, Math.max(60, Math.round(startEndScore * 0.3 + pathScore * 0.5 + coverageScore * 0.2)));
+                audioService.playStepSuccessSound();
+                const nextIdx = currentStepIndex + 1;
+                if (nextIdx < template.steps.length) {
+                  setCurrentStepIndex(nextIdx);
+                  const nextStep = template.steps[nextIdx];
+                  const stepName = getArabicOrdinal(currentStepIndex + 1);
+                  setStepAlert({
+                    type: 'success',
+                    message: `رائع! أتممت ${stepName} بنجاح ✓`,
+                    timestamp: Date.now()
+                  });
+                  if (isLessonStarted) {
+                    const nextPrompt = getStepAudioPrompt(nextStep);
+                    setTimeout(() => {
+                      audioService.speakArabic(nextPrompt);
+                    }, 400);
+                  }
+                } else {
+                  const startEndScore = 100;
+                  const pathScore = Math.min(100, Math.round(pathRatio * 100));
+                  const coverageScore = calculateAccuracy();
+                  const finalScore = Math.min(100, Math.max(60, Math.round(startEndScore * 0.3 + pathScore * 0.5 + coverageScore * 0.2)));
 
-                let feedback = '';
-                if (finalScore >= 88) feedback = 'ما شاء الله! جريان قلم متقن ومسار متميز 🌟';
-                else if (finalScore >= 72) feedback = 'جيد جداً! رسم دقيق مع استقرار في القلم 👍';
-                else feedback = 'محاولة طيبة! حاول الالتزام بمسار الحرف أكثر ✍️';
+                  let feedback = '';
+                  if (finalScore >= 88) feedback = 'ما شاء الله! جريان قلم متقن ومسار متميز 🌟';
+                  else if (finalScore >= 72) feedback = 'جيد جداً! رسم دقيق مع استقرار في القلم 👍';
+                  else feedback = 'محاولة طيبة! حاول الالتزام بمسار الحرف أكثر ✍️';
 
-                setEvaluationModal({
-                  isOpen: true,
-                  totalScore: finalScore,
-                  startEndScore,
-                  pathScore,
-                  coverageScore,
-                  feedback
-                });
+                  setEvaluationModal({
+                    isOpen: true,
+                    totalScore: finalScore,
+                    startEndScore,
+                    pathScore,
+                    coverageScore,
+                    feedback
+                  });
 
-                confetti({
-                  particleCount: 90,
-                  spread: 75,
-                  origin: { y: 0.6 }
-                });
-                audioService.playSuccessFanfare();
-                audioService.speakArabic(`ممتاز جداً! حققت درجة ${finalScore} في المئة. ${feedback}`);
-                setStepAlert({
-                  type: 'success',
-                  message: `مبارك! أتممت كتابة الحرف بدرجة ${finalScore}% بنجاح 🎉`,
-                  timestamp: Date.now()
-                });
-                if (onGoalAchieved) onGoalAchieved(finalScore);
+                  confetti({
+                    particleCount: 90,
+                    spread: 75,
+                    origin: { y: 0.6 }
+                  });
+                  audioService.playSuccessFanfare();
+                  if (isLessonStarted) {
+                    audioService.speakArabic(`ممتاز جداً! حققت درجة ${finalScore} في المئة. ${feedback}`);
+                  }
+                  setStepAlert({
+                    type: 'success',
+                    message: `مبارك! أتممت كتابة الحرف بدرجة ${finalScore}% بنجاح 🎉`,
+                    timestamp: Date.now()
+                  });
+                  if (onGoalAchieved) onGoalAchieved(finalScore);
+                }
               }
             } else {
               audioService.playErrorSound();
@@ -941,14 +1006,16 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                 message: 'تنبيه: يجب إيصال القلم إلى النقطة الحمراء 🔴 لإكمال الخطوة',
                 timestamp: Date.now()
               });
-              audioService.speakArabic('واصل الرسم حتى النقطة الحمراء');
+              if (isLessonStarted) {
+                audioService.speakArabic('واصل الرسم حتى النقطة الحمراء');
+              }
             }
           }
           strokeStartedAtGreenRef.current = false;
         }
       }
     }
-  }, [virtualCursor, isAirDrawing, isARMode, dimensions, penType, penColor, penSize, calligraphyAngle, redrawCanvas, currentStepIndex, template, onGoalAchieved, checkPointOnPath, calculateAccuracy]);
+  }, [virtualCursor, isAirDrawing, isARMode, dimensions, penType, penColor, penSize, calligraphyAngle, redrawCanvas, currentStepIndex, template, onGoalAchieved, checkPointOnPath, calculateAccuracy, isLessonStarted]);
 
   // Imperative actions exposed to parent component
   useImperativeHandle(ref, () => ({
@@ -962,6 +1029,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       setCurrentStepIndex(0);
       setStepAlert(null);
       setEvaluationModal(null);
+      setIsLessonStarted(false);
       strokeStartedAtGreenRef.current = false;
       strokeStatsRef.current = { total: 0, onPath: 0, offPathConsecutive: 0 };
       const canvas = canvasRef.current;
@@ -970,10 +1038,6 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         ctx?.clearRect(0, 0, canvas.width, canvas.height);
       }
       if (onAccuracyUpdate) onAccuracyUpdate(0);
-      if (template?.steps && template.steps.length > 0) {
-        const prompt = getStepAudioPrompt(template.steps[0]);
-        audioService.speakArabic(prompt);
-      }
     },
     undo: () => {
       if (strokes.length === 0) return;
@@ -1137,24 +1201,15 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
               </div>
             ) : template?.steps && template.steps.length > 0 ? (
               <div className="flex items-center gap-2 sm:gap-3">
-                {/* Desktop Sound Unlock & Lesson Start Button */}
-                {!hasAudioStarted && (
+                {/* Desktop Sound Unlock & Lesson Start Button: strictly ( ابدأ ) without icons */}
+                {!isLessonStarted && (
                   <button
                     type="button"
-                    onClick={async () => {
-                      await audioService.unlockAudio();
-                      setHasAudioStarted(true);
-                      if (template.steps && template.steps[currentStepIndex]) {
-                        const prompt = getStepAudioPrompt(template.steps[currentStepIndex]);
-                        audioService.speakArabic(prompt);
-                      }
-                    }}
-                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 font-bold text-xs shadow-md hover:brightness-110 active:scale-95 transition-all cursor-pointer"
-                    title="تفعيل الصوت والبدء"
+                    onClick={handleStartLesson}
+                    className="px-3.5 py-1 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 font-bold text-xs sm:text-sm shadow-md hover:brightness-110 active:scale-95 transition-all cursor-pointer whitespace-nowrap"
+                    title="بدء التمرين وسماع التوجيه الصوتي"
                   >
-                    <Play className="w-3 h-3 fill-current" />
-                    <span className="hidden sm:inline">ابدأ التمرين 🎧</span>
-                    <span className="sm:hidden">ابدأ 🎧</span>
+                    ( ابدأ )
                   </button>
                 )}
 
@@ -1186,7 +1241,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                   type="button"
                   onClick={async () => {
                     await audioService.unlockAudio();
-                    setHasAudioStarted(true);
+                    setIsLessonStarted(true);
                     if (template.steps && template.steps[currentStepIndex]) {
                       const prompt = getStepAudioPrompt(template.steps[currentStepIndex]);
                       audioService.speakArabic(prompt);
@@ -1205,12 +1260,9 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                     setCurrentStepIndex(0);
                     setStepAlert(null);
                     setEvaluationModal(null);
+                    setIsLessonStarted(false);
                     strokeStartedAtGreenRef.current = false;
                     strokeStatsRef.current = { total: 0, onPath: 0, offPathConsecutive: 0 };
-                    if (template.steps && template.steps[0]) {
-                      const prompt = getStepAudioPrompt(template.steps[0]);
-                      audioService.speakArabic(prompt);
-                    }
                   }}
                   className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer"
                   title="إعادة من الخطوة الأولى"
@@ -1260,7 +1312,10 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
             
             {/* Close button */}
             <button
-              onClick={() => setEvaluationModal(null)}
+              onClick={() => {
+                setEvaluationModal(null);
+                setIsLessonStarted(false);
+              }}
               className="absolute top-4 left-4 p-1.5 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors cursor-pointer"
             >
               <X className="w-4 h-4" />
@@ -1335,6 +1390,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
               <button
                 onClick={() => {
                   setEvaluationModal(null);
+                  setIsLessonStarted(false);
                   setCurrentStepIndex(0);
                   setStepAlert(null);
                   strokeStatsRef.current = { total: 0, onPath: 0, offPathConsecutive: 0 };
@@ -1344,9 +1400,6 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                     ctx?.clearRect(0, 0, canvas.width, canvas.height);
                   }
                   setStrokes([]);
-                  if (template?.steps && template.steps[0]) {
-                    audioService.speakArabic(getStepAudioPrompt(template.steps[0]));
-                  }
                 }}
                 className="flex-1 py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer"
               >
@@ -1358,6 +1411,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                 <button
                   onClick={() => {
                     setEvaluationModal(null);
+                    setIsLessonStarted(false);
                     onNextRepetition();
                   }}
                   className="flex-1 py-2.5 px-3 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg hover:brightness-110 transition-all cursor-pointer"
@@ -1367,7 +1421,10 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                 </button>
               ) : (
                 <button
-                  onClick={() => setEvaluationModal(null)}
+                  onClick={() => {
+                    setEvaluationModal(null);
+                    setIsLessonStarted(false);
+                  }}
                   className="flex-1 py-2.5 px-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg hover:brightness-110 transition-all cursor-pointer"
                 >
                   <span>متابعة</span>

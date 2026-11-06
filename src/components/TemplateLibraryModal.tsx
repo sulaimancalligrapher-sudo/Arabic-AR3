@@ -94,9 +94,6 @@ export const TemplateLibraryModal: React.FC<TemplateLibraryModalProps> = ({
   const handleChooseLesson = (item: DrawingTemplate) => {
     onSelectTemplate(item);
     onClose();
-    if (item.arabicAudioText || item.title) {
-      audioService.speakArabic(item.arabicAudioText || item.title);
-    }
   };
 
   return (
