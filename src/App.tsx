@@ -390,6 +390,17 @@ export default function App() {
             videoElement={videoElement}
             virtualCursor={virtualCursor}
             isAirDrawing={isAirDrawing}
+            currentRepetition={currentRepetition}
+            isFullscreen={isFullscreen}
+            onToggleFullscreen={toggleFullscreen}
+            onOpenHelp={() => setIsHelpOpen(true)}
+            onNextRepetition={() => {
+              const totalReps = Number(selectedTemplate?.repeatCount) || 1;
+              if (currentRepetition < totalReps) {
+                setCurrentRepetition(prev => prev + 1);
+                canvasRef.current?.clearCanvas();
+              }
+            }}
             onAccuracyUpdate={(acc) => {
               setAccuracy(acc);
               syncHistoryState();
@@ -399,7 +410,7 @@ export default function App() {
 
           {/* Celebration Achievement Banner */}
           {celebrationMessage && (
-            <div className="absolute top-4 inset-x-4 max-w-md mx-auto z-40 bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 text-slate-950 font-bold p-3 sm:p-4 rounded-2xl shadow-2xl flex items-center justify-between gap-3 animate-bounce">
+            <div className="absolute top-16 inset-x-4 max-w-md mx-auto z-40 bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 text-slate-950 font-bold p-3 sm:p-4 rounded-2xl shadow-2xl flex items-center justify-between gap-3 animate-bounce">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-full bg-slate-950 text-amber-400 flex items-center justify-center shrink-0">
                   <Award className="w-5 h-5" />
@@ -412,47 +423,6 @@ export default function App() {
               >
                 <X className="w-4 h-4" />
               </button>
-            </div>
-          )}
-
-          {/* Quick Floating Screen Action Buttons (Fullscreen, Help) */}
-          <div className="absolute top-3 left-3 z-30 flex items-center gap-2">
-            <button
-              onClick={() => setIsHelpOpen(!isHelpOpen)}
-              title="دليل الاستخدام السريع"
-              className="p-2 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-300 border border-slate-700/70 backdrop-blur-md shadow-md active:scale-95 transition-all cursor-pointer"
-            >
-              <HelpCircle className="w-4 h-4 text-amber-400" />
-            </button>
-            <button
-              onClick={toggleFullscreen}
-              title={isFullscreen ? 'تصغير الشاشة' : 'تكبير الشاشة ملء العرض'}
-              className="p-2 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-300 border border-slate-700/70 backdrop-blur-md shadow-md active:scale-95 transition-all cursor-pointer"
-            >
-              {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
-            </button>
-          </div>
-
-          {/* Active Lesson Topic & Repetition Badge */}
-          {selectedTemplate && (
-            <div className="absolute top-3 right-3 z-30 flex items-center gap-2 pointer-events-none">
-              {boardStyle === 'ar_camera' && (
-                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-amber-500 text-slate-950 font-bold text-xs shadow-lg animate-pulse">
-                  <Camera className="w-3.5 h-3.5" />
-                  <span>AR</span>
-                </div>
-              )}
-              <div className="px-3 py-1 rounded-xl bg-slate-900/85 backdrop-blur-md border border-slate-700/80 shadow-md flex items-center gap-2 text-xs">
-                <span className="font-bold text-slate-100">{selectedTemplate.title}</span>
-                <span className="h-3 w-px bg-slate-700" />
-                <span className="text-amber-400 font-bold flex items-center gap-1">
-                  <Repeat className="w-3 h-3" />
-                  <span>{currentRepetition} / {selectedTemplate.repeatCount || 1}</span>
-                </span>
-                <span className="px-1.5 py-0.5 rounded bg-slate-800 text-[10px] text-slate-300 font-bold border border-slate-700">
-                  {selectedTemplate.difficulty || 'سهل'}
-                </span>
-              </div>
             </div>
           )}
 

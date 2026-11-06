@@ -3,7 +3,21 @@ import { BoardStyle, PenType, Stroke, Point, DrawingTemplate, GuideColor, Lesson
 import { audioService } from '../services/audioService';
 import { formatDirectImageUrl } from '../utils/urlHelper';
 import { getArabicOrdinal, getStepAudioPrompt } from '../services/sheetService';
-import { AlertCircle, CheckCircle2, Volume2, RotateCcw, Sparkles } from 'lucide-react';
+import { 
+  AlertCircle, 
+  CheckCircle2, 
+  Volume2, 
+  RotateCcw, 
+  Sparkles, 
+  Repeat, 
+  HelpCircle, 
+  Maximize2, 
+  Minimize2, 
+  Play, 
+  Award, 
+  X,
+  Camera
+} from 'lucide-react';
 import confetti from 'canvas-confetti';
 
 export interface WhiteboardCanvasRef {
@@ -29,6 +43,11 @@ interface WhiteboardCanvasProps {
   virtualCursor: { x: number; y: number } | null;
   isAirDrawing: boolean;
   calligraphyAngle?: number;
+  currentRepetition?: number;
+  isFullscreen?: boolean;
+  onToggleFullscreen?: () => void;
+  onOpenHelp?: () => void;
+  onNextRepetition?: () => void;
   onAccuracyUpdate?: (accuracy: number) => void;
   onGoalAchieved?: (accuracy: number) => void;
 }
@@ -46,6 +65,11 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
   virtualCursor,
   isAirDrawing,
   calligraphyAngle = 45,
+  currentRepetition = 1,
+  isFullscreen = false,
+  onToggleFullscreen,
+  onOpenHelp,
+  onNextRepetition,
   onAccuracyUpdate,
   onGoalAchieved,
 }, ref) => {
@@ -71,6 +95,18 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     stepIndex: number;
   } | null>(null);
   const strokeStartedAtGreenRef = useRef(false);
+
+  // Stroke point path tracking & evaluation modal
+  const strokeStatsRef = useRef({ total: 0, onPath: 0, offPathConsecutive: 0 });
+  const [hasAudioStarted, setHasAudioStarted] = useState(false);
+  const [evaluationModal, setEvaluationModal] = useState<{
+    isOpen: boolean;
+    totalScore: number;
+    startEndScore: number;
+    pathScore: number;
+    coverageScore: number;
+    feedback: string;
+  } | null>(null);
 
   // Template guide points cache for accuracy evaluation
   const guidePointsRef = useRef<{ x: number; y: number }[]>([]);
@@ -528,6 +564,22 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     calculateAccuracy();
   }, [strokes, calculateAccuracy]);
 
+  // Helper to test if a drawn point (x, y) is on the calligraphy guide path
+  const checkPointOnPath = useCallback((x: number, y: number) => {
+    const guides = guidePointsRef.current;
+    if (guides.length === 0) return true;
+    const tol = Math.max(38, penSize * 2.2);
+    for (let i = 0; i < guides.length; i += 3) {
+      const g = guides[i];
+      if (Math.abs(x - g.x) <= tol && Math.abs(y - g.y) <= tol) {
+        if (Math.hypot(x - g.x, y - g.y) <= tol) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }, [penSize]);
+
   // Handle pointer down (Mouse, Finger Touch, Apple Pencil Stylus)
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     e.preventDefault();
@@ -538,6 +590,9 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     const pressure = e.pressure > 0 ? e.pressure : 1;
+
+    // Reset stroke path metrics
+    strokeStatsRef.current = { total: 1, onPath: 1, offPathConsecutive: 0 };
 
     // Step constraint check: Student must start at the green launch dot 🟢
     if (template?.steps && template.steps.length > 0 && activeStepPointsRef.current && penType !== 'eraser') {
@@ -603,6 +658,25 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
 
     curStroke.points.push({ x, y, pressure, time: Date.now() });
 
+    // Track path adherence
+    if (penType !== 'eraser' && template?.steps && template.steps.length > 0) {
+      strokeStatsRef.current.total++;
+      if (checkPointOnPath(x, y)) {
+        strokeStatsRef.current.onPath++;
+        strokeStatsRef.current.offPathConsecutive = 0;
+      } else {
+        strokeStatsRef.current.offPathConsecutive++;
+        if (strokeStatsRef.current.offPathConsecutive === 14) {
+          setStepAlert({
+            type: 'error',
+            message: '⚠️ انتبه: التزم بمسار الحرف وجريان القلم',
+            timestamp: Date.now()
+          });
+          audioService.playErrorSound();
+        }
+      }
+    }
+
     const ctx = canvas.getContext('2d');
     if (ctx) {
       renderStroke(ctx, {
@@ -634,6 +708,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
             // Reached red dot successfully!
             audioService.playStepSuccessSound();
             const nextIdx = currentStepIndex + 1;
+
             if (nextIdx < template.steps.length) {
               setCurrentStepIndex(nextIdx);
               const nextStep = template.steps[nextIdx];
@@ -648,21 +723,43 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                 audioService.speakArabic(nextPrompt);
               }, 400);
             } else {
-              // All steps completed!
+              // ALL STEPS COMPLETED! Generate comprehensive evaluation scorecard
+              const startEndScore = 100; // Both start and end points satisfied
+              const pathRatio = strokeStatsRef.current.total > 0
+                ? (strokeStatsRef.current.onPath / strokeStatsRef.current.total)
+                : 1;
+              const pathScore = Math.min(100, Math.round(pathRatio * 100));
+              const coverageScore = calculateAccuracy();
+              const finalScore = Math.min(100, Math.max(60, Math.round(startEndScore * 0.3 + pathScore * 0.5 + coverageScore * 0.2)));
+
+              let feedback = '';
+              if (finalScore >= 88) feedback = 'ما شاء الله! جريان قلم متقن ومسار متميز 🌟';
+              else if (finalScore >= 72) feedback = 'جيد جداً! رسم دقيق مع استقرار في القلم 👍';
+              else feedback = 'محاولة طيبة! حاول الالتزام بمسار الحرف أكثر ✍️';
+
+              setEvaluationModal({
+                isOpen: true,
+                totalScore: finalScore,
+                startEndScore,
+                pathScore,
+                coverageScore,
+                feedback
+              });
+
               confetti({
                 particleCount: 90,
                 spread: 75,
                 origin: { y: 0.6 }
               });
               audioService.playSuccessFanfare();
-              audioService.speakArabic('ممتاز جداً! أتممت رسم جميع خطوات الحرف بنجاح');
+              audioService.speakArabic(`ممتاز جداً! حققت درجة ${finalScore} في المئة. ${feedback}`);
               setStepAlert({
                 type: 'success',
-                message: 'مبارك! أتممت جميع خطوات كتابة الحرف بنجاح 🎉',
+                message: `مبارك! أتممت كتابة الحرف بدرجة ${finalScore}% بنجاح 🎉`,
                 timestamp: Date.now()
               });
               if (onGoalAchieved) {
-                onGoalAchieved(100);
+                onGoalAchieved(finalScore);
               }
             }
           } else {
@@ -700,6 +797,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
 
     if (isAirDrawing) {
       if (!activeAirStrokeRef.current) {
+        strokeStatsRef.current = { total: 1, onPath: 1, offPathConsecutive: 0 };
         // Start air stroke - validate green dot start
         if (template?.steps && template.steps.length > 0 && activeStepPointsRef.current && penType !== 'eraser') {
           const active = activeStepPointsRef.current;
@@ -739,6 +837,26 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         const lastPt = curStroke.points[curStroke.points.length - 1];
         if (Math.hypot(x - lastPt.x, y - lastPt.y) >= 3) {
           curStroke.points.push({ x, y, pressure: 1, time: Date.now() });
+
+          // Track path adherence
+          if (penType !== 'eraser' && template?.steps && template.steps.length > 0) {
+            strokeStatsRef.current.total++;
+            if (checkPointOnPath(x, y)) {
+              strokeStatsRef.current.onPath++;
+              strokeStatsRef.current.offPathConsecutive = 0;
+            } else {
+              strokeStatsRef.current.offPathConsecutive++;
+              if (strokeStatsRef.current.offPathConsecutive === 14) {
+                setStepAlert({
+                  type: 'error',
+                  message: '⚠️ انتبه: التزم بمسار الحرف وجريان القلم',
+                  timestamp: Date.now()
+                });
+                audioService.playErrorSound();
+              }
+            }
+          }
+
           const ctx = canvas.getContext('2d');
           if (ctx) {
             renderStroke(ctx, {
@@ -780,19 +898,41 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                   audioService.speakArabic(nextPrompt);
                 }, 400);
               } else {
+                const startEndScore = 100;
+                const pathRatio = strokeStatsRef.current.total > 0
+                  ? (strokeStatsRef.current.onPath / strokeStatsRef.current.total)
+                  : 1;
+                const pathScore = Math.min(100, Math.round(pathRatio * 100));
+                const coverageScore = calculateAccuracy();
+                const finalScore = Math.min(100, Math.max(60, Math.round(startEndScore * 0.3 + pathScore * 0.5 + coverageScore * 0.2)));
+
+                let feedback = '';
+                if (finalScore >= 88) feedback = 'ما شاء الله! جريان قلم متقن ومسار متميز 🌟';
+                else if (finalScore >= 72) feedback = 'جيد جداً! رسم دقيق مع استقرار في القلم 👍';
+                else feedback = 'محاولة طيبة! حاول الالتزام بمسار الحرف أكثر ✍️';
+
+                setEvaluationModal({
+                  isOpen: true,
+                  totalScore: finalScore,
+                  startEndScore,
+                  pathScore,
+                  coverageScore,
+                  feedback
+                });
+
                 confetti({
                   particleCount: 90,
                   spread: 75,
                   origin: { y: 0.6 }
                 });
                 audioService.playSuccessFanfare();
-                audioService.speakArabic('ممتاز جداً! أتممت رسم جميع خطوات الحرف بنجاح');
+                audioService.speakArabic(`ممتاز جداً! حققت درجة ${finalScore} في المئة. ${feedback}`);
                 setStepAlert({
                   type: 'success',
-                  message: 'مبارك! أتممت جميع خطوات كتابة الحرف بنجاح 🎉',
+                  message: `مبارك! أتممت كتابة الحرف بدرجة ${finalScore}% بنجاح 🎉`,
                   timestamp: Date.now()
                 });
-                if (onGoalAchieved) onGoalAchieved(100);
+                if (onGoalAchieved) onGoalAchieved(finalScore);
               }
             } else {
               audioService.playErrorSound();
@@ -808,7 +948,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         }
       }
     }
-  }, [virtualCursor, isAirDrawing, isARMode, dimensions, penType, penColor, penSize, calligraphyAngle, redrawCanvas, currentStepIndex, template, onGoalAchieved]);
+  }, [virtualCursor, isAirDrawing, isARMode, dimensions, penType, penColor, penSize, calligraphyAngle, redrawCanvas, currentStepIndex, template, onGoalAchieved, checkPointOnPath, calculateAccuracy]);
 
   // Imperative actions exposed to parent component
   useImperativeHandle(ref, () => ({
@@ -821,7 +961,9 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       hasAchievedGoalRef.current = false;
       setCurrentStepIndex(0);
       setStepAlert(null);
+      setEvaluationModal(null);
       strokeStartedAtGreenRef.current = false;
+      strokeStatsRef.current = { total: 0, onPath: 0, offPathConsecutive: 0 };
       const canvas = canvasRef.current;
       if (canvas) {
         const ctx = canvas.getContext('2d');
@@ -947,97 +1089,292 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         className="absolute inset-0 z-20 cursor-crosshair touch-none"
       />
 
-      {/* Layer 3: Floating Step Guidance Bar (When Lesson Has Steps) */}
-      {template?.steps && template.steps.length > 0 && (
-        <div className="absolute top-3 inset-x-3 z-30 pointer-events-none flex justify-center">
-          <div className="pointer-events-auto flex items-center gap-2 sm:gap-3 px-3.5 py-1.5 sm:py-2 rounded-2xl bg-slate-900/90 backdrop-blur-md border border-slate-700/80 shadow-2xl text-white">
-            {/* Step Counter Badge */}
-            <div className="flex items-center gap-1.5">
-              <span className="text-amber-400 font-bold text-xs sm:text-sm">
-                {getArabicOrdinal(currentStepIndex + 1)}
+      {/* Layer 3: Unified Single-Row Top Bar (الشريط الموحد المدمج على صف واحد) */}
+      <div className="absolute top-2 sm:top-3 inset-x-2 sm:inset-x-4 z-30 pointer-events-none flex justify-center">
+        <div className="pointer-events-auto flex items-center justify-between w-full max-w-5xl px-3 sm:px-4 py-1.5 sm:py-2 rounded-2xl bg-slate-900/90 backdrop-blur-md border border-slate-700/80 shadow-2xl text-white gap-2">
+          
+          {/* Right: Topic / Lesson Title & Repetition Badge (الموضوع والتكرار فقط بدون المستوى) */}
+          <div className="flex items-center gap-2 shrink-0">
+            {isARMode && (
+              <span className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-amber-500 text-slate-950 font-bold text-[10px] sm:text-xs shadow-md animate-pulse">
+                <Camera className="w-3 h-3" />
+                <span>AR</span>
               </span>
-              <span className="text-slate-400 text-[11px] sm:text-xs">
-                من {template.steps.length}
-              </span>
-            </div>
+            )}
+            {template ? (
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-xs sm:text-sm text-slate-100 whitespace-nowrap">
+                  {template.title}
+                </span>
+                {template.repeatCount && template.repeatCount > 1 ? (
+                  <span className="text-[11px] text-amber-400 font-bold bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded-lg flex items-center gap-1 shrink-0">
+                    <Repeat className="w-3 h-3" />
+                    <span>تكرار {currentRepetition || 1} / {template.repeatCount}</span>
+                  </span>
+                ) : null}
+              </div>
+            ) : (
+              <span className="text-xs text-slate-300 font-medium">لوحة الخط الحر</span>
+            )}
+          </div>
 
-            {/* Step Progress Dots */}
-            <div className="flex items-center gap-1">
-              {template.steps.map((_, idx) => (
-                <div
-                  key={idx}
-                  className={`w-2 h-2 rounded-full transition-all duration-300 ${
-                    idx < currentStepIndex
-                      ? 'bg-emerald-500 scale-100'
-                      : idx === currentStepIndex
-                      ? 'bg-amber-400 scale-125 ring-2 ring-amber-400/40'
-                      : 'bg-slate-700 scale-90'
-                  }`}
-                />
-              ))}
-            </div>
+          {/* Center: In-Bar Smart Alert OR Step Guidance (رسائل الأخطاء الذكية أو رقم الخطوة والصوت) */}
+          <div className="flex items-center justify-center flex-1 mx-1 sm:mx-2 overflow-hidden">
+            {stepAlert ? (
+              <div
+                className={`flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold animate-in fade-in zoom-in-95 duration-150 truncate ${
+                  stepAlert.type === 'error'
+                    ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40 shadow-sm'
+                    : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm'
+                }`}
+              >
+                {stepAlert.type === 'error' ? (
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0 text-rose-400" />
+                ) : (
+                  <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-emerald-400" />
+                )}
+                <span className="truncate">{stepAlert.message}</span>
+              </div>
+            ) : template?.steps && template.steps.length > 0 ? (
+              <div className="flex items-center gap-2 sm:gap-3">
+                {/* Desktop Sound Unlock & Lesson Start Button */}
+                {!hasAudioStarted && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await audioService.unlockAudio();
+                      setHasAudioStarted(true);
+                      if (template.steps && template.steps[currentStepIndex]) {
+                        const prompt = getStepAudioPrompt(template.steps[currentStepIndex]);
+                        audioService.speakArabic(prompt);
+                      }
+                    }}
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 font-bold text-xs shadow-md hover:brightness-110 active:scale-95 transition-all cursor-pointer"
+                    title="تفعيل الصوت والبدء"
+                  >
+                    <Play className="w-3 h-3 fill-current" />
+                    <span className="hidden sm:inline">ابدأ التمرين 🎧</span>
+                    <span className="sm:hidden">ابدأ 🎧</span>
+                  </button>
+                )}
 
-            {/* Visual start / end reminder */}
-            <div className="hidden sm:flex items-center gap-1.5 text-[11px] text-slate-300 border-r border-l border-slate-700/80 px-2.5">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block shadow-[0_0_6px_#10b981]" />
-              <span>ابدأ</span>
-              <span className="text-slate-500">←</span>
-              <span className="w-2 h-2 rounded-full bg-rose-500 inline-block shadow-[0_0_6px_#ef4444]" />
-              <span>انتهِ</span>
-            </div>
+                {/* Step Number Only (مختصر بدون حشو) */}
+                <div className="flex items-center gap-1.5">
+                  <span className="text-amber-400 font-bold text-xs sm:text-sm whitespace-nowrap">
+                    الخطوة {currentStepIndex + 1} من {template.steps.length}
+                  </span>
+                </div>
 
-            {/* Audio Voice Guidance Button */}
-            <button
-              type="button"
-              onClick={() => {
-                if (template.steps && template.steps[currentStepIndex]) {
-                  const prompt = getStepAudioPrompt(template.steps[currentStepIndex]);
-                  audioService.speakArabic(prompt);
-                }
-              }}
-              className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-400 hover:text-amber-300 transition-colors"
-              title="استمع لتوجيه الخطوة"
-            >
-              <Volume2 className="w-3.5 h-3.5" />
-            </button>
+                {/* Step Progress Dots */}
+                <div className="hidden sm:flex items-center gap-1">
+                  {template.steps.map((_, idx) => (
+                    <div
+                      key={idx}
+                      className={`w-2 h-2 rounded-full transition-all duration-300 ${
+                        idx < currentStepIndex
+                          ? 'bg-emerald-500 scale-100'
+                          : idx === currentStepIndex
+                          ? 'bg-amber-400 scale-125 ring-2 ring-amber-400/40'
+                          : 'bg-slate-700 scale-90'
+                      }`}
+                    />
+                  ))}
+                </div>
 
-            {/* Reset Step Progress Button */}
-            <button
-              type="button"
-              onClick={() => {
-                setCurrentStepIndex(0);
-                setStepAlert(null);
-                strokeStartedAtGreenRef.current = false;
-                if (template.steps && template.steps[0]) {
-                  const prompt = getStepAudioPrompt(template.steps[0]);
-                  audioService.speakArabic(prompt);
-                }
-              }}
-              className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
-              title="إعادة من الخطوة الأولى"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-            </button>
+                {/* Voice Guidance Button */}
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await audioService.unlockAudio();
+                    setHasAudioStarted(true);
+                    if (template.steps && template.steps[currentStepIndex]) {
+                      const prompt = getStepAudioPrompt(template.steps[currentStepIndex]);
+                      audioService.speakArabic(prompt);
+                    }
+                  }}
+                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-400 hover:text-amber-300 transition-colors cursor-pointer"
+                  title="استمع لتوجيه الخطوة"
+                >
+                  <Volume2 className="w-3.5 h-3.5" />
+                </button>
+
+                {/* Reset Step Progress Button */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCurrentStepIndex(0);
+                    setStepAlert(null);
+                    setEvaluationModal(null);
+                    strokeStartedAtGreenRef.current = false;
+                    strokeStatsRef.current = { total: 0, onPath: 0, offPathConsecutive: 0 };
+                    if (template.steps && template.steps[0]) {
+                      const prompt = getStepAudioPrompt(template.steps[0]);
+                      audioService.speakArabic(prompt);
+                    }
+                  }}
+                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer"
+                  title="إعادة من الخطوة الأولى"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ) : (
+              <span className="text-xs text-slate-400 hidden sm:inline">مسار حر للتدريب</span>
+            )}
+          </div>
+
+          {/* Left: Quick Action Controls (دليل الاستخدام وتكبير الشاشة) */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            {onOpenHelp && (
+              <button
+                type="button"
+                onClick={onOpenHelp}
+                title="دليل الاستخدام السريع"
+                className="p-1.5 sm:p-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-amber-400 border border-slate-700/60 active:scale-95 transition-all cursor-pointer"
+              >
+                <HelpCircle className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+              </button>
+            )}
+            {onToggleFullscreen && (
+              <button
+                type="button"
+                onClick={onToggleFullscreen}
+                title={isFullscreen ? 'تصغير الشاشة' : 'تكبير الشاشة ملء العرض'}
+                className="p-1.5 sm:p-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60 active:scale-95 transition-all cursor-pointer"
+              >
+                {isFullscreen ? (
+                  <Minimize2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                ) : (
+                  <Maximize2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                )}
+              </button>
+            )}
           </div>
         </div>
-      )}
+      </div>
 
-      {/* Layer 4: Interactive Alert & Feedback Banner */}
-      {stepAlert && (
-        <div className="absolute bottom-4 inset-x-4 z-40 flex justify-center pointer-events-none animate-in fade-in slide-in-from-bottom-2 duration-200">
-          <div
-            className={`flex items-center gap-2.5 px-4 py-2.5 rounded-xl font-medium text-xs sm:text-sm shadow-xl backdrop-blur-sm pointer-events-auto transition-all ${
-              stepAlert.type === 'error'
-                ? 'bg-rose-600/95 text-white border border-rose-400/40'
-                : 'bg-emerald-600/95 text-white border border-emerald-400/40'
-            }`}
-          >
-            {stepAlert.type === 'error' ? (
-              <AlertCircle className="w-4 h-4 shrink-0 text-white" />
-            ) : (
-              <CheckCircle2 className="w-4 h-4 shrink-0 text-white" />
-            )}
-            <span>{stepAlert.message}</span>
+      {/* Layer 4: Calligraphy Evaluation Scorecard Modal (بطاقة تقييم رسم الحرف) */}
+      {evaluationModal && evaluationModal.isOpen && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="relative w-full max-w-sm sm:max-w-md bg-gradient-to-b from-slate-900 via-slate-900 to-slate-950 border border-amber-500/40 rounded-3xl p-5 sm:p-6 shadow-[0_0_50px_rgba(245,158,11,0.25)] text-white text-center">
+            
+            {/* Close button */}
+            <button
+              onClick={() => setEvaluationModal(null)}
+              className="absolute top-4 left-4 p-1.5 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            {/* Badge Icon */}
+            <div className="w-14 h-14 mx-auto mb-3 rounded-2xl bg-gradient-to-tr from-amber-500 to-yellow-400 text-slate-950 flex items-center justify-center shadow-lg">
+              <Award className="w-8 h-8" />
+            </div>
+
+            <h3 className="text-lg sm:text-xl font-bold font-ruqaa text-amber-300 mb-1">
+              بطاقة تقييم كتابة الحرف
+            </h3>
+            
+            {/* Final Big Score */}
+            <div className="my-3">
+              <span className="text-4xl sm:text-5xl font-extrabold font-mono text-white tracking-tight">
+                {evaluationModal.totalScore}%
+              </span>
+              <p className="text-sm font-semibold text-amber-400 mt-1">
+                {evaluationModal.feedback}
+              </p>
+            </div>
+
+            {/* Criteria Progress Bars */}
+            <div className="space-y-3 my-4 text-xs text-right bg-slate-800/60 p-3.5 rounded-2xl border border-slate-700/60">
+              {/* Criterion 1 */}
+              <div>
+                <div className="flex justify-between mb-1">
+                  <span className="text-slate-300">الالتزام بنقاط البداية والنهاية (🟢 → 🔴)</span>
+                  <span className="font-bold text-emerald-400">{evaluationModal.startEndScore}%</span>
+                </div>
+                <div className="w-full bg-slate-700 rounded-full h-2 overflow-hidden">
+                  <div
+                    className="bg-emerald-500 h-2 rounded-full transition-all duration-700"
+                    style={{ width: `${evaluationModal.startEndScore}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Criterion 2 */}
+              <div>
+                <div className="flex justify-between mb-1">
+                  <span className="text-slate-300">الالتزام بمسار الحرف وجريان القلم</span>
+                  <span className="font-bold text-amber-400">{evaluationModal.pathScore}%</span>
+                </div>
+                <div className="w-full bg-slate-700 rounded-full h-2 overflow-hidden">
+                  <div
+                    className="bg-amber-400 h-2 rounded-full transition-all duration-700"
+                    style={{ width: `${evaluationModal.pathScore}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Criterion 3 */}
+              <div>
+                <div className="flex justify-between mb-1">
+                  <span className="text-slate-300">انسيابية الخط وتغطية المسار</span>
+                  <span className="font-bold text-sky-400">{evaluationModal.coverageScore}%</span>
+                </div>
+                <div className="w-full bg-slate-700 rounded-full h-2 overflow-hidden">
+                  <div
+                    className="bg-sky-400 h-2 rounded-full transition-all duration-700"
+                    style={{ width: `${evaluationModal.coverageScore}%` }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex items-center gap-2 mt-4">
+              <button
+                onClick={() => {
+                  setEvaluationModal(null);
+                  setCurrentStepIndex(0);
+                  setStepAlert(null);
+                  strokeStatsRef.current = { total: 0, onPath: 0, offPathConsecutive: 0 };
+                  const canvas = canvasRef.current;
+                  if (canvas) {
+                    const ctx = canvas.getContext('2d');
+                    ctx?.clearRect(0, 0, canvas.width, canvas.height);
+                  }
+                  setStrokes([]);
+                  if (template?.steps && template.steps[0]) {
+                    audioService.speakArabic(getStepAudioPrompt(template.steps[0]));
+                  }
+                }}
+                className="flex-1 py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>إعادة التمرين</span>
+              </button>
+
+              {onNextRepetition && currentRepetition && template?.repeatCount && currentRepetition < template.repeatCount ? (
+                <button
+                  onClick={() => {
+                    setEvaluationModal(null);
+                    onNextRepetition();
+                  }}
+                  className="flex-1 py-2.5 px-3 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg hover:brightness-110 transition-all cursor-pointer"
+                >
+                  <span>التكرار التالي ({currentRepetition + 1})</span>
+                  <Repeat className="w-3.5 h-3.5" />
+                </button>
+              ) : (
+                <button
+                  onClick={() => setEvaluationModal(null)}
+                  className="flex-1 py-2.5 px-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg hover:brightness-110 transition-all cursor-pointer"
+                >
+                  <span>متابعة</span>
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}
