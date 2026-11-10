@@ -95,7 +95,15 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
   const strokeStartedAtGreenRef = useRef(false);
 
   // Stroke point path tracking & evaluation modal
-  const strokeStatsRef = useRef({ total: 0, onPath: 0, offPathConsecutive: 0 });
+  const strokeStatsRef = useRef({
+    total: 0,
+    corePoints: 0,
+    grazingPoints: 0,
+    offPathPoints: 0,
+    offPathConsecutive: 0,
+    maxConsecutiveOffPath: 0,
+    hasBrokenAway: false
+  });
   const [isLessonStarted, setIsLessonStarted] = useState(false);
   const [evaluationModal, setEvaluationModal] = useState<{
     isOpen: boolean;
@@ -105,6 +113,18 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     coverageScore: number;
     feedback: string;
   } | null>(null);
+
+  const resetStrokeStats = useCallback(() => {
+    strokeStatsRef.current = {
+      total: 0,
+      corePoints: 0,
+      grazingPoints: 0,
+      offPathPoints: 0,
+      offPathConsecutive: 0,
+      maxConsecutiveOffPath: 0,
+      hasBrokenAway: false
+    };
+  }, []);
 
   // Template guide points cache and fast spatial letter grid for pixel-level accuracy
   const guidePointsRef = useRef<{ x: number; y: number }[]>([]);
@@ -158,10 +178,9 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     setEvaluationModal(null);
     setIsLessonStarted(false);
     strokeStartedAtGreenRef.current = false;
-    activeStepPointsRef.current = null;
-    strokeStatsRef.current = { total: 0, onPath: 0, offPathConsecutive: 0 };
+    resetStrokeStats();
     drawTemplateGuide();
-  }, [template]);
+  }, [template, resetStrokeStats]);
 
   // Auto-dismiss transient step alerts
   useEffect(() => {
@@ -353,6 +372,66 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     ctx.restore();
   };
 
+  // Calculate perpendicular distance from point (px, py) to line segment (x1, y1) -> (x2, y2)
+  const distToSegment = (px: number, py: number, x1: number, y1: number, x2: number, y2: number): number => {
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const l2 = dx * dx + dy * dy;
+    if (l2 === 0) return Math.hypot(px - x1, py - y1);
+    let t = ((px - x1) * dx + (py - y1) * dy) / l2;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+  };
+
+  // 100% Reliable Fallback: Rasterize step corridor segments into the letter grid
+  const rasterizeStepCorridorsIntoGrid = (
+    grid: Uint8Array,
+    gw: number,
+    gh: number,
+    cell: number,
+    steps: LessonStep[],
+    drawX: number,
+    drawY: number,
+    drawW: number,
+    drawH: number,
+    pts: { x: number; y: number }[]
+  ): number => {
+    let added = 0;
+    const thickness = Math.max(22, drawW * 0.08);
+    const radius = thickness / 2;
+
+    steps.forEach(s => {
+      const sx = drawX + s.startX * drawW;
+      const sy = drawY + s.startY * drawH;
+      const ex = drawX + s.endX * drawW;
+      const ey = drawY + s.endY * drawH;
+
+      const minX = Math.max(0, Math.floor((Math.min(sx, ex) - radius) / cell));
+      const maxX = Math.min(gw - 1, Math.ceil((Math.max(sx, ex) + radius) / cell));
+      const minY = Math.max(0, Math.floor((Math.min(sy, ey) - radius) / cell));
+      const maxY = Math.min(gh - 1, Math.ceil((Math.max(sy, ey) + radius) / cell));
+
+      for (let gy = minY; gy <= maxY; gy++) {
+        const y = gy * cell;
+        const rowOffset: number = gy * gw;
+        for (let gx = minX; gx <= maxX; gx++) {
+          const x = gx * cell;
+          const idx: number = rowOffset + gx;
+          if (grid[idx] === 0) {
+            const d = distToSegment(x, y, sx, sy, ex, ey);
+            if (d <= radius) {
+              grid[idx] = 1;
+              added++;
+              pts.push({ x, y });
+            }
+          }
+        }
+      }
+    });
+
+    return added;
+  };
+
   // Draw Template Guide Layer (Supports both Google Drive image links and SVG data)
   const drawTemplateGuide = () => {
     const tCanvas = templateCanvasRef.current;
@@ -425,15 +504,16 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         }
 
         // Extract pixel-level letter body mask for precise coverage and off-path detection
+        const cell = 4;
+        const gw = Math.ceil(tCanvas.width / cell);
+        const gh = Math.ceil(tCanvas.height / cell);
+        const grid = new Uint8Array(gw * gh);
+        let totalCells = 0;
+        const pts: { x: number; y: number }[] = [];
+
         try {
           const imgData = ctx.getImageData(0, 0, tCanvas.width, tCanvas.height);
           const data = imgData.data;
-          const cell = 4;
-          const gw = Math.ceil(tCanvas.width / cell);
-          const gh = Math.ceil(tCanvas.height / cell);
-          const grid = new Uint8Array(gw * gh);
-          let totalCells = 0;
-          const pts: { x: number; y: number }[] = [];
 
           for (let y = 0; y < tCanvas.height; y += cell) {
             const gy = Math.floor(y / cell);
@@ -447,11 +527,17 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
               }
             }
           }
-          guidePointsRef.current = pts;
-          letterGridRef.current = { grid, width: gw, height: gh, cell, totalCells };
         } catch (err) {
           console.warn('Guide point sampling error (CORS or empty):', err);
         }
+
+        // 100% Reliable Fallback: If canvas was tainted or totalCells is 0, rasterize step corridors
+        if (totalCells === 0 && template.steps && template.steps.length > 0) {
+          totalCells = rasterizeStepCorridorsIntoGrid(grid, gw, gh, cell, template.steps, drawX, drawY, drawW, drawH, pts);
+        }
+
+        guidePointsRef.current = pts;
+        letterGridRef.current = { grid, width: gw, height: gh, cell, totalCells };
       };
       return;
     }
@@ -489,15 +575,16 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
           drawActiveStepMarker(ctx, template.steps, currentStepIndex, drawX, drawY, drawW, drawH);
         }
 
+        const cell = 4;
+        const gw = Math.ceil(tCanvas.width / cell);
+        const gh = Math.ceil(tCanvas.height / cell);
+        const grid = new Uint8Array(gw * gh);
+        let totalCells = 0;
+        const pts: { x: number; y: number }[] = [];
+
         try {
           const imgData = ctx.getImageData(0, 0, tCanvas.width, tCanvas.height);
           const data = imgData.data;
-          const cell = 4;
-          const gw = Math.ceil(tCanvas.width / cell);
-          const gh = Math.ceil(tCanvas.height / cell);
-          const grid = new Uint8Array(gw * gh);
-          let totalCells = 0;
-          const pts: { x: number; y: number }[] = [];
 
           for (let y = 0; y < tCanvas.height; y += cell) {
             const gy = Math.floor(y / cell);
@@ -511,11 +598,16 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
               }
             }
           }
-          guidePointsRef.current = pts;
-          letterGridRef.current = { grid, width: gw, height: gh, cell, totalCells };
         } catch (err) {
           console.warn('Guide point sampling error:', err);
         }
+
+        if (totalCells === 0 && template.steps && template.steps.length > 0) {
+          totalCells = rasterizeStepCorridorsIntoGrid(grid, gw, gh, cell, template.steps, drawX, drawY, drawW, drawH, pts);
+        }
+
+        guidePointsRef.current = pts;
+        letterGridRef.current = { grid, width: gw, height: gh, cell, totalCells };
       };
     }
   };
@@ -555,18 +647,32 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     return false;
   }, []);
 
-  // Helper to test if a drawn point (x, y) is on the calligraphy guide path (letter body)
-  const checkPointOnPath = useCallback((x: number, y: number): boolean => {
-    const nibTolerance = Math.max(8, penSize * 0.7);
-    return isPointOnLetter(x, y, nibTolerance);
+  // Classify drawn point relative to the letter calligraphy body:
+  // - 'core': inside the primary letter ink / thickness (high fidelity)
+  // - 'grazing': touching / brushing the outer contour
+  // - 'off': deviated into outside empty space
+  const classifyPoint = useCallback((x: number, y: number): 'core' | 'grazing' | 'off' => {
+    // Within 4px of letter ink = core
+    if (isPointOnLetter(x, y, 4)) return 'core';
+    // Touching the outside contour = grazing
+    const grazingMargin = Math.max(10, penSize * 0.75);
+    if (isPointOnLetter(x, y, grazingMargin)) return 'grazing';
+    return 'off';
   }, [isPointOnLetter, penSize]);
 
-  // Evaluate drawing thickness coverage against the letter body
+  // Fast check whether point is on or touching the letter
+  const checkPointOnPath = useCallback((x: number, y: number): boolean => {
+    return classifyPoint(x, y) !== 'off';
+  }, [classifyPoint]);
+
+  // Evaluate drawing thickness coverage against the letter body (fill of letter width)
   const calculateCoverageScore = useCallback((): number => {
     const lg = letterGridRef.current;
     if (!lg || lg.totalCells === 0 || !template || template.category === 'freehand') return 0;
 
-    const covered = new Uint8Array(lg.totalCells);
+    // Must allocate matching the entire spatial grid dimensions (width * height)
+    // so indexing cy * width + cx never exceeds array bounds
+    const covered = new Uint8Array(lg.grid.length);
     let coveredCount = 0;
 
     strokes.forEach(stroke => {
@@ -636,7 +742,15 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     const pressure = e.pressure > 0 ? e.pressure : 1;
 
     // Reset stroke path metrics
-    strokeStatsRef.current = { total: 1, onPath: 1, offPathConsecutive: 0 };
+    strokeStatsRef.current = {
+      total: 1,
+      corePoints: 1,
+      grazingPoints: 0,
+      offPathPoints: 0,
+      offPathConsecutive: 0,
+      maxConsecutiveOffPath: 0,
+      hasBrokenAway: false
+    };
 
     // Step constraint check: Student must start at the green launch dot 🟢
     if (template?.steps && template.steps.length > 0 && activeStepPointsRef.current && penType !== 'eraser') {
@@ -707,15 +821,27 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     // Track path adherence
     if (penType !== 'eraser' && template?.steps && template.steps.length > 0) {
       strokeStatsRef.current.total++;
-      if (checkPointOnPath(x, y)) {
-        strokeStatsRef.current.onPath++;
+      const classification = classifyPoint(x, y);
+
+      if (classification === 'core') {
+        strokeStatsRef.current.corePoints++;
+        strokeStatsRef.current.offPathConsecutive = 0;
+      } else if (classification === 'grazing') {
+        strokeStatsRef.current.grazingPoints++;
         strokeStatsRef.current.offPathConsecutive = 0;
       } else {
+        strokeStatsRef.current.offPathPoints++;
         strokeStatsRef.current.offPathConsecutive++;
-        if (strokeStatsRef.current.offPathConsecutive === 14) {
+        if (strokeStatsRef.current.offPathConsecutive > strokeStatsRef.current.maxConsecutiveOffPath) {
+          strokeStatsRef.current.maxConsecutiveOffPath = strokeStatsRef.current.offPathConsecutive;
+        }
+
+        // Break-away check: If consecutive points in empty space >= 8, mark break away and alert
+        if (strokeStatsRef.current.offPathConsecutive >= 8) {
+          strokeStatsRef.current.hasBrokenAway = true;
           setStepAlert({
             type: 'error',
-            message: '⚠️ انتبه: التزم بمسار الحرف وجريان القلم',
+            message: '⚠️ تنبيه: خرج القلم عن مسار الحرف! التزم بالحبر',
             timestamp: Date.now()
           });
           audioService.playErrorSound();
@@ -752,78 +878,95 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
 
           if (endDist <= endThreshold) {
             // Check stroke adherence to letter path!
-            const pathRatio = strokeStatsRef.current.total > 0
-              ? (strokeStatsRef.current.onPath / strokeStatsRef.current.total)
-              : 1;
+            const stats = strokeStatsRef.current;
+            const total = Math.max(1, stats.total);
 
-            if (pathRatio < 0.55) {
-              // Stroke drew in empty space (deviated from letter path)
+            // User Test 2 condition: Did student break away into empty space and arc back?
+            if (stats.hasBrokenAway || stats.maxConsecutiveOffPath >= 8) {
               audioService.playErrorSound();
               setStepAlert({
                 type: 'error',
-                message: 'تنبيه: يجب الرسم فوق مسار خط الحرف بدقة ✍️',
+                message: 'تنبيه: خرج القلم عن مسار الحرف! يجب الاستمرار على مسار الخط دون انقطاع ✍️',
                 timestamp: Date.now()
               });
               if (isLessonStarted) {
-                audioService.speakArabic('ارسم فوق مسار الحرف بدقة');
+                audioService.speakArabic('خرج القلم عن مسار الحرف! التزم بالخط دون انقطاع');
               }
             } else {
-              // Reached red dot AND followed path successfully!
-              audioService.playStepSuccessSound();
-              const nextIdx = currentStepIndex + 1;
+              // Path accuracy score:
+              // Core points inside thickness: 100% credit
+              // Grazing points: 45% credit
+              const pathScore = Math.min(100, Math.max(25, Math.round(((stats.corePoints * 1.0 + stats.grazingPoints * 0.45) / total) * 100)));
 
-              if (nextIdx < template.steps.length) {
-                setCurrentStepIndex(nextIdx);
-                const nextStep = template.steps[nextIdx];
-                const stepName = getArabicOrdinal(currentStepIndex + 1);
+              if (pathScore < 45) {
+                // Stroke drew mostly outside or off-center
+                audioService.playErrorSound();
                 setStepAlert({
-                  type: 'success',
-                  message: `رائع! أتممت ${stepName} بنجاح ✓`,
+                  type: 'error',
+                  message: 'تنبيه: يجب الرسم فوق مسار خط الحرف بدقة ✍️',
                   timestamp: Date.now()
                 });
                 if (isLessonStarted) {
-                  const nextPrompt = getStepAudioPrompt(nextStep);
-                  setTimeout(() => {
-                    audioService.speakArabic(nextPrompt);
-                  }, 400);
+                  audioService.speakArabic('ارسم فوق مسار الحرف بدقة');
                 }
               } else {
-                // ALL STEPS COMPLETED! Generate comprehensive evaluation scorecard
-                const startEndScore = 100; // Both start and end points satisfied
-                const pathScore = Math.min(100, Math.round(pathRatio * 100));
-                const coverageScore = calculateCoverageScore();
-                const finalScore = Math.min(100, Math.round(startEndScore * 0.25 + pathScore * 0.45 + coverageScore * 0.30));
+                // Reached red dot AND followed path continuously!
+                audioService.playStepSuccessSound();
+                const nextIdx = currentStepIndex + 1;
 
-                let feedback = '';
-                if (finalScore >= 88) feedback = 'ما شاء الله! جريان قلم متقن ومسار متميز 🌟';
-                else if (finalScore >= 72) feedback = 'جيد جداً! رسم دقيق مع استقرار في القلم 👍';
-                else feedback = 'محاولة طيبة! حاول ملء عرض الحرف والالتزام بالمسار أكثر ✍️';
+                if (nextIdx < template.steps.length) {
+                  setCurrentStepIndex(nextIdx);
+                  const nextStep = template.steps[nextIdx];
+                  const stepName = getArabicOrdinal(currentStepIndex + 1);
+                  setStepAlert({
+                    type: 'success',
+                    message: `رائع! أتممت ${stepName} بنجاح ✓`,
+                    timestamp: Date.now()
+                  });
+                  if (isLessonStarted) {
+                    const nextPrompt = getStepAudioPrompt(nextStep);
+                    setTimeout(() => {
+                      audioService.speakArabic(nextPrompt);
+                    }, 400);
+                  }
+                } else {
+                  // ALL STEPS COMPLETED! Generate comprehensive evaluation scorecard
+                  const startEndScore = 100; // Both start and end points satisfied
+                  const coverageScore = calculateCoverageScore();
+                  // Combined grade: 20% Start/End + 50% Path Adherence + 30% Width Fill / Coverage
+                  const finalScore = Math.min(100, Math.max(30, Math.round(startEndScore * 0.20 + pathScore * 0.50 + coverageScore * 0.30)));
 
-                setEvaluationModal({
-                  isOpen: true,
-                  totalScore: finalScore,
-                  startEndScore,
-                  pathScore,
-                  coverageScore,
-                  feedback
-                });
+                  let feedback = '';
+                  if (finalScore >= 88) feedback = 'ما شاء الله! جريان قلم متقن ومسار متميز 🌟';
+                  else if (finalScore >= 72) feedback = 'جيد جداً! رسم دقيق مع استقرار في القلم 👍';
+                  else feedback = 'محاولة طيبة! حاول ملء عرض الحرف والالتزام بالمسار أكثر ✍️';
 
-                confetti({
-                  particleCount: 90,
-                  spread: 75,
-                  origin: { y: 0.6 }
-                });
-                audioService.playSuccessFanfare();
-                if (isLessonStarted) {
-                  audioService.speakArabic(`ممتاز جداً! حققت درجة ${finalScore} في المئة. ${feedback}`);
-                }
-                setStepAlert({
-                  type: 'success',
-                  message: `مبارك! أتممت كتابة الحرف بدرجة ${finalScore}% بنجاح 🎉`,
-                  timestamp: Date.now()
-                });
-                if (onGoalAchieved) {
-                  onGoalAchieved(finalScore);
+                  setEvaluationModal({
+                    isOpen: true,
+                    totalScore: finalScore,
+                    startEndScore,
+                    pathScore,
+                    coverageScore,
+                    feedback
+                  });
+
+                  confetti({
+                    particleCount: 90,
+                    spread: 75,
+                    origin: { y: 0.6 }
+                  });
+                  audioService.playSuccessFanfare();
+                  if (isLessonStarted) {
+                    audioService.speakArabic(`ممتاز جداً! حققت درجة ${finalScore} في المئة. ${feedback}`);
+                  }
+                  setStepAlert({
+                    type: 'success',
+                    message: `مبارك! أتممت كتابة الحرف بدرجة ${finalScore}% بنجاح 🎉`,
+                    timestamp: Date.now()
+                  });
+                  if (onGoalAchieved) {
+                    onGoalAchieved(finalScore);
+                  }
                 }
               }
             }
@@ -864,7 +1007,15 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
 
     if (isAirDrawing) {
       if (!activeAirStrokeRef.current) {
-        strokeStatsRef.current = { total: 1, onPath: 1, offPathConsecutive: 0 };
+        strokeStatsRef.current = {
+          total: 1,
+          corePoints: 1,
+          grazingPoints: 0,
+          offPathPoints: 0,
+          offPathConsecutive: 0,
+          maxConsecutiveOffPath: 0,
+          hasBrokenAway: false
+        };
         // Start air stroke - validate green dot start
         if (template?.steps && template.steps.length > 0 && activeStepPointsRef.current && penType !== 'eraser') {
           const active = activeStepPointsRef.current;
@@ -908,15 +1059,25 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
           // Track path adherence
           if (penType !== 'eraser' && template?.steps && template.steps.length > 0) {
             strokeStatsRef.current.total++;
-            if (checkPointOnPath(x, y)) {
-              strokeStatsRef.current.onPath++;
+            const classification = classifyPoint(x, y);
+
+            if (classification === 'core') {
+              strokeStatsRef.current.corePoints++;
+              strokeStatsRef.current.offPathConsecutive = 0;
+            } else if (classification === 'grazing') {
+              strokeStatsRef.current.grazingPoints++;
               strokeStatsRef.current.offPathConsecutive = 0;
             } else {
+              strokeStatsRef.current.offPathPoints++;
               strokeStatsRef.current.offPathConsecutive++;
-              if (strokeStatsRef.current.offPathConsecutive === 14) {
+              if (strokeStatsRef.current.offPathConsecutive > strokeStatsRef.current.maxConsecutiveOffPath) {
+                strokeStatsRef.current.maxConsecutiveOffPath = strokeStatsRef.current.offPathConsecutive;
+              }
+              if (strokeStatsRef.current.offPathConsecutive >= 8) {
+                strokeStatsRef.current.hasBrokenAway = true;
                 setStepAlert({
                   type: 'error',
-                  message: '⚠️ انتبه: التزم بمسار الحرف وجريان القلم',
+                  message: '⚠️ تنبيه: خرج القلم عن مسار الحرف! التزم بالحبر',
                   timestamp: Date.now()
                 });
                 audioService.playErrorSound();
@@ -949,73 +1110,85 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
             const endThreshold = Math.max(52, penSize * 3);
 
             if (endDist <= endThreshold) {
-              const pathRatio = strokeStatsRef.current.total > 0
-                ? (strokeStatsRef.current.onPath / strokeStatsRef.current.total)
-                : 1;
+              const stats = strokeStatsRef.current;
+              const total = Math.max(1, stats.total);
 
-              if (pathRatio < 0.55) {
+              if (stats.hasBrokenAway || stats.maxConsecutiveOffPath >= 8) {
                 audioService.playErrorSound();
                 setStepAlert({
                   type: 'error',
-                  message: 'تنبيه: يجب الرسم فوق مسار خط الحرف بدقة ✍️',
+                  message: 'تنبيه: خرج القلم عن مسار الحرف! يجب الاستمرار على مسار الخط دون انقطاع ✍️',
                   timestamp: Date.now()
                 });
                 if (isLessonStarted) {
-                  audioService.speakArabic('ارسم فوق مسار الحرف بدقة');
+                  audioService.speakArabic('خرج القلم عن مسار الحرف! التزم بالخط دون انقطاع');
                 }
               } else {
-                audioService.playStepSuccessSound();
-                const nextIdx = currentStepIndex + 1;
-                if (nextIdx < template.steps.length) {
-                  setCurrentStepIndex(nextIdx);
-                  const nextStep = template.steps[nextIdx];
-                  const stepName = getArabicOrdinal(currentStepIndex + 1);
+                const pathScore = Math.min(100, Math.max(25, Math.round(((stats.corePoints * 1.0 + stats.grazingPoints * 0.45) / total) * 100)));
+
+                if (pathScore < 45) {
+                  audioService.playErrorSound();
                   setStepAlert({
-                    type: 'success',
-                    message: `رائع! أتممت ${stepName} بنجاح ✓`,
+                    type: 'error',
+                    message: 'تنبيه: يجب الرسم فوق مسار خط الحرف بدقة ✍️',
                     timestamp: Date.now()
                   });
                   if (isLessonStarted) {
-                    const nextPrompt = getStepAudioPrompt(nextStep);
-                    setTimeout(() => {
-                      audioService.speakArabic(nextPrompt);
-                    }, 400);
+                    audioService.speakArabic('ارسم فوق مسار الحرف بدقة');
                   }
                 } else {
-                  const startEndScore = 100;
-                  const pathScore = Math.min(100, Math.round(pathRatio * 100));
-                  const coverageScore = calculateCoverageScore();
-                  const finalScore = Math.min(100, Math.round(startEndScore * 0.25 + pathScore * 0.45 + coverageScore * 0.30));
+                  audioService.playStepSuccessSound();
+                  const nextIdx = currentStepIndex + 1;
+                  if (nextIdx < template.steps.length) {
+                    setCurrentStepIndex(nextIdx);
+                    const nextStep = template.steps[nextIdx];
+                    const stepName = getArabicOrdinal(currentStepIndex + 1);
+                    setStepAlert({
+                      type: 'success',
+                      message: `رائع! أتممت ${stepName} بنجاح ✓`,
+                      timestamp: Date.now()
+                    });
+                    if (isLessonStarted) {
+                      const nextPrompt = getStepAudioPrompt(nextStep);
+                      setTimeout(() => {
+                        audioService.speakArabic(nextPrompt);
+                      }, 400);
+                    }
+                  } else {
+                    const startEndScore = 100;
+                    const coverageScore = calculateCoverageScore();
+                    const finalScore = Math.min(100, Math.max(30, Math.round(startEndScore * 0.20 + pathScore * 0.50 + coverageScore * 0.30)));
 
-                  let feedback = '';
-                  if (finalScore >= 88) feedback = 'ما شاء الله! جريان قلم متقن ومسار متميز 🌟';
-                  else if (finalScore >= 72) feedback = 'جيد جداً! رسم دقيق مع استقرار في القلم 👍';
-                  else feedback = 'محاولة طيبة! حاول ملء عرض الحرف والالتزام بالمسار أكثر ✍️';
+                    let feedback = '';
+                    if (finalScore >= 88) feedback = 'ما شاء الله! جريان قلم متقن ومسار متميز 🌟';
+                    else if (finalScore >= 72) feedback = 'جيد جداً! رسم دقيق مع استقرار في القلم 👍';
+                    else feedback = 'محاولة طيبة! حاول ملء عرض الحرف والالتزام بالمسار أكثر ✍️';
 
-                  setEvaluationModal({
-                    isOpen: true,
-                    totalScore: finalScore,
-                    startEndScore,
-                    pathScore,
-                    coverageScore,
-                    feedback
-                  });
+                    setEvaluationModal({
+                      isOpen: true,
+                      totalScore: finalScore,
+                      startEndScore,
+                      pathScore,
+                      coverageScore,
+                      feedback
+                    });
 
-                  confetti({
-                    particleCount: 90,
-                    spread: 75,
-                    origin: { y: 0.6 }
-                  });
-                  audioService.playSuccessFanfare();
-                  if (isLessonStarted) {
-                    audioService.speakArabic(`ممتاز جداً! حققت درجة ${finalScore} في المئة. ${feedback}`);
+                    confetti({
+                      particleCount: 90,
+                      spread: 75,
+                      origin: { y: 0.6 }
+                    });
+                    audioService.playSuccessFanfare();
+                    if (isLessonStarted) {
+                      audioService.speakArabic(`ممتاز جداً! حققت درجة ${finalScore} في المئة. ${feedback}`);
+                    }
+                    setStepAlert({
+                      type: 'success',
+                      message: `مبارك! أتممت كتابة الحرف بدرجة ${finalScore}% بنجاح 🎉`,
+                      timestamp: Date.now()
+                    });
+                    if (onGoalAchieved) onGoalAchieved(finalScore);
                   }
-                  setStepAlert({
-                    type: 'success',
-                    message: `مبارك! أتممت كتابة الحرف بدرجة ${finalScore}% بنجاح 🎉`,
-                    timestamp: Date.now()
-                  });
-                  if (onGoalAchieved) onGoalAchieved(finalScore);
                 }
               }
             } else {
@@ -1034,7 +1207,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         }
       }
     }
-  }, [virtualCursor, isAirDrawing, isARMode, dimensions, penType, penColor, penSize, calligraphyAngle, redrawCanvas, currentStepIndex, template, onGoalAchieved, checkPointOnPath, calculateCoverageScore, isLessonStarted]);
+  }, [virtualCursor, isAirDrawing, isARMode, dimensions, penType, penColor, penSize, calligraphyAngle, redrawCanvas, currentStepIndex, template, onGoalAchieved, checkPointOnPath, classifyPoint, calculateCoverageScore, isLessonStarted]);
 
   // Imperative actions exposed to parent component
   useImperativeHandle(ref, () => ({
@@ -1050,7 +1223,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       setEvaluationModal(null);
       setIsLessonStarted(false);
       strokeStartedAtGreenRef.current = false;
-      strokeStatsRef.current = { total: 0, onPath: 0, offPathConsecutive: 0 };
+      resetStrokeStats();
       const canvas = canvasRef.current;
       if (canvas) {
         const ctx = canvas.getContext('2d');
@@ -1281,7 +1454,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                     setEvaluationModal(null);
                     setIsLessonStarted(false);
                     strokeStartedAtGreenRef.current = false;
-                    strokeStatsRef.current = { total: 0, onPath: 0, offPathConsecutive: 0 };
+                    resetStrokeStats();
                   }}
                   className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer"
                   title="إعادة من الخطوة الأولى"
@@ -1412,7 +1585,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                   setIsLessonStarted(false);
                   setCurrentStepIndex(0);
                   setStepAlert(null);
-                  strokeStatsRef.current = { total: 0, onPath: 0, offPathConsecutive: 0 };
+                  resetStrokeStats();
                   const canvas = canvasRef.current;
                   if (canvas) {
                     const ctx = canvas.getContext('2d');
