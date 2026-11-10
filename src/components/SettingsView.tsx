@@ -27,22 +27,37 @@ import {
   Table,
   Repeat,
   Compass,
-  Footprints
+  Footprints,
+  Layers
 } from 'lucide-react';
+import { BoardStyle, GuideColor } from '../types/drawing';
+import { GUIDE_COLORS } from '../data/drawingTemplates';
 
 interface SettingsViewProps {
   onBackToWhiteboard: () => void;
   templates: DrawingTemplate[];
   onUpdateTemplates: (newTemplates: DrawingTemplate[]) => void;
+  boardStyle?: BoardStyle;
+  onSelectBoardStyle?: (style: BoardStyle) => void;
+  guideColor?: GuideColor;
+  onSelectGuideColor?: (color: GuideColor) => void;
+  templateOpacity?: number;
+  onChangeTemplateOpacity?: (opacity: number) => void;
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
   onBackToWhiteboard,
   templates,
   onUpdateTemplates,
+  boardStyle = 'white',
+  onSelectBoardStyle,
+  guideColor = 'yellow',
+  onSelectGuideColor,
+  templateOpacity = 0.35,
+  onChangeTemplateOpacity,
 }) => {
-  // Tabs: 'lessons' (إدارة وتعديل), 'table' (ورقة الدروس), 'sheet' (ربط الشيت)
-  const [activeTab, setActiveTab] = useState<'lessons' | 'table' | 'sheet'>('lessons');
+  // Tabs: 'lessons' (إدارة وتعديل), 'table' (ورقة الدروس), 'sheet' (ربط الشيت), 'board' (إعدادات وخلفيات السبورة)
+  const [activeTab, setActiveTab] = useState<'lessons' | 'table' | 'sheet' | 'board'>('lessons');
 
   // Sheet connection states
   const [sheetUrl, setSheetUrl] = useState<string>(() => sheetService.getStoredSheetUrl());
@@ -405,6 +420,18 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             >
               <FileSpreadsheet className="w-4 h-4" />
               <span>ربط Google Sheets</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('board')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap ${
+                activeTab === 'board'
+                  ? 'bg-amber-500 text-slate-950 shadow-md'
+                  : 'bg-slate-900 hover:bg-slate-800 text-slate-300'
+              }`}
+            >
+              <Layers className="w-4 h-4" />
+              <span>إعدادات وخلفيات السبورة</span>
             </button>
           </div>
 
@@ -873,6 +900,229 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <code>{GOOGLE_APPS_SCRIPT_CODE}</code>
                 </pre>
               </div>
+            </div>
+
+          </div>
+        )}
+
+        {/* ======================= TAB 4: WHITEBOARD SETTINGS & BACKGROUNDS ======================= */}
+        {activeTab === 'board' && (
+          <div className="space-y-6">
+            
+            {/* Header Card */}
+            <div className="p-5 sm:p-6 bg-slate-900/90 rounded-2xl border border-slate-800 shadow-xl space-y-2">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                  <Layers className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm sm:text-base text-slate-100">
+                    إعدادات وخلفيات السبورة الافتراضية
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    تخصيص نوع خلفية السبورة، ولون خطوط الشف الدليلية، ومستوى الشفافية أثناء تدريب الطلاب.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              
+              {/* Left Column: Board Settings Controls */}
+              <div className="space-y-5">
+                
+                {/* 1. Background Style Selection */}
+                <div className="p-5 bg-slate-900 rounded-2xl border border-slate-800 space-y-3.5">
+                  <label className="block text-xs sm:text-sm font-bold text-amber-400">
+                    ١. نوع وخلفية السبورة:
+                  </label>
+                  <div className="grid grid-cols-2 gap-3">
+                    
+                    {/* سبورة بيضاء */}
+                    <button
+                      type="button"
+                      onClick={() => onSelectBoardStyle && onSelectBoardStyle('white')}
+                      className={`p-3.5 rounded-xl border text-xs sm:text-sm font-bold flex items-center gap-3 transition-all cursor-pointer ${
+                        boardStyle === 'white'
+                          ? 'bg-slate-100 text-slate-950 border-white shadow-lg ring-2 ring-amber-400'
+                          : 'bg-slate-950/80 hover:bg-slate-800 text-slate-200 border-slate-700'
+                      }`}
+                    >
+                      <span className="w-5 h-5 rounded-lg bg-white border border-slate-400 shrink-0 shadow-xs" />
+                      <div className="text-right">
+                        <div>سبورة بيضاء</div>
+                        <div className="text-[10px] opacity-75 font-normal">افتراضية صافية</div>
+                      </div>
+                    </button>
+
+                    {/* سبورة داكنة */}
+                    <button
+                      type="button"
+                      onClick={() => onSelectBoardStyle && onSelectBoardStyle('dark')}
+                      className={`p-3.5 rounded-xl border text-xs sm:text-sm font-bold flex items-center gap-3 transition-all cursor-pointer ${
+                        boardStyle === 'dark'
+                          ? 'bg-slate-950 text-amber-400 border-amber-400 shadow-lg ring-2 ring-amber-400'
+                          : 'bg-slate-950/80 hover:bg-slate-800 text-slate-200 border-slate-700'
+                      }`}
+                    >
+                      <span className="w-5 h-5 rounded-lg bg-slate-950 border border-slate-700 shrink-0 shadow-xs" />
+                      <div className="text-right">
+                        <div>سبورة داكنة</div>
+                        <div className="text-[10px] opacity-75 font-normal">حبر ذهبي وأبيض</div>
+                      </div>
+                    </button>
+
+                    {/* سبورة خضراء */}
+                    <button
+                      type="button"
+                      onClick={() => onSelectBoardStyle && onSelectBoardStyle('green')}
+                      className={`p-3.5 rounded-xl border text-xs sm:text-sm font-bold flex items-center gap-3 transition-all cursor-pointer ${
+                        boardStyle === 'green'
+                          ? 'bg-emerald-950 text-emerald-300 border-emerald-400 shadow-lg ring-2 ring-emerald-400'
+                          : 'bg-slate-950/80 hover:bg-slate-800 text-slate-200 border-slate-700'
+                      }`}
+                    >
+                      <span className="w-5 h-5 rounded-lg bg-emerald-900 border border-emerald-600 shrink-0 shadow-xs" />
+                      <div className="text-right">
+                        <div>سبورة خضراء</div>
+                        <div className="text-[10px] opacity-75 font-normal">لوح مدرسي تقليدي</div>
+                      </div>
+                    </button>
+
+                    {/* ميزان الخط */}
+                    <button
+                      type="button"
+                      onClick={() => onSelectBoardStyle && onSelectBoardStyle('grid')}
+                      className={`p-3.5 rounded-xl border text-xs sm:text-sm font-bold flex items-center gap-3 transition-all cursor-pointer ${
+                        boardStyle === 'grid'
+                          ? 'bg-amber-100 text-amber-950 border-amber-500 shadow-lg ring-2 ring-amber-400'
+                          : 'bg-slate-950/80 hover:bg-slate-800 text-slate-200 border-slate-700'
+                      }`}
+                    >
+                      <span className="w-5 h-5 rounded-lg bg-amber-50 border border-amber-300 flex items-center justify-center text-xs text-amber-800 font-mono shrink-0 shadow-xs font-bold">#</span>
+                      <div className="text-right">
+                        <div>ميزان الخط والشبكة</div>
+                        <div className="text-[10px] opacity-75 font-normal">خطوط شبكية مساعدة</div>
+                      </div>
+                    </button>
+
+                  </div>
+                </div>
+
+                {/* 2. Guide Color */}
+                <div className="p-5 bg-slate-900 rounded-2xl border border-slate-800 space-y-3.5">
+                  <label className="block text-xs sm:text-sm font-bold text-amber-400">
+                    ٢. لون الخط الدليلي للنموذج (للشف والتوجيه):
+                  </label>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                    {GUIDE_COLORS.map(g => (
+                      <button
+                        key={g.id}
+                        type="button"
+                        onClick={() => onSelectGuideColor && onSelectGuideColor(g.id)}
+                        className={`p-3 rounded-xl flex items-center gap-2.5 transition-all cursor-pointer border ${
+                          guideColor === g.id
+                            ? 'border-amber-400 bg-slate-800 shadow-md ring-2 ring-amber-400/50'
+                            : 'border-slate-800 bg-slate-950 hover:bg-slate-800/60'
+                        }`}
+                      >
+                        <span
+                          className="w-4 h-4 rounded-full border border-slate-700 shadow-xs"
+                          style={{ backgroundColor: g.hex }}
+                        />
+                        <span className="text-xs font-bold text-slate-200">{g.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 3. Template Tracing Opacity */}
+                <div className="p-5 bg-slate-900 rounded-2xl border border-slate-800 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs sm:text-sm font-bold text-amber-400">
+                      ٣. شفافية نموذج الشف والتتبع:
+                    </label>
+                    <span className="font-mono font-bold text-amber-400 text-xs px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                      {Math.round(templateOpacity * 100)}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.1"
+                    max="0.8"
+                    step="0.05"
+                    value={templateOpacity}
+                    onChange={(e) => onChangeTemplateOpacity && onChangeTemplateOpacity(Number(e.target.value))}
+                    className="w-full accent-amber-500 cursor-pointer h-2.5 bg-slate-950 rounded-lg"
+                  />
+                  <div className="flex items-center justify-between text-[11px] text-slate-400">
+                    <span>خفيف جداً (10% - للطلاب المتقدمين)</span>
+                    <span>واضح جداً (80% - للمبتدئين)</span>
+                  </div>
+                </div>
+
+              </div>
+
+              {/* Right Column: Live Interactive Preview */}
+              <div className="p-5 bg-slate-900 rounded-2xl border border-slate-800 flex flex-col justify-between gap-4">
+                <div>
+                  <h4 className="text-xs sm:text-sm font-bold text-slate-200 mb-2 flex items-center gap-2">
+                    <span>معاينة حية لشكل السبورة والخط</span>
+                  </h4>
+                  <p className="text-xs text-slate-400 mb-4">
+                    هكذا ستظهر السبورة مع النموذج أثناء التدريب للطلاب:
+                  </p>
+
+                  <div
+                    className={`w-full h-64 rounded-2xl border flex flex-col items-center justify-center p-4 relative overflow-hidden transition-all shadow-inner ${
+                      boardStyle === 'white'
+                        ? 'bg-slate-50 border-slate-300 text-slate-950'
+                        : boardStyle === 'dark'
+                        ? 'bg-slate-950 border-slate-800 text-slate-100'
+                        : boardStyle === 'green'
+                        ? 'bg-emerald-950 border-emerald-800 text-emerald-100'
+                        : 'bg-[#faf8f5] border-amber-200 text-amber-950'
+                    }`}
+                  >
+                    {/* Grid Pattern if grid selected */}
+                    {boardStyle === 'grid' && (
+                      <div
+                        className="absolute inset-0 opacity-40 pointer-events-none"
+                        style={{
+                          backgroundImage: 'linear-gradient(#f59e0b 1px, transparent 1px), linear-gradient(90deg, #f59e0b 1px, transparent 1px)',
+                          backgroundSize: '24px 24px'
+                        }}
+                      />
+                    )}
+
+                    {/* Simulated Template Guide */}
+                    <div
+                      className="font-serif text-7xl font-bold tracking-wider select-none transition-all duration-300"
+                      style={{
+                        opacity: templateOpacity,
+                        color: GUIDE_COLORS.find(g => g.id === guideColor)?.hex || '#f59e0b'
+                      }}
+                    >
+                      خط
+                    </div>
+
+                    <div className="mt-4 text-xs font-mono font-bold px-3 py-1 rounded-full bg-slate-900/80 text-amber-400 border border-slate-700 z-10">
+                      خلفية: {boardStyle} • لون الدليل: {guideColor} • شفافية: {Math.round(templateOpacity * 100)}%
+                    </div>
+                  </div>
+                </div>
+
+                {/* Back to Whiteboard Action */}
+                <button
+                  type="button"
+                  onClick={onBackToWhiteboard}
+                  className="w-full py-3 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-sm shadow-md transition-all active:scale-95 flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <ArrowRight className="w-4 h-4 rotate-180" />
+                  <span>تطبيق الإعدادات والعودة إلى السبورة</span>
+                </button>
+              </div>
+
             </div>
 
           </div>

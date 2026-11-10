@@ -34,10 +34,7 @@ export default function App() {
 
   // Templates State (loaded from Google Sheets / LocalStorage / Default templates)
   const [allTemplates, setAllTemplates] = useState<DrawingTemplate[]>(() => sheetService.getLocalTemplates());
-  const [selectedTemplate, setSelectedTemplate] = useState<DrawingTemplate | null>(() => {
-    const initialList = sheetService.getLocalTemplates();
-    return initialList.length > 0 ? initialList[0] : DRAWING_TEMPLATES[0];
-  });
+  const [selectedTemplate, setSelectedTemplate] = useState<DrawingTemplate | null>(null);
 
   // Listen to hash changes (e.g. #/settings or browser back/forward buttons)
   useEffect(() => {
@@ -61,24 +58,18 @@ export default function App() {
       sheetService.fetchLessonsFromSheet().then((res) => {
         if (res.success && res.lessons.length > 0) {
           setAllTemplates(res.lessons);
-          setSelectedTemplate(prev => {
-            if (!prev || prev.id.startsWith('letter_alif')) {
-              return res.lessons[0];
-            }
-            const found = res.lessons.find(l => l.id === prev.id);
-            return found || res.lessons[0];
-          });
+          // Keep whiteboard blank on startup until student explicitly chooses a lesson
         }
       }).catch(() => {});
     }
   }, []);
 
-  // Core Application States
-  const [boardStyle, setBoardStyle] = useState<BoardStyle>('grid');
-  const [penType, setPenType] = useState<PenType>('calligraphy');
+  // Core Application States (Default: White Board, Smooth Marker, Angle 120°)
+  const [boardStyle, setBoardStyle] = useState<BoardStyle>('white');
+  const [penType, setPenType] = useState<PenType>('marker');
   const [penColor, setPenColor] = useState<string>('#0f172a');
   const [penSize, setPenSize] = useState<number>(18);
-  const [calligraphyAngle, setCalligraphyAngle] = useState<number>(45);
+  const [calligraphyAngle, setCalligraphyAngle] = useState<number>(120);
 
   // Template State
   const [customTemplates, setCustomTemplates] = useState<DrawingTemplate[]>([]);
@@ -305,6 +296,12 @@ export default function App() {
             setSelectedTemplate(updated[0] || null);
           }
         }}
+        boardStyle={boardStyle}
+        onSelectBoardStyle={(style) => setBoardStyle(style)}
+        guideColor={guideColor}
+        onSelectGuideColor={setGuideColor}
+        templateOpacity={templateOpacity}
+        onChangeTemplateOpacity={setTemplateOpacity}
       />
     );
   }
@@ -394,6 +391,7 @@ export default function App() {
             isFullscreen={isFullscreen}
             onToggleFullscreen={toggleFullscreen}
             onOpenHelp={() => setIsHelpOpen(true)}
+            onOpenLibrary={() => setIsLibraryOpen(true)}
             onNextRepetition={() => {
               const totalReps = Number(selectedTemplate?.repeatCount) || 1;
               if (currentRepetition < totalReps) {

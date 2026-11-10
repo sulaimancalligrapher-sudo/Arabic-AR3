@@ -14,7 +14,9 @@ import {
   Minimize2, 
   Award, 
   X,
-  Camera
+  Camera,
+  BookOpen,
+  FolderOpen
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -45,6 +47,7 @@ interface WhiteboardCanvasProps {
   isFullscreen?: boolean;
   onToggleFullscreen?: () => void;
   onOpenHelp?: () => void;
+  onOpenLibrary?: () => void;
   onNextRepetition?: () => void;
   onAccuracyUpdate?: (accuracy: number) => void;
   onGoalAchieved?: (accuracy: number) => void;
@@ -62,11 +65,12 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
   videoElement,
   virtualCursor,
   isAirDrawing,
-  calligraphyAngle = 45,
+  calligraphyAngle = 120,
   currentRepetition = 1,
   isFullscreen = false,
   onToggleFullscreen,
   onOpenHelp,
+  onOpenLibrary,
   onNextRepetition,
   onAccuracyUpdate,
   onGoalAchieved,
@@ -741,6 +745,32 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     const y = e.clientY - rect.top;
     const pressure = e.pressure > 0 ? e.pressure : 1;
 
+    // 1. Guard: Check if a lesson is chosen
+    if (!template) {
+      audioService.playErrorSound();
+      setStepAlert({
+        type: 'error',
+        message: '⚠️ يرجى اختيار درس أولاً للبدء في التدريب 📚',
+        timestamp: Date.now()
+      });
+      if (onOpenLibrary) {
+        onOpenLibrary();
+      }
+      return;
+    }
+
+    // 2. Guard: Check if student has clicked ( ابدأ )
+    if (!isLessonStarted) {
+      audioService.playErrorSound();
+      setStepAlert({
+        type: 'error',
+        message: '⚠️ انقر على زر ( ابدأ ) في الشريط لبدء التمرين وسماع التوجيه 🎧',
+        timestamp: Date.now()
+      });
+      audioService.speakArabic('انقر زر ابدأ لبدء التمرين');
+      return;
+    }
+
     // Reset stroke path metrics
     strokeStatsRef.current = {
       total: 1,
@@ -1006,6 +1036,32 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     const y = virtualCursor.y * dimensions.height;
 
     if (isAirDrawing) {
+      if (!template) {
+        if (!activeAirStrokeRef.current) {
+          audioService.playErrorSound();
+          setStepAlert({
+            type: 'error',
+            message: '⚠️ يرجى اختيار درس أولاً للبدء في التدريب 📚',
+            timestamp: Date.now()
+          });
+          if (onOpenLibrary) onOpenLibrary();
+        }
+        return;
+      }
+
+      if (!isLessonStarted) {
+        if (!activeAirStrokeRef.current) {
+          audioService.playErrorSound();
+          setStepAlert({
+            type: 'error',
+            message: '⚠️ انقر على زر ( ابدأ ) في الشريط لبدء التمرين وسماع التوجيه 🎧',
+            timestamp: Date.now()
+          });
+          audioService.speakArabic('انقر زر ابدأ لبدء التمرين');
+        }
+        return;
+      }
+
       if (!activeAirStrokeRef.current) {
         strokeStatsRef.current = {
           total: 1,
@@ -1345,6 +1401,31 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         className="absolute inset-0 z-20 cursor-crosshair touch-none"
       />
 
+      {/* Empty State Banner when no lesson is chosen */}
+      {!template && (
+        <div className="absolute inset-0 flex items-center justify-center p-4 pointer-events-none z-20">
+          <div className="pointer-events-auto max-w-sm sm:max-w-md w-full bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-2xl p-6 sm:p-8 shadow-2xl text-center flex flex-col items-center gap-4 animate-in fade-in zoom-in-95 duration-200">
+            <div className="w-14 h-14 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shadow-md">
+              <BookOpen className="w-7 h-7" />
+            </div>
+            <div>
+              <h2 className="font-bold text-base sm:text-lg text-slate-100 mb-1.5">السبورة جاهزة للتدريب</h2>
+              <p className="text-xs sm:text-sm text-slate-400 leading-relaxed">
+                يرجى اختيار درس من مكتبة الدروس أولاً، ثم النقر على زر <span className="text-amber-400 font-bold">( ابدأ )</span> للبدء في كتابة الحرف وتقييم مسار القلم.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onOpenLibrary}
+              className="mt-1 px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs sm:text-sm flex items-center gap-2 shadow-lg hover:shadow-amber-500/20 active:scale-95 transition-all cursor-pointer"
+            >
+              <FolderOpen className="w-4 h-4" />
+              <span>اختيار درس من المكتبة 📚</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Layer 3: Unified Single-Row Top Bar (الشريط الموحد المدمج على صف واحد) */}
       <div className="absolute top-2 sm:top-3 inset-x-2 sm:inset-x-4 z-30 pointer-events-none flex justify-center">
         <div className="pointer-events-auto flex items-center justify-between w-full max-w-5xl px-3 sm:px-4 py-1.5 sm:py-2 rounded-2xl bg-slate-900/90 backdrop-blur-md border border-slate-700/80 shadow-2xl text-white gap-2">
@@ -1370,7 +1451,15 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                 ) : null}
               </div>
             ) : (
-              <span className="text-xs text-slate-300 font-medium">لوحة الخط الحر</span>
+              <button
+                type="button"
+                onClick={onOpenLibrary}
+                className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs sm:text-sm shadow-md transition-all active:scale-95 cursor-pointer"
+                title="فتح مكتبة الدروس لاختيار درس"
+              >
+                <FolderOpen className="w-3.5 h-3.5" />
+                <span>اختيار درس 📚</span>
+              </button>
             )}
           </div>
 
@@ -1463,7 +1552,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                 </button>
               </div>
             ) : (
-              <span className="text-xs text-slate-400 hidden sm:inline">مسار حر للتدريب</span>
+              <span className="text-xs text-amber-300 hidden sm:inline">اختر درساً أولاً ثم انقر ( ابدأ ) لبدء الرسم</span>
             )}
           </div>
 
