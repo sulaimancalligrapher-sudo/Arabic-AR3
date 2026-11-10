@@ -512,6 +512,7 @@ class SheetService {
     // automatically migrate it to the active 7-column URL so steps sync across all devices!
     if (stored && (
       stored.includes('AKfycbwjtf7BiA8k5BEQgw1n0s_VYeBNzTmL-IitZ8m_YKjbnVfd_dZHL4svN08x4jNfw3LNqA') ||
+      stored.includes('AKfycbw3_rZtsYcs4OLZU242sU6Kgc6OHWc6sSQ-EmLsJT4yOUCkHVP38ootritf_vnRmG1Oug') ||
       !stored.trim()
     )) {
       localStorage.setItem(SHEET_URL_KEY, DEFAULT_SHEET_URL);
@@ -876,12 +877,18 @@ class SheetService {
     if (!str) return '';
     return str
       .trim()
-      // Convert Arabic-Indic numerals (٠-٩) to ASCII (0-9)
+      // Remove all Arabic diacritics / tashkeel (fatha, damma, kasra, sukun, shadda, tanween, tatweel)
+      .replace(/[\u064B-\u065F\u0670\u0640]/g, '')
+      // Convert Arabic-Indic numerals (٠-٩) and Persian numerals (۰-۹) to standard digits (0-9)
       .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d).toString())
-      // Normalize Arabic characters: Alef with hamza, wasla, madda to bare Alef
-      .replace(/[أإآآٱ]/g, 'ا')
+      .replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d).toString())
+      // Normalize Arabic Alef variants (أ إ آ ٱ) to bare Alef
+      .replace(/[أإآٱ]/g, 'ا')
+      // Normalize Taa Marbuta to Haa
       .replace(/ة/g, 'ه')
-      .replace(/ى/g, 'ي')
+      // Normalize Yaa variants (ى ي ئ) to ي
+      .replace(/[ىيئ]/g, 'ي')
+      .replace(/\s+/g, ' ')
       .toLowerCase();
   }
 
@@ -950,43 +957,28 @@ class SheetService {
       return { success: false, error: 'يرجى إدخال اسم المشترك' };
     }
 
-    // 1. Try live verification via Google Sheets POST if online
-    const url = this.getStoredSheetUrl();
-    if (url) {
-      try {
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify({
-            action: 'verify_registrant',
-            id: rawId.trim(),
-            name: rawName.trim()
-          })
-        });
-
-        if (response.ok) {
-          const json = await response.json();
-          if (json.status === 'success' && json.verified && json.user) {
-            const verifiedUser: RegistrantUser = {
-              id: String(json.user.id),
-              name: String(json.user.name),
-              loginDate: new Date().toISOString()
-            };
-            this.saveStoredUser(verifiedUser);
-            return { success: true, user: verifiedUser };
-          }
-        }
-      } catch {
-        // Fallback to local / cached check
+    // Always fetch the freshest list of registrants from the user's sheet using GET
+    let registrants: RegistrantUser[] = [];
+    try {
+      const fresh = await this.fetchRegistrants();
+      if (fresh.success && fresh.registrants && fresh.registrants.length > 0) {
+        registrants = fresh.registrants;
       }
+    } catch {
+      // Fallback
     }
 
-    // 2. Local / Cached Verification check
-    const registrants = this.getCachedRegistrants();
+    if (registrants.length === 0) {
+      registrants = this.getCachedRegistrants();
+    }
+
+    // Match against the registrants list
     const matched = registrants.find(r => {
       const regId = this.normalizeArabicText(r.id);
       const regName = this.normalizeArabicText(r.name);
-      return regId === cleanId && (regName.includes(cleanName) || cleanName.includes(regName));
+      const idMatches = regId === cleanId;
+      const nameMatches = regName === cleanName || regName.includes(cleanName) || cleanName.includes(regName);
+      return idMatches && nameMatches;
     });
 
     if (matched) {
@@ -999,9 +991,18 @@ class SheetService {
       return { success: true, user: verifiedUser };
     }
 
+    // Check if ID exists but name is different or misspelled
+    const idOnlyMatch = registrants.find(r => this.normalizeArabicText(r.id) === cleanId);
+    if (idOnlyMatch) {
+      return {
+        success: false,
+        error: `رقم المشترك (${rawId}) مسجل في الشيت باسم «${idOnlyMatch.name}»، يرجى التأكد من كتابة الاسم بصورة صحيحة.`
+      };
+    }
+
     return {
       success: false,
-      error: 'رقم المشترك أو الاسم غير مسجل في ورقة المشتركين (ID registrants)'
+      error: `رقم المشترك (${rawId}) غير مسجل في ورقة ID registrants في Google Sheets.`
     };
   }
 
@@ -1052,10 +1053,11 @@ const LOCAL_USER_KEY = 'arabic_calligraphy_user';
 const LOCAL_REGISTRANTS_CACHE_KEY = 'arabic_calligraphy_registrants_cache';
 
 export const DEFAULT_SAMPLE_REGISTRANTS: RegistrantUser[] = [
-  { id: '101', name: 'أحمد محمد' },
-  { id: '102', name: 'فاطمة علي' },
-  { id: '103', name: 'سارة خالد' },
-  { id: '2024', name: 'عبدالله السعيد' }
+  { id: '111', name: 'حامد' },
+  { id: '222', name: 'حنين' },
+  { id: '444', name: 'نور' },
+  { id: '555', name: 'داود' },
+  { id: '101', name: 'أحمد محمد' }
 ];
 
 export const sheetService = new SheetService();

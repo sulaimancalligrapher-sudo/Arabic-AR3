@@ -29,6 +29,18 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   const [loading, setLoading] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [registrants, setRegistrants] = useState<RegistrantUser[]>(() => sheetService.getCachedRegistrants());
+
+  // Fetch live registrants from the connected Google Sheet
+  React.useEffect(() => {
+    if (isOpen) {
+      sheetService.fetchRegistrants().then((res) => {
+        if (res.success && res.registrants && res.registrants.length > 0) {
+          setRegistrants(res.registrants);
+        }
+      }).catch(() => {});
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -174,10 +186,10 @@ export const LoginModal: React.FC<LoginModalProps> = ({
           <div className="p-2.5 rounded-xl bg-slate-950/50 border border-slate-800">
             <div className="flex items-center gap-1.5 text-[11px] font-semibold text-amber-300 mb-1.5">
               <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-              <span>أرقام تجريبية سريعة للتجربة الفورية:</span>
+              <span>أرقام المشتركين المسجلين في الشيت للتجربة السريعة:</span>
             </div>
             <div className="flex flex-wrap gap-1.5">
-              {DEFAULT_SAMPLE_REGISTRANTS.slice(0, 3).map((demo) => (
+              {(registrants.length > 0 ? registrants : DEFAULT_SAMPLE_REGISTRANTS).slice(0, 4).map((demo) => (
                 <button
                   key={demo.id}
                   type="button"

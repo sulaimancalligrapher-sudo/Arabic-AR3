@@ -1439,20 +1439,38 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
               </span>
             )}
             {template ? (
-              <div className="flex items-center gap-1.5 sm:gap-2 max-w-[95px] xs:max-w-[130px] sm:max-w-none shrink-0">
-                <span
-                  className="font-bold text-xs sm:text-sm text-slate-100 truncate text-right block"
-                  title={template.title}
-                >
-                  {/* On small mobile: show max 2 words; on tablet/desktop: full title */}
-                  <span className="sm:hidden">
-                    {(() => {
-                      const words = (template.title || '').trim().split(/\s+/);
-                      return words.length > 2 ? `${words[0]} ${words[1]}..` : template.title;
-                    })()}
-                  </span>
-                  <span className="hidden sm:inline">{template.title}</span>
-                </span>
+              <div className="flex items-center gap-1.5 sm:gap-2 max-w-[100px] xs:max-w-[135px] sm:max-w-[210px] md:max-w-[260px] shrink-0">
+                {(() => {
+                  const words = (template.title || '').trim().split(/\s+/);
+                  const isLong = words.length > 2 || (template.title || '').length > 16;
+
+                  if (isLong) {
+                    return (
+                      <div
+                        className="overflow-hidden w-[85px] xs:w-[110px] sm:w-[160px] md:w-[200px] relative select-none"
+                        title={template.title}
+                        dir="rtl"
+                      >
+                        <div className="animate-title-marquee flex items-center text-xs sm:text-sm font-bold text-slate-100 whitespace-nowrap">
+                          <span>{template.title}</span>
+                          <span className="mx-2 text-amber-400 font-normal opacity-70">✦</span>
+                          <span>{template.title}</span>
+                          <span className="mx-2 text-amber-400 font-normal opacity-70">✦</span>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <span
+                      className="font-bold text-xs sm:text-sm text-slate-100 truncate text-right block max-w-[85px] xs:max-w-[110px] sm:max-w-none"
+                      title={template.title}
+                    >
+                      {template.title}
+                    </span>
+                  );
+                })()}
+
                 {template.repeatCount && template.repeatCount > 1 ? (
                   <span className="text-[10px] sm:text-[11px] text-amber-400 font-bold bg-amber-500/10 border border-amber-500/30 px-1 sm:px-2 py-0.5 rounded-lg flex items-center gap-0.5 sm:gap-1 shrink-0">
                     <Repeat className="w-2.5 h-2.5 sm:w-3 sm:h-3" />

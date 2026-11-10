@@ -41,3 +41,25 @@
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(245, 158, 11, 0.7);
 }
+
+/* Circular / Marquee Scrolling Animation for Long Arabic Lesson Titles */
+@keyframes arabic-marquee-loop {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(50%);
+  }
+}
+
+.animate-title-marquee {
+  display: inline-flex;
+  width: max-content;
+  will-change: transform;
+  animation: arabic-marquee-loop 12s linear infinite;
+}
+
+.animate-title-marquee:hover {
+  animation-play-state: paused;
+}
+
