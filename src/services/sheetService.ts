@@ -7,7 +7,7 @@ const LOCAL_TEMPLATES_KEY = 'arabic_ar_horizontal_templates_v2';
 const LOCAL_STEPS_CACHE_KEY = 'arabic_ar_steps_backup_cache';
 
 // Default built-in Google Apps Script URL so all devices (mobile, tablet, PC) connect automatically
-export const DEFAULT_SHEET_URL = 'https://script.google.com/macros/s/AKfycbw3_rZtsYcs4OLZU242sU6Kgc6OHWc6sSQ-EmLsJT4yOUCkHVP38ootritf_vnRmG1Oug/exec';
+export const DEFAULT_SHEET_URL = 'https://script.google.com/macros/s/AKfycbzd9L7BL9tQu-7OkyFX3mNreodryMJO3EGcdcaYP-tnWG9b1reETX7gLEseLSmgsjGOVw/exec';
 
 /**
  * Return authentic Arabic ordinal word for steps
@@ -117,6 +117,7 @@ export const GOOGLE_APPS_SCRIPT_CODE = `/**
  */
 
 const SHEET_NAME = "ArabicLessons";
+const REGISTRANTS_SHEET_NAME = "ID registrants";
 const COLS_PER_LESSON = 7;
 const SUB_HEADERS = [
   "الفئة",
@@ -127,6 +128,28 @@ const SUB_HEADERS = [
   "المستوى",
   "خطوات الحرف"
 ];
+
+function getOrCreateRegistrantsSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(REGISTRANTS_SHEET_NAME);
+  if (!sheet) {
+    sheet = ss.insertSheet(REGISTRANTS_SHEET_NAME);
+    const headers = ["ID", "اسم المشترك"];
+    sheet.appendRow(headers);
+    const headerRange = sheet.getRange(1, 1, 1, headers.length);
+    headerRange.setBackground("#1e293b");
+    headerRange.setFontColor("#f8fafc");
+    headerRange.setFontWeight("bold");
+    headerRange.setFontSize(11);
+    sheet.setFrozenRows(1);
+    // Seed default sample test registrants
+    sheet.appendRow(["101", "أحمد محمد"]);
+    sheet.appendRow(["102", "فاطمة علي"]);
+    sheet.appendRow(["103", "سارة خالد"]);
+    sheet.appendRow(["2024", "عبدالله السعيد"]);
+  }
+  return sheet;
+}
 
 function getOrCreateSheet() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -172,9 +195,32 @@ function ensureHeaderLength(sheet, lessonSlotCount) {
   }
 }
 
-// Read all lessons from horizontal structure (GET)
+// Read all lessons or registrants (GET)
 function doGet(e) {
   try {
+    const reqAction = (e && e.parameter && e.parameter.action) || "";
+    const reqSheet = (e && e.parameter && e.parameter.sheet) || "";
+
+    // 1. Fetch Registrants from 'ID registrants' sheet
+    if (reqAction === "get_registrants" || reqSheet === "registrants") {
+      const regSheet = getOrCreateRegistrantsSheet();
+      const regData = regSheet.getDataRange().getValues();
+      const registrants = [];
+      for (let i = 1; i < regData.length; i++) {
+        const id = String(regData[i][0] || '').trim();
+        const name = String(regData[i][1] || '').trim();
+        if (id && name) {
+          registrants.push({ id: id, name: name });
+        }
+      }
+      return jsonResponse({
+        status: "success",
+        count: registrants.length,
+        registrants: registrants
+      });
+    }
+
+    // 2. Fetch Lessons from 'ArabicLessons' sheet
     const sheet = getOrCreateSheet();
     const data = sheet.getDataRange().getValues();
     if (data.length <= 1) {
@@ -398,6 +444,43 @@ function doPost(e) {
         }
       }
       return jsonResponse({ status: "success", deleted: false });
+    }
+
+    // 4. VERIFY REGISTRANT
+    if (action === "verify_registrant") {
+      const id = String(body.id || '').trim();
+      const name = String(body.name || '').trim();
+      const regSheet = getOrCreateRegistrantsSheet();
+      const regData = regSheet.getDataRange().getValues();
+      let matched = null;
+      for (let i = 1; i < regData.length; i++) {
+        const rowId = String(regData[i][0] || '').trim();
+        const rowName = String(regData[i][1] || '').trim();
+        // Match by ID, and if name is provided, verify match
+        if (rowId === id) {
+          if (!name || rowName.toLowerCase() === name.toLowerCase()) {
+            matched = { id: rowId, name: rowName };
+            break;
+          }
+        }
+      }
+      if (matched) {
+        return jsonResponse({ status: "success", verified: true, user: matched });
+      } else {
+        return jsonResponse({ status: "fail", verified: false, message: "لم يتم العثور على المشترك بالرقم والاسم المدخلين" });
+      }
+    }
+
+    // 5. ADD REGISTRANT
+    if (action === "add_registrant") {
+      const id = String(body.id || '').trim();
+      const name = String(body.name || '').trim();
+      if (!id || !name) {
+        return jsonResponse({ status: "error", message: "رقم المشترك واسمه مطلوبان" });
+      }
+      const regSheet = getOrCreateRegistrantsSheet();
+      regSheet.appendRow([id, name]);
+      return jsonResponse({ status: "success", added: true, user: { id: id, name: name } });
     }
 
     return jsonResponse({ status: "error", message: "Unknown action: " + action });
@@ -742,6 +825,237 @@ class SheetService {
   public async initializeSheetWithDefaults(): Promise<{ success: boolean; count?: number; error?: string }> {
     return this.syncAllLessonsToSheet(this.getLocalTemplates());
   }
+
+  // ==========================================
+  // Registrants & User Session Management
+  // ==========================================
+
+  public getStoredUser(): RegistrantUser | null {
+    if (typeof window === 'undefined') return null;
+    try {
+      const data = localStorage.getItem(LOCAL_USER_KEY);
+      if (data) {
+        return JSON.parse(data);
+      }
+    } catch {}
+    return null;
+  }
+
+  public saveStoredUser(user: RegistrantUser | null): void {
+    if (typeof window === 'undefined') return;
+    if (user) {
+      localStorage.setItem(LOCAL_USER_KEY, JSON.stringify(user));
+    } else {
+      localStorage.removeItem(LOCAL_USER_KEY);
+    }
+  }
+
+  public getCachedRegistrants(): RegistrantUser[] {
+    if (typeof window === 'undefined') return DEFAULT_SAMPLE_REGISTRANTS;
+    try {
+      const data = localStorage.getItem(LOCAL_REGISTRANTS_CACHE_KEY);
+      if (data) {
+        const parsed = JSON.parse(data);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return DEFAULT_SAMPLE_REGISTRANTS;
+  }
+
+  public saveCachedRegistrants(registrants: RegistrantUser[]): void {
+    if (typeof window === 'undefined') return;
+    try {
+      localStorage.setItem(LOCAL_REGISTRANTS_CACHE_KEY, JSON.stringify(registrants));
+    } catch {}
+  }
+
+  /**
+   * Normalize Arabic numerals and characters for reliable comparison
+   */
+  public normalizeArabicText(str: string): string {
+    if (!str) return '';
+    return str
+      .trim()
+      // Convert Arabic-Indic numerals (٠-٩) to ASCII (0-9)
+      .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d).toString())
+      // Normalize Arabic characters: Alef with hamza, wasla, madda to bare Alef
+      .replace(/[أإآآٱ]/g, 'ا')
+      .replace(/ة/g, 'ه')
+      .replace(/ى/g, 'ي')
+      .toLowerCase();
+  }
+
+  /**
+   * Fetch all registrants from the "ID registrants" sheet in Google Sheets
+   */
+  public async fetchRegistrants(): Promise<{
+    success: boolean;
+    registrants: RegistrantUser[];
+    error?: string;
+  }> {
+    const url = this.getStoredSheetUrl();
+    if (!url) {
+      return {
+        success: true,
+        registrants: this.getCachedRegistrants()
+      };
+    }
+
+    try {
+      const fetchUrl = `${url}${url.includes('?') ? '&' : '?'}action=get_registrants`;
+      const response = await fetch(fetchUrl, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' }
+      });
+
+      if (!response.ok) {
+        throw new Error(`خطأ في استجابة الخادم: ${response.status}`);
+      }
+
+      const json = await response.json();
+      if (json.status === 'success' && Array.isArray(json.registrants)) {
+        const list: RegistrantUser[] = json.registrants.map((r: any) => ({
+          id: String(r.id || '').trim(),
+          name: String(r.name || '').trim()
+        }));
+        if (list.length > 0) {
+          this.saveCachedRegistrants(list);
+          return { success: true, registrants: list };
+        }
+      }
+      return { success: true, registrants: this.getCachedRegistrants() };
+    } catch (err: any) {
+      return {
+        success: true, // Graceful fallback to cached/sample registrants so student is never blocked
+        registrants: this.getCachedRegistrants(),
+        error: err.message
+      };
+    }
+  }
+
+  /**
+   * Verify an ID and participant name against the "ID registrants" sheet
+   */
+  public async verifyRegistrant(
+    rawId: string,
+    rawName: string
+  ): Promise<{ success: boolean; user?: RegistrantUser; error?: string }> {
+    const cleanId = this.normalizeArabicText(rawId);
+    const cleanName = this.normalizeArabicText(rawName);
+
+    if (!cleanId) {
+      return { success: false, error: 'يرجى إدخال رقم المشترك (ID)' };
+    }
+    if (!cleanName) {
+      return { success: false, error: 'يرجى إدخال اسم المشترك' };
+    }
+
+    // 1. Try live verification via Google Sheets POST if online
+    const url = this.getStoredSheetUrl();
+    if (url) {
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({
+            action: 'verify_registrant',
+            id: rawId.trim(),
+            name: rawName.trim()
+          })
+        });
+
+        if (response.ok) {
+          const json = await response.json();
+          if (json.status === 'success' && json.verified && json.user) {
+            const verifiedUser: RegistrantUser = {
+              id: String(json.user.id),
+              name: String(json.user.name),
+              loginDate: new Date().toISOString()
+            };
+            this.saveStoredUser(verifiedUser);
+            return { success: true, user: verifiedUser };
+          }
+        }
+      } catch {
+        // Fallback to local / cached check
+      }
+    }
+
+    // 2. Local / Cached Verification check
+    const registrants = this.getCachedRegistrants();
+    const matched = registrants.find(r => {
+      const regId = this.normalizeArabicText(r.id);
+      const regName = this.normalizeArabicText(r.name);
+      return regId === cleanId && (regName.includes(cleanName) || cleanName.includes(regName));
+    });
+
+    if (matched) {
+      const verifiedUser: RegistrantUser = {
+        id: matched.id,
+        name: matched.name,
+        loginDate: new Date().toISOString()
+      };
+      this.saveStoredUser(verifiedUser);
+      return { success: true, user: verifiedUser };
+    }
+
+    return {
+      success: false,
+      error: 'رقم المشترك أو الاسم غير مسجل في ورقة المشتركين (ID registrants)'
+    };
+  }
+
+  /**
+   * Add a new participant to the "ID registrants" sheet
+   */
+  public async addRegistrant(
+    id: string,
+    name: string
+  ): Promise<{ success: boolean; user?: RegistrantUser; error?: string }> {
+    const url = this.getStoredSheetUrl();
+    if (!url) {
+      return { success: false, error: 'رابط الشيت غير مضبوط' };
+    }
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+          action: 'add_registrant',
+          id: id.trim(),
+          name: name.trim()
+        })
+      });
+
+      const json = await response.json();
+      if (json.status === 'success') {
+        const newUser: RegistrantUser = { id: id.trim(), name: name.trim() };
+        const currentList = this.getCachedRegistrants();
+        this.saveCachedRegistrants([newUser, ...currentList.filter(u => u.id !== newUser.id)]);
+        return { success: true, user: newUser };
+      }
+      return { success: false, error: json.message || 'تعذر إضافة المشترك' };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'خطأ في الاتصال بالخادم' };
+    }
+  }
 }
+
+export interface RegistrantUser {
+  id: string;
+  name: string;
+  loginDate?: string;
+}
+
+const LOCAL_USER_KEY = 'arabic_calligraphy_user';
+const LOCAL_REGISTRANTS_CACHE_KEY = 'arabic_calligraphy_registrants_cache';
+
+export const DEFAULT_SAMPLE_REGISTRANTS: RegistrantUser[] = [
+  { id: '101', name: 'أحمد محمد' },
+  { id: '102', name: 'فاطمة علي' },
+  { id: '103', name: 'سارة خالد' },
+  { id: '2024', name: 'عبدالله السعيد' }
+];
 
 export const sheetService = new SheetService();

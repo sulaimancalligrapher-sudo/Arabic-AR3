@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { DrawingTemplate, LessonDifficulty, LessonStep } from '../types/drawing';
-import { sheetService, GOOGLE_APPS_SCRIPT_CODE } from '../services/sheetService';
+import { sheetService, GOOGLE_APPS_SCRIPT_CODE, RegistrantUser } from '../services/sheetService';
 import { audioService } from '../services/audioService';
 import { formatDirectImageUrl, extractDriveFileId } from '../utils/urlHelper';
 import { StepMakerModal } from './StepMakerModal';
@@ -28,7 +28,9 @@ import {
   Repeat,
   Compass,
   Footprints,
-  Layers
+  Layers,
+  Users,
+  UserPlus
 } from 'lucide-react';
 import { BoardStyle, GuideColor } from '../types/drawing';
 import { GUIDE_COLORS } from '../data/drawingTemplates';
@@ -56,8 +58,49 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   templateOpacity = 0.35,
   onChangeTemplateOpacity,
 }) => {
-  // Tabs: 'lessons' (إدارة وتعديل), 'table' (ورقة الدروس), 'sheet' (ربط الشيت), 'board' (إعدادات وخلفيات السبورة)
-  const [activeTab, setActiveTab] = useState<'lessons' | 'table' | 'sheet' | 'board'>('lessons');
+  // Tabs: 'lessons' (إدارة وتعديل), 'table' (ورقة الدروس), 'sheet' (ربط الشيت), 'board' (إعدادات وخلفيات السبورة), 'registrants' (سجل المشتركين)
+  const [activeTab, setActiveTab] = useState<'lessons' | 'table' | 'sheet' | 'board' | 'registrants'>('lessons');
+  const [registrantsList, setRegistrantsList] = useState<RegistrantUser[]>(() => sheetService.getCachedRegistrants());
+  const [newRegId, setNewRegId] = useState('');
+  const [newRegName, setNewRegName] = useState('');
+  const [isAddingReg, setIsAddingReg] = useState(false);
+  const [regStatusMsg, setRegStatusMsg] = useState<string | null>(null);
+
+  const reloadRegistrants = async () => {
+    const res = await sheetService.fetchRegistrants();
+    if (res.success && res.registrants) {
+      setRegistrantsList(res.registrants);
+    }
+  };
+
+  useEffect(() => {
+    reloadRegistrants();
+  }, []);
+
+  const handleAddRegistrant = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newRegId.trim() || !newRegName.trim()) return;
+    setIsAddingReg(true);
+    setRegStatusMsg(null);
+    try {
+      const res = await sheetService.addRegistrant(newRegId.trim(), newRegName.trim());
+      if (res.success && res.user) {
+        audioService.playSuccessSound();
+        setRegistrantsList(prev => [res.user!, ...prev.filter(u => u.id !== res.user!.id)]);
+        setNewRegId('');
+        setNewRegName('');
+        setRegStatusMsg('تمت إضافة المشترك بنجاح إلى ورقة ID registrants');
+      } else {
+        audioService.playErrorSound();
+        setRegStatusMsg(res.error || 'تعذر إضافة المشترك');
+      }
+    } catch {
+      audioService.playErrorSound();
+      setRegStatusMsg('خطأ أثناء إرسال البيانات');
+    } finally {
+      setIsAddingReg(false);
+    }
+  };
 
   // Sheet connection states
   const [sheetUrl, setSheetUrl] = useState<string>(() => sheetService.getStoredSheetUrl());
@@ -432,6 +475,18 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             >
               <Layers className="w-4 h-4" />
               <span>إعدادات وخلفيات السبورة</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('registrants')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap ${
+                activeTab === 'registrants'
+                  ? 'bg-amber-500 text-slate-950 shadow-md'
+                  : 'bg-slate-900 hover:bg-slate-800 text-slate-300'
+              }`}
+            >
+              <Users className="w-4 h-4" />
+              <span>سجل المشتركين (ID registrants)</span>
             </button>
           </div>
 
@@ -1121,6 +1176,160 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <ArrowRight className="w-4 h-4 rotate-180" />
                   <span>تطبيق الإعدادات والعودة إلى السبورة</span>
                 </button>
+              </div>
+
+            </div>
+
+          </div>
+        )}
+
+        {/* ======================= TAB 5: ID REGISTRANTS (سجل المشتركين) ======================= */}
+        {activeTab === 'registrants' && (
+          <div className="space-y-6">
+            
+            {/* Header & Instructions */}
+            <div className="p-4 sm:p-5 rounded-2xl bg-slate-900 border border-slate-800 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+                  <Users className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="text-base font-bold text-slate-100 flex items-center gap-2">
+                    <span>سجل المشتركين (ورقة ID registrants)</span>
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 font-mono">
+                      {registrantsList.length} مشترك مسجل
+                    </span>
+                  </h2>
+                  <p className="text-xs text-slate-400 mt-1 leading-relaxed">
+                    ورقة <code className="text-amber-400 font-mono">ID registrants</code> في Google Sheets تحتوي على: 
+                    العامود الأول <strong className="text-white">ID</strong> (رقم المشترك)، والعامود الثاني <strong className="text-white">اسم المشترك</strong>.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={reloadRegistrants}
+                className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold transition-all active:scale-95 cursor-pointer shrink-0"
+              >
+                <RefreshCw className="w-3.5 h-3.5 text-amber-400" />
+                <span>تحديث القائمة من الشيت</span>
+              </button>
+            </div>
+
+            {/* Content: Form to add + Table of registrants */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              
+              {/* Left Column (1/3): Add New Participant Form */}
+              <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 shadow-xl space-y-4">
+                <div className="flex items-center gap-2 text-sm font-bold text-amber-400 pb-2 border-b border-slate-800">
+                  <UserPlus className="w-4 h-4" />
+                  <span>إضافة مشترك جديد للشيت</span>
+                </div>
+
+                <form onSubmit={handleAddRegistrant} className="space-y-3.5">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">
+                      رقم المشترك (ID) - العامود A:
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={newRegId}
+                      onChange={(e) => setNewRegId(e.target.value)}
+                      placeholder="مثال: 105 أو 2025"
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-slate-100 text-xs focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">
+                      اسم المشترك - العامود B:
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={newRegName}
+                      onChange={(e) => setNewRegName(e.target.value)}
+                      placeholder="مثال: خالد المنصور"
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-slate-100 text-xs focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+
+                  {regStatusMsg && (
+                    <div className="p-2.5 rounded-xl bg-slate-950 text-xs border border-slate-800 text-amber-400">
+                      {regStatusMsg}
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={isAddingReg}
+                    className="w-full py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs shadow-md transition-all active:scale-95 disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>{isAddingReg ? 'جارِ الإضافة...' : 'إضافة إلى ورقة ID registrants'}</span>
+                  </button>
+                </form>
+
+                {/* Structure Guide Box */}
+                <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800/80 text-[11px] text-slate-400 space-y-1.5">
+                  <div className="font-bold text-amber-300 flex items-center gap-1">
+                    <Info className="w-3.5 h-3.5" />
+                    <span>هيكل الورقة في الشيت:</span>
+                  </div>
+                  <p>
+                    • يتم التحقق تلقائياً من مطابقة رقم المشترك واسمه عند تسجيل الدخول.
+                  </p>
+                  <p>
+                    • كود خادم Apps Script يقوم بإنشاء ورقة <code className="text-amber-400 font-mono">ID registrants</code> تلقائياً إن لم تكن موجودة.
+                  </p>
+                </div>
+              </div>
+
+              {/* Right Column (2/3): Registrants Table */}
+              <div className="lg:col-span-2 p-5 rounded-2xl bg-slate-900 border border-slate-800 shadow-xl space-y-3">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                  <span className="text-sm font-bold text-slate-200">
+                    قائمة المشتركين المسجلين في النظام
+                  </span>
+                  <span className="text-xs text-slate-400">
+                    إجمالي: {registrantsList.length} مشترك
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto rounded-xl border border-slate-800">
+                  <table className="w-full text-right text-xs">
+                    <thead>
+                      <tr className="bg-slate-950 text-slate-400 border-b border-slate-800">
+                        <th className="p-3 font-semibold">#</th>
+                        <th className="p-3 font-semibold">رقم المشترك (ID)</th>
+                        <th className="p-3 font-semibold">اسم المشترك</th>
+                        <th className="p-3 font-semibold text-center">حالة الحساب</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800 text-slate-200">
+                      {registrantsList.map((user, idx) => (
+                        <tr key={user.id + '_' + idx} className="hover:bg-slate-800/50 transition-colors">
+                          <td className="p-3 text-slate-500 font-mono">{idx + 1}</td>
+                          <td className="p-3 font-mono font-bold text-amber-400">
+                            {user.id}
+                          </td>
+                          <td className="p-3 font-bold text-slate-100">
+                            {user.name}
+                          </td>
+                          <td className="p-3 text-center">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-bold">
+                              <CheckCircle2 className="w-3 h-3" />
+                              <span>مفعّل</span>
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
               </div>
 
             </div>

@@ -5,8 +5,9 @@ import { WhiteboardCanvas, WhiteboardCanvasRef } from './components/WhiteboardCa
 import { ARCameraOverlay } from './components/ARCameraOverlay';
 import { WhiteboardToolbar } from './components/WhiteboardToolbar';
 import { TemplateLibraryModal } from './components/TemplateLibraryModal';
+import { LoginModal } from './components/LoginModal';
 import { SettingsView } from './components/SettingsView';
-import { sheetService, getArabicOrdinal, getStepAudioPrompt } from './services/sheetService';
+import { sheetService, getArabicOrdinal, getStepAudioPrompt, RegistrantUser } from './services/sheetService';
 import { audioService } from './services/audioService';
 import {
   Camera,
@@ -101,6 +102,21 @@ export default function App() {
   const [historyCanRedo, setHistoryCanRedo] = useState(false);
   const [celebrationMessage, setCelebrationMessage] = useState<string | null>(null);
   const [currentRepetition, setCurrentRepetition] = useState<number>(1);
+
+  // User Session State (ID registrants)
+  const [currentUser, setCurrentUser] = useState<RegistrantUser | null>(() => sheetService.getStoredUser());
+  const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
+
+  const handleLoginSuccess = (user: RegistrantUser) => {
+    setCurrentUser(user);
+    sheetService.saveStoredUser(user);
+  };
+
+  const handleLogout = () => {
+    setCurrentUser(null);
+    sheetService.saveStoredUser(null);
+    audioService.playChime(350, 0.1);
+  };
 
   // Synchronize initial pen color when board changes to ensure contrast
   useEffect(() => {
@@ -341,6 +357,9 @@ export default function App() {
         onOpenSettings={() => {
           window.location.hash = '#/settings';
         }}
+        currentUser={currentUser}
+        onOpenLogin={() => setIsLoginModalOpen(true)}
+        onLogout={handleLogout}
         onPronounce={handlePronounce}
         accuracy={accuracy}
         trackingMode={trackingMode}
@@ -524,6 +543,13 @@ export default function App() {
           setAllTemplates(prev => [customTpl, ...prev]);
           sheetService.saveLocalTemplates([customTpl, ...allTemplates]);
         }}
+      />
+
+      {/* Participant Login Modal */}
+      <LoginModal
+        isOpen={isLoginModalOpen}
+        onClose={() => setIsLoginModalOpen(false)}
+        onLoginSuccess={handleLoginSuccess}
       />
 
     </div>

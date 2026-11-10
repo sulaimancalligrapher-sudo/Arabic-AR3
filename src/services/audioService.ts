@@ -406,6 +406,10 @@ class AudioService {
       });
     } catch {}
   }
+
+  public playSuccessSound() {
+    this.playStepSuccessSound();
+  }
 }
 
 export const audioService = new AudioService();

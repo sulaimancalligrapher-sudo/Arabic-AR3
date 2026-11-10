@@ -174,7 +174,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     }
   }, [dimensions, template, guideColor, templateOpacity, currentStepIndex]);
 
-  // Reset goal achieved state and step progression when template changes (no auto-speech)
+  // Reset goal achieved state and step progression when template or repetition changes (requires ( ابدأ ) for every lesson)
   useEffect(() => {
     hasAchievedGoalRef.current = false;
     setCurrentStepIndex(0);
@@ -184,7 +184,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     strokeStartedAtGreenRef.current = false;
     resetStrokeStats();
     drawTemplateGuide();
-  }, [template, resetStrokeStats]);
+  }, [template, currentRepetition, resetStrokeStats]);
 
   // Auto-dismiss transient step alerts
   useEffect(() => {
@@ -1439,14 +1439,25 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
               </span>
             )}
             {template ? (
-              <div className="flex items-center gap-2">
-                <span className="font-bold text-xs sm:text-sm text-slate-100 whitespace-nowrap">
-                  {template.title}
+              <div className="flex items-center gap-1.5 sm:gap-2 max-w-[95px] xs:max-w-[130px] sm:max-w-none shrink-0">
+                <span
+                  className="font-bold text-xs sm:text-sm text-slate-100 truncate text-right block"
+                  title={template.title}
+                >
+                  {/* On small mobile: show max 2 words; on tablet/desktop: full title */}
+                  <span className="sm:hidden">
+                    {(() => {
+                      const words = (template.title || '').trim().split(/\s+/);
+                      return words.length > 2 ? `${words[0]} ${words[1]}..` : template.title;
+                    })()}
+                  </span>
+                  <span className="hidden sm:inline">{template.title}</span>
                 </span>
                 {template.repeatCount && template.repeatCount > 1 ? (
-                  <span className="text-[11px] text-amber-400 font-bold bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded-lg flex items-center gap-1 shrink-0">
-                    <Repeat className="w-3 h-3" />
-                    <span>تكرار {currentRepetition || 1} / {template.repeatCount}</span>
+                  <span className="text-[10px] sm:text-[11px] text-amber-400 font-bold bg-amber-500/10 border border-amber-500/30 px-1 sm:px-2 py-0.5 rounded-lg flex items-center gap-0.5 sm:gap-1 shrink-0">
+                    <Repeat className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
+                    <span className="sm:hidden">{currentRepetition || 1}/{template.repeatCount}</span>
+                    <span className="hidden sm:inline">تكرار {currentRepetition || 1} / {template.repeatCount}</span>
                   </span>
                 ) : null}
               </div>
@@ -1454,7 +1465,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
               <button
                 type="button"
                 onClick={onOpenLibrary}
-                className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs sm:text-sm shadow-md transition-all active:scale-95 cursor-pointer"
+                className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs sm:text-sm shadow-md transition-all active:scale-95 cursor-pointer shrink-0"
                 title="فتح مكتبة الدروس لاختيار درس"
               >
                 <FolderOpen className="w-3.5 h-3.5" />
@@ -1467,7 +1478,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
           <div className="flex items-center justify-center flex-1 mx-1 sm:mx-2 overflow-hidden">
             {stepAlert ? (
               <div
-                className={`flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold animate-in fade-in zoom-in-95 duration-150 truncate ${
+                className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-xl text-xs font-bold animate-in fade-in zoom-in-95 duration-150 truncate ${
                   stepAlert.type === 'error'
                     ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40 shadow-sm'
                     : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm'
@@ -1480,76 +1491,86 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                 )}
                 <span className="truncate">{stepAlert.message}</span>
               </div>
-            ) : template?.steps && template.steps.length > 0 ? (
-              <div className="flex items-center gap-2 sm:gap-3">
-                {/* Desktop Sound Unlock & Lesson Start Button: strictly ( ابدأ ) without icons */}
+            ) : template ? (
+              <div className="flex items-center gap-1.5 sm:gap-3">
+                {/* Lesson Start Button: strictly ( ابدأ ) - clear and prominent on all devices */}
                 {!isLessonStarted && (
                   <button
                     type="button"
                     onClick={handleStartLesson}
-                    className="px-3.5 py-1 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 font-bold text-xs sm:text-sm shadow-md hover:brightness-110 active:scale-95 transition-all cursor-pointer whitespace-nowrap"
+                    className="px-2.5 sm:px-3.5 py-1 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 font-bold text-xs sm:text-sm shadow-md hover:brightness-110 active:scale-95 transition-all cursor-pointer whitespace-nowrap shrink-0 animate-pulse"
                     title="بدء التمرين وسماع التوجيه الصوتي"
                   >
                     ( ابدأ )
                   </button>
                 )}
 
-                {/* Step Number Only (مختصر بدون حشو) */}
-                <div className="flex items-center gap-1.5">
-                  <span className="text-amber-400 font-bold text-xs sm:text-sm whitespace-nowrap">
-                    الخطوة {currentStepIndex + 1} من {template.steps.length}
+                {/* If steps exist: Step Number, Progress Dots, Step Voice, Reset Step */}
+                {template.steps && template.steps.length > 0 ? (
+                  <>
+                    {/* Step Number Only: '1 من 3' on mobile to save space, 'الخطوة 1 من 3' on desktop */}
+                    <div className="flex items-center gap-1 shrink-0">
+                      <span className="text-amber-400 font-bold text-xs sm:text-sm whitespace-nowrap">
+                        <span className="sm:hidden">{currentStepIndex + 1} من {template.steps.length}</span>
+                        <span className="hidden sm:inline">الخطوة {currentStepIndex + 1} من {template.steps.length}</span>
+                      </span>
+                    </div>
+
+                    {/* Step Progress Dots */}
+                    <div className="hidden sm:flex items-center gap-1">
+                      {template.steps.map((_, idx) => (
+                        <div
+                          key={idx}
+                          className={`w-2 h-2 rounded-full transition-all duration-300 ${
+                            idx < currentStepIndex
+                              ? 'bg-emerald-500 scale-100'
+                              : idx === currentStepIndex
+                              ? 'bg-amber-400 scale-125 ring-2 ring-amber-400/40'
+                              : 'bg-slate-700 scale-90'
+                          }`}
+                        />
+                      ))}
+                    </div>
+
+                    {/* Voice Guidance Button (hidden on mobile to free space for ( ابدأ )) */}
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await audioService.unlockAudio();
+                        setIsLessonStarted(true);
+                        if (template.steps && template.steps[currentStepIndex]) {
+                          const prompt = getStepAudioPrompt(template.steps[currentStepIndex]);
+                          audioService.speakArabic(prompt);
+                        }
+                      }}
+                      className="hidden sm:flex p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-400 hover:text-amber-300 transition-colors cursor-pointer shrink-0"
+                      title="استمع لتوجيه الخطوة"
+                    >
+                      <Volume2 className="w-3.5 h-3.5" />
+                    </button>
+
+                    {/* Reset Step Progress Button */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCurrentStepIndex(0);
+                        setStepAlert(null);
+                        setEvaluationModal(null);
+                        setIsLessonStarted(false);
+                        strokeStartedAtGreenRef.current = false;
+                        resetStrokeStats();
+                      }}
+                      className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer shrink-0"
+                      title="إعادة من الخطوة الأولى"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                    </button>
+                  </>
+                ) : isLessonStarted ? (
+                  <span className="text-xs text-emerald-400 font-semibold truncate">
+                    ابدأ في رسم الحرف ✍️
                   </span>
-                </div>
-
-                {/* Step Progress Dots */}
-                <div className="hidden sm:flex items-center gap-1">
-                  {template.steps.map((_, idx) => (
-                    <div
-                      key={idx}
-                      className={`w-2 h-2 rounded-full transition-all duration-300 ${
-                        idx < currentStepIndex
-                          ? 'bg-emerald-500 scale-100'
-                          : idx === currentStepIndex
-                          ? 'bg-amber-400 scale-125 ring-2 ring-amber-400/40'
-                          : 'bg-slate-700 scale-90'
-                      }`}
-                    />
-                  ))}
-                </div>
-
-                {/* Voice Guidance Button */}
-                <button
-                  type="button"
-                  onClick={async () => {
-                    await audioService.unlockAudio();
-                    setIsLessonStarted(true);
-                    if (template.steps && template.steps[currentStepIndex]) {
-                      const prompt = getStepAudioPrompt(template.steps[currentStepIndex]);
-                      audioService.speakArabic(prompt);
-                    }
-                  }}
-                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-400 hover:text-amber-300 transition-colors cursor-pointer"
-                  title="استمع لتوجيه الخطوة"
-                >
-                  <Volume2 className="w-3.5 h-3.5" />
-                </button>
-
-                {/* Reset Step Progress Button */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCurrentStepIndex(0);
-                    setStepAlert(null);
-                    setEvaluationModal(null);
-                    setIsLessonStarted(false);
-                    strokeStartedAtGreenRef.current = false;
-                    resetStrokeStats();
-                  }}
-                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer"
-                  title="إعادة من الخطوة الأولى"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                </button>
+                ) : null}
               </div>
             ) : (
               <span className="text-xs text-amber-300 hidden sm:inline">اختر درساً أولاً ثم انقر ( ابدأ ) لبدء الرسم</span>
@@ -1558,12 +1579,13 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
 
           {/* Left: Quick Action Controls (دليل الاستخدام وتكبير الشاشة) */}
           <div className="flex items-center gap-1.5 shrink-0">
+            {/* Help Guide Button: hidden on mobile per user request */}
             {onOpenHelp && (
               <button
                 type="button"
                 onClick={onOpenHelp}
                 title="دليل الاستخدام السريع"
-                className="p-1.5 sm:p-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-amber-400 border border-slate-700/60 active:scale-95 transition-all cursor-pointer"
+                className="hidden sm:flex p-1.5 sm:p-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-amber-400 border border-slate-700/60 active:scale-95 transition-all cursor-pointer"
               >
                 <HelpCircle className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
               </button>
