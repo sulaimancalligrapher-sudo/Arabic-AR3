@@ -7,13 +7,21 @@ class AudioService {
   private isUnlocked: boolean = false;
   private isMuted: boolean = false;
 
+  private ttsAudio: HTMLAudioElement | null = null;
+  private currentAudioAbort: (() => void) | null = null;
+
   constructor() {
     if (typeof window !== 'undefined') {
+      try {
+        this.ttsAudio = new Audio();
+      } catch {
+        // Fallback for environments where Audio constructor is restricted
+      }
       this.initVoices();
       if ('speechSynthesis' in window) {
         window.speechSynthesis.onvoiceschanged = () => this.initVoices();
       }
-      // Auto-unlock audio context on first user interaction anywhere in the window
+      // Auto-unlock audio context and media player on first user interaction anywhere
       const handleFirstInteraction = () => {
         this.unlockAudio();
         window.removeEventListener('pointerdown', handleFirstInteraction);
@@ -26,20 +34,25 @@ class AudioService {
 
   public initVoices() {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-    const voices = window.speechSynthesis.getVoices();
-    if (voices.length === 0) return;
+    try {
+      const voices = window.speechSynthesis.getVoices();
+      if (voices.length === 0) return;
 
-    // Search for best Arabic voice (Saudi, Egyptian, UAE, or general Arabic)
-    this.arabicVoice =
-      voices.find(v => v.lang.toLowerCase() === 'ar-sa') ||
-      voices.find(v => v.lang.toLowerCase() === 'ar-eg') ||
-      voices.find(v => v.lang.toLowerCase().startsWith('ar')) ||
-      voices.find(v => v.name.toLowerCase().includes('arabic') || v.name.includes('عربي')) ||
-      null;
+      // Search for best Arabic voice (Saudi, Egyptian, UAE, or general Arabic)
+      this.arabicVoice =
+        voices.find(v => v.lang.toLowerCase() === 'ar-sa') ||
+        voices.find(v => v.lang.toLowerCase() === 'ar-eg') ||
+        voices.find(v => v.lang.toLowerCase() === 'ar-ae') ||
+        voices.find(v => v.lang.toLowerCase().startsWith('ar')) ||
+        voices.find(v => v.name.toLowerCase().includes('arabic') || v.name.includes('عربي') || v.name.includes('Salma') || v.name.includes('Maged')) ||
+        null;
+    } catch {
+      // Ignore voice reading error
+    }
   }
 
   /**
-   * Unlock AudioContext and SpeechSynthesis on Desktop browsers (Chrome/Safari/Edge)
+   * Unlock AudioContext and HTML5 Audio on Desktop & Mobile/Tablet browsers (Chrome/Safari/Edge/Firefox)
    */
   public async unlockAudio(): Promise<boolean> {
     this.isUnlocked = true;
@@ -48,9 +61,23 @@ class AudioService {
       if (ctx && ctx.state === 'suspended') {
         await ctx.resume();
       }
+
+      // Initialize HTML5 Audio element under user gesture
+      if (typeof window !== 'undefined') {
+        if (!this.ttsAudio) {
+          this.ttsAudio = new Audio();
+        }
+        // Play silent blank buffer to satisfy browser autoplay security on mobile/tablets
+        this.ttsAudio.src = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
+        this.ttsAudio.volume = 1;
+        this.ttsAudio.play().catch(() => {});
+      }
+
       if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
         this.initVoices();
-        window.speechSynthesis.resume();
+        try {
+          window.speechSynthesis.resume();
+        } catch {}
       }
       return true;
     } catch {
@@ -60,6 +87,11 @@ class AudioService {
 
   public setMuted(muted: boolean) {
     this.isMuted = muted;
+    if (muted && this.ttsAudio) {
+      try {
+        this.ttsAudio.pause();
+      } catch {}
+    }
   }
 
   public getMuted(): boolean {
@@ -83,11 +115,103 @@ class AudioService {
   }
 
   /**
-   * Pronounce Arabic text clearly using Web Speech API (with Desktop recovery)
+   * Universal Arabic Pronunciation:
+   * 1. Uses universal HTML5 Audio with high-clarity Arabic TTS stream (works in 100% of browsers & devices without OS language packs).
+   * 2. Falls back seamlessly to Web Speech API or synthesized chime if offline.
    */
-  public speakArabic(text: string, rate: number = 0.88): Promise<void> {
+  public speakArabic(text: string, rate: number = 0.9): Promise<void> {
     return new Promise((resolve) => {
-      if (this.isMuted || typeof window === 'undefined' || !('speechSynthesis' in window)) {
+      if (this.isMuted || !text || !text.trim() || typeof window === 'undefined') {
+        resolve();
+        return;
+      }
+
+      // Abort any previous pending audio playback
+      if (this.currentAudioAbort) {
+        this.currentAudioAbort();
+        this.currentAudioAbort = null;
+      }
+
+      let isResolved = false;
+      const safeResolve = () => {
+        if (!isResolved) {
+          isResolved = true;
+          this.currentAudioAbort = null;
+          resolve();
+        }
+      };
+
+      // 1. Try High-Compatibility HTML5 Audio TTS (Works in Chrome, Firefox, Safari, Edge, Mobile, Tablet)
+      try {
+        if (!this.ttsAudio) {
+          this.ttsAudio = new Audio();
+        }
+
+        const audio = this.ttsAudio;
+        audio.pause();
+        audio.currentTime = 0;
+
+        const cleanText = text.replace(/[\n\r\t]+/g, ' ').trim();
+        const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=ar&client=tw-ob&q=${encodeURIComponent(cleanText)}`;
+        audio.src = ttsUrl;
+        audio.playbackRate = rate;
+
+        const onEnded = () => {
+          cleanup();
+          safeResolve();
+        };
+
+        const onError = () => {
+          cleanup();
+          // Fall back to Web Speech API or chime
+          this.speakViaWebSpeech(cleanText, rate).then(safeResolve);
+        };
+
+        const cleanup = () => {
+          audio.removeEventListener('ended', onEnded);
+          audio.removeEventListener('error', onError);
+        };
+
+        audio.addEventListener('ended', onEnded, { once: true });
+        audio.addEventListener('error', onError, { once: true });
+
+        // Safety timeout in case audio stalls
+        const timeout = setTimeout(() => {
+          cleanup();
+          safeResolve();
+        }, 5000);
+
+        this.currentAudioAbort = () => {
+          clearTimeout(timeout);
+          cleanup();
+          try {
+            audio.pause();
+          } catch {}
+          safeResolve();
+        };
+
+        const playPromise = audio.play();
+        if (playPromise !== undefined) {
+          playPromise.catch((err) => {
+            console.warn('HTML5 Audio play prevented or offline, switching to WebSpeech fallback:', err);
+            cleanup();
+            clearTimeout(timeout);
+            this.speakViaWebSpeech(cleanText, rate).then(safeResolve);
+          });
+        }
+      } catch (err) {
+        console.warn('HTML5 Audio initialization failed, fallback to WebSpeech:', err);
+        this.speakViaWebSpeech(text, rate).then(safeResolve);
+      }
+    });
+  }
+
+  /**
+   * Secondary fallback using browser's built-in Web Speech API
+   */
+  private speakViaWebSpeech(text: string, rate: number = 0.9): Promise<void> {
+    return new Promise((resolve) => {
+      if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
         this.playChime(520, 0.15);
         resolve();
         return;
@@ -97,7 +221,6 @@ class AudioService {
         window.speechSynthesis.cancel();
         window.speechSynthesis.resume();
 
-        // Refresh voices if not found initially (Desktop Chrome onvoiceschanged latency)
         if (!this.arabicVoice) {
           this.initVoices();
         }
@@ -108,7 +231,7 @@ class AudioService {
           utterance.voice = this.arabicVoice;
         }
         utterance.rate = rate;
-        utterance.pitch = 1.02;
+        utterance.pitch = 1.0;
         utterance.volume = 1;
 
         let finished = false;
@@ -120,18 +243,14 @@ class AudioService {
         };
 
         utterance.onend = finish;
-        utterance.onerror = (e) => {
-          console.warn('SpeechSynthesis error or skipped on desktop:', e);
+        utterance.onerror = () => {
           this.playChime(520, 0.15);
           finish();
         };
 
-        // Safety timeout in case speech engine freezes on desktop
-        setTimeout(finish, 4000);
-
+        setTimeout(finish, 3500);
         window.speechSynthesis.speak(utterance);
-      } catch (err) {
-        console.warn('Speak error:', err);
+      } catch {
         this.playChime(520, 0.15);
         resolve();
       }

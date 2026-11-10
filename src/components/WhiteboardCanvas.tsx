@@ -106,8 +106,15 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     feedback: string;
   } | null>(null);
 
-  // Template guide points cache for accuracy evaluation
+  // Template guide points cache and fast spatial letter grid for pixel-level accuracy
   const guidePointsRef = useRef<{ x: number; y: number }[]>([]);
+  const letterGridRef = useRef<{
+    grid: Uint8Array;
+    width: number;
+    height: number;
+    cell: number;
+    totalCells: number;
+  } | null>(null);
   const hasAchievedGoalRef = useRef(false);
 
   // Canvas dimensions
@@ -417,20 +424,31 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
           drawActiveStepMarker(ctx, template.steps, currentStepIndex, drawX, drawY, drawW, drawH);
         }
 
-        // Sample guide points for accuracy evaluation
+        // Extract pixel-level letter body mask for precise coverage and off-path detection
         try {
           const imgData = ctx.getImageData(0, 0, tCanvas.width, tCanvas.height);
           const data = imgData.data;
+          const cell = 4;
+          const gw = Math.ceil(tCanvas.width / cell);
+          const gh = Math.ceil(tCanvas.height / cell);
+          const grid = new Uint8Array(gw * gh);
+          let totalCells = 0;
           const pts: { x: number; y: number }[] = [];
-          for (let y = 0; y < tCanvas.height; y += 8) {
-            for (let x = 0; x < tCanvas.width; x += 8) {
+
+          for (let y = 0; y < tCanvas.height; y += cell) {
+            const gy = Math.floor(y / cell);
+            for (let x = 0; x < tCanvas.width; x += cell) {
               const idx = (y * tCanvas.width + x) * 4;
-              if (data[idx + 3] > 35) {
+              if (data[idx + 3] > 30) {
+                const gx = Math.floor(x / cell);
+                grid[gy * gw + gx] = 1;
+                totalCells++;
                 pts.push({ x, y });
               }
             }
           }
           guidePointsRef.current = pts;
+          letterGridRef.current = { grid, width: gw, height: gh, cell, totalCells };
         } catch (err) {
           console.warn('Guide point sampling error (CORS or empty):', err);
         }
@@ -474,16 +492,27 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         try {
           const imgData = ctx.getImageData(0, 0, tCanvas.width, tCanvas.height);
           const data = imgData.data;
+          const cell = 4;
+          const gw = Math.ceil(tCanvas.width / cell);
+          const gh = Math.ceil(tCanvas.height / cell);
+          const grid = new Uint8Array(gw * gh);
+          let totalCells = 0;
           const pts: { x: number; y: number }[] = [];
-          for (let y = 0; y < tCanvas.height; y += 8) {
-            for (let x = 0; x < tCanvas.width; x += 8) {
+
+          for (let y = 0; y < tCanvas.height; y += cell) {
+            const gy = Math.floor(y / cell);
+            for (let x = 0; x < tCanvas.width; x += cell) {
               const idx = (y * tCanvas.width + x) * 4;
-              if (data[idx + 3] > 40) {
+              if (data[idx + 3] > 30) {
+                const gx = Math.floor(x / cell);
+                grid[gy * gw + gx] = 1;
+                totalCells++;
                 pts.push({ x, y });
               }
             }
           }
           guidePointsRef.current = pts;
+          letterGridRef.current = { grid, width: gw, height: gh, cell, totalCells };
         } catch (err) {
           console.warn('Guide point sampling error:', err);
         }
@@ -491,108 +520,98 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     }
   };
 
-  // Evaluate drawing accuracy against template
-  const calculateAccuracy = useCallback((): number => {
-    const guidePts = guidePointsRef.current;
-    if (guidePts.length === 0 || !template || template.category === 'freehand') return 0;
+  // Fast helper: Check if (x, y) is inside the letter body (black ink mask) within a given margin
+  const isPointOnLetter = useCallback((x: number, y: number, margin = 0): boolean => {
+    const lg = letterGridRef.current;
+    if (!lg || lg.totalCells === 0) return true; // Fallback if no grid available
 
-    // Collect all drawn points
-    const drawnPts: { x: number; y: number }[] = [];
-    strokes.forEach(stroke => {
-      if (stroke.penType !== 'eraser') {
-        stroke.points.forEach(p => drawnPts.push({ x: p.x, y: p.y }));
-      }
-    });
+    const cell = lg.cell;
+    const gx = Math.floor(x / cell);
+    const gy = Math.floor(y / cell);
+    const cellMargin = Math.ceil(margin / cell);
 
-    if (drawnPts.length === 0) return 0;
-
-    // Radius of tolerance
-    const tolerance = 32;
-    let coveredCount = 0;
-
-    // Check how many guide points are covered by drawn points
-    for (const gPt of guidePts) {
-      let isCovered = false;
-      for (const dPt of drawnPts) {
-        const dist = Math.hypot(gPt.x - dPt.x, gPt.y - dPt.y);
-        if (dist <= tolerance) {
-          isCovered = true;
-          break;
-        }
-      }
-      if (isCovered) coveredCount++;
+    if (cellMargin <= 0) {
+      if (gx < 0 || gx >= lg.width || gy < 0 || gy >= lg.height) return false;
+      return lg.grid[gy * lg.width + gx] === 1;
     }
 
-    const accuracyPercent = Math.min(100, Math.round((coveredCount / guidePts.length) * 100));
+    const minX = Math.max(0, gx - cellMargin);
+    const maxX = Math.min(lg.width - 1, gx + cellMargin);
+    const minY = Math.max(0, gy - cellMargin);
+    const maxY = Math.min(lg.height - 1, gy + cellMargin);
 
-    if (onAccuracyUpdate) {
-      onAccuracyUpdate(accuracyPercent);
-    }
-
-    // Check if goal achieved
-    const target = template.targetAccuracy || 70;
-    if (accuracyPercent >= target && !hasAchievedGoalRef.current) {
-      hasAchievedGoalRef.current = true;
-      if (onGoalAchieved) {
-        onGoalAchieved(accuracyPercent);
-      }
-      // Confetti & Audio celebration
-      confetti({
-        particleCount: 80,
-        spread: 70,
-        origin: { y: 0.6 }
-      });
-      audioService.playSuccessFanfare();
-      audioService.speakArabic('أحسنت! رسم دقيق ورائع جداً');
-    }
-
-    return accuracyPercent;
-  }, [strokes, template, onAccuracyUpdate, onGoalAchieved]);
-
-  // Recalculate whenever strokes change
-  useEffect(() => {
-    calculateAccuracy();
-  }, [strokes, calculateAccuracy]);
-
-  // Calculate perpendicular distance from point (px, py) to line segment (x1, y1) -> (x2, y2)
-  const distToSegment = (px: number, py: number, x1: number, y1: number, x2: number, y2: number): number => {
-    const dx = x2 - x1;
-    const dy = y2 - y1;
-    const l2 = dx * dx + dy * dy;
-    if (l2 === 0) return Math.hypot(px - x1, py - y1);
-    let t = ((px - x1) * dx + (py - y1) * dy) / l2;
-    t = Math.max(0, Math.min(1, t));
-    return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
-  };
-
-  // Helper to test if a drawn point (x, y) is on the calligraphy guide path
-  const checkPointOnPath = useCallback((x: number, y: number) => {
-    const tol = Math.max(34, penSize * 2);
-
-    // 1. If we have sampled template guide points (black calligraphy pixels)
-    const guides = guidePointsRef.current;
-    if (guides.length > 0) {
-      for (let i = 0; i < guides.length; i += 2) {
-        const g = guides[i];
-        if (Math.abs(x - g.x) <= tol && Math.abs(y - g.y) <= tol) {
-          if (Math.hypot(x - g.x, y - g.y) <= tol) {
+    for (let py = minY; py <= maxY; py++) {
+      const rowOffset: number = py * lg.width;
+      for (let px = minX; px <= maxX; px++) {
+        if (lg.grid[rowOffset + px] === 1) {
+          const dx = (px - gx) * cell;
+          const dy = (py - gy) * cell;
+          if (dx * dx + dy * dy <= margin * margin) {
             return true;
           }
         }
       }
     }
-
-    // 2. Strict step corridor check: point MUST be within corridor of active step start -> end
-    if (activeStepPointsRef.current) {
-      const active = activeStepPointsRef.current;
-      const d = distToSegment(x, y, active.sx, active.sy, active.ex, active.ey);
-      if (d <= tol) {
-        return true;
-      }
-    }
-
     return false;
-  }, [penSize]);
+  }, []);
+
+  // Helper to test if a drawn point (x, y) is on the calligraphy guide path (letter body)
+  const checkPointOnPath = useCallback((x: number, y: number): boolean => {
+    const nibTolerance = Math.max(8, penSize * 0.7);
+    return isPointOnLetter(x, y, nibTolerance);
+  }, [isPointOnLetter, penSize]);
+
+  // Evaluate drawing thickness coverage against the letter body
+  const calculateCoverageScore = useCallback((): number => {
+    const lg = letterGridRef.current;
+    if (!lg || lg.totalCells === 0 || !template || template.category === 'freehand') return 0;
+
+    const covered = new Uint8Array(lg.totalCells);
+    let coveredCount = 0;
+
+    strokes.forEach(stroke => {
+      if (stroke.penType !== 'eraser') {
+        const strokePenRadius = Math.max(3, (stroke.size || penSize) * 0.6);
+        const strokeCellRadius = Math.ceil(strokePenRadius / lg.cell);
+
+        stroke.points.forEach(p => {
+          const gx = Math.floor(p.x / lg.cell);
+          const gy = Math.floor(p.y / lg.cell);
+
+          const minX = Math.max(0, gx - strokeCellRadius);
+          const maxX = Math.min(lg.width - 1, gx + strokeCellRadius);
+          const minY = Math.max(0, gy - strokeCellRadius);
+          const maxY = Math.min(lg.height - 1, gy + strokeCellRadius);
+
+          for (let cy = minY; cy <= maxY; cy++) {
+            const rowOffset: number = cy * lg.width;
+            for (let cx = minX; cx <= maxX; cx++) {
+              const idx: number = rowOffset + cx;
+              if (lg.grid[idx] === 1 && covered[idx] === 0) {
+                const dx = (cx - gx) * lg.cell;
+                const dy = (cy - gy) * lg.cell;
+                if (dx * dx + dy * dy <= strokePenRadius * strokePenRadius) {
+                  covered[idx] = 1;
+                  coveredCount++;
+                }
+              }
+            }
+          }
+        });
+      }
+    });
+
+    const percent = Math.min(100, Math.round((coveredCount / lg.totalCells) * 100));
+    if (onAccuracyUpdate) {
+      onAccuracyUpdate(percent);
+    }
+    return percent;
+  }, [strokes, template, penSize, onAccuracyUpdate]);
+
+  // Recalculate whenever strokes change
+  useEffect(() => {
+    calculateCoverageScore();
+  }, [strokes, calculateCoverageScore]);
 
   // Start exercise with voice unlock and pronunciation
   const handleStartLesson = async () => {
@@ -772,13 +791,13 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                 // ALL STEPS COMPLETED! Generate comprehensive evaluation scorecard
                 const startEndScore = 100; // Both start and end points satisfied
                 const pathScore = Math.min(100, Math.round(pathRatio * 100));
-                const coverageScore = calculateAccuracy();
-                const finalScore = Math.min(100, Math.max(60, Math.round(startEndScore * 0.3 + pathScore * 0.5 + coverageScore * 0.2)));
+                const coverageScore = calculateCoverageScore();
+                const finalScore = Math.min(100, Math.round(startEndScore * 0.25 + pathScore * 0.45 + coverageScore * 0.30));
 
                 let feedback = '';
                 if (finalScore >= 88) feedback = 'ما شاء الله! جريان قلم متقن ومسار متميز 🌟';
                 else if (finalScore >= 72) feedback = 'جيد جداً! رسم دقيق مع استقرار في القلم 👍';
-                else feedback = 'محاولة طيبة! حاول الالتزام بمسار الحرف أكثر ✍️';
+                else feedback = 'محاولة طيبة! حاول ملء عرض الحرف والالتزام بالمسار أكثر ✍️';
 
                 setEvaluationModal({
                   isOpen: true,
@@ -965,13 +984,13 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                 } else {
                   const startEndScore = 100;
                   const pathScore = Math.min(100, Math.round(pathRatio * 100));
-                  const coverageScore = calculateAccuracy();
-                  const finalScore = Math.min(100, Math.max(60, Math.round(startEndScore * 0.3 + pathScore * 0.5 + coverageScore * 0.2)));
+                  const coverageScore = calculateCoverageScore();
+                  const finalScore = Math.min(100, Math.round(startEndScore * 0.25 + pathScore * 0.45 + coverageScore * 0.30));
 
                   let feedback = '';
                   if (finalScore >= 88) feedback = 'ما شاء الله! جريان قلم متقن ومسار متميز 🌟';
                   else if (finalScore >= 72) feedback = 'جيد جداً! رسم دقيق مع استقرار في القلم 👍';
-                  else feedback = 'محاولة طيبة! حاول الالتزام بمسار الحرف أكثر ✍️';
+                  else feedback = 'محاولة طيبة! حاول ملء عرض الحرف والالتزام بالمسار أكثر ✍️';
 
                   setEvaluationModal({
                     isOpen: true,
@@ -1015,7 +1034,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         }
       }
     }
-  }, [virtualCursor, isAirDrawing, isARMode, dimensions, penType, penColor, penSize, calligraphyAngle, redrawCanvas, currentStepIndex, template, onGoalAchieved, checkPointOnPath, calculateAccuracy, isLessonStarted]);
+  }, [virtualCursor, isAirDrawing, isARMode, dimensions, penType, penColor, penSize, calligraphyAngle, redrawCanvas, currentStepIndex, template, onGoalAchieved, checkPointOnPath, calculateCoverageScore, isLessonStarted]);
 
   // Imperative actions exposed to parent component
   useImperativeHandle(ref, () => ({
@@ -1089,8 +1108,8 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
 
       return exportCanvas.toDataURL('image/png');
     },
-    recalculateAccuracy: () => calculateAccuracy()
-  }), [strokes, redoStack, dimensions, boardStyle, calculateAccuracy, onAccuracyUpdate, template]);
+    recalculateAccuracy: () => calculateCoverageScore()
+  }), [strokes, redoStack, dimensions, boardStyle, calculateCoverageScore, onAccuracyUpdate, template]);
 
   // Board background classes and styles
   const getBoardBgStyle = () => {
@@ -1345,7 +1364,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
               {/* Criterion 1 */}
               <div>
                 <div className="flex justify-between mb-1">
-                  <span className="text-slate-300">الالتزام بنقاط البداية والنهاية (🟢 → 🔴)</span>
+                  <span className="text-slate-300">نقطتا البداية والنهاية (🟢 → 🔴)</span>
                   <span className="font-bold text-emerald-400">{evaluationModal.startEndScore}%</span>
                 </div>
                 <div className="w-full bg-slate-700 rounded-full h-2 overflow-hidden">
@@ -1359,7 +1378,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
               {/* Criterion 2 */}
               <div>
                 <div className="flex justify-between mb-1">
-                  <span className="text-slate-300">الالتزام بمسار الحرف وجريان القلم</span>
+                  <span className="text-slate-300">دقة المسار (عدم الخروج عن الحرف)</span>
                   <span className="font-bold text-amber-400">{evaluationModal.pathScore}%</span>
                 </div>
                 <div className="w-full bg-slate-700 rounded-full h-2 overflow-hidden">
@@ -1373,7 +1392,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
               {/* Criterion 3 */}
               <div>
                 <div className="flex justify-between mb-1">
-                  <span className="text-slate-300">انسيابية الخط وتغطية المسار</span>
+                  <span className="text-slate-300">تغطية سُمك الحرف (ملء عرض الخط)</span>
                   <span className="font-bold text-sky-400">{evaluationModal.coverageScore}%</span>
                 </div>
                 <div className="w-full bg-slate-700 rounded-full h-2 overflow-hidden">
