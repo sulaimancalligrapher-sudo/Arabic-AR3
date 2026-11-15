@@ -7,7 +7,7 @@ const LOCAL_TEMPLATES_KEY = 'arabic_ar_horizontal_templates_v2';
 const LOCAL_STEPS_CACHE_KEY = 'arabic_ar_steps_backup_cache';
 
 // Default built-in Google Apps Script URL so all devices (mobile, tablet, PC) connect automatically
-export const DEFAULT_SHEET_URL = 'https://script.google.com/macros/s/AKfycbx3_qkyXIsl14D-FepEhPquylRAjaldHbVMngbL_a3ngAi5nbnN-hURum9kH2HHPjSlWQ/exec';
+export const DEFAULT_SHEET_URL = 'https://script.google.com/macros/s/AKfycbxsxerSmQe-lFdJiWu8n4azsbMgUknvvcbTx8GC1-n5HFUApkGU8rYG5JWgwiBSjgLwIQ/exec';
 
 /**
  * Return authentic Arabic ordinal word for steps
@@ -175,14 +175,18 @@ const ANSWER_SUB_HEADERS = [
 
 /**
  * مهم جداً: قم باختيار هذه الدالة (authorizePermissions) والضغط على تشغيل (Run)
- * مرة واحدة داخل محرر Apps Script لمنح صلاحيات Google Sheets و Google Drive معاً.
+ * مرة واحدة داخل محرر Apps Script لمنح صلاحيات الكتابة الكاملة في Google Sheets و Google Drive معاً.
  */
 function authorizePermissions() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const root = DriveApp.getRootFolder();
   const folder = DriveApp.getFolderById(DRIVE_FOLDER_ID);
-  Logger.log("Sheets: " + ss.getName() + " | Root: " + root.getName() + " | Folder: " + folder.getName());
-  return "تم تفعيل صلاحيات الشيت وقوقل درايف بنجاح!";
+  const testFile = folder.createFile("permission_test.txt", "ok", MimeType.PLAIN_TEXT);
+  try {
+    testFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  } catch (e) {}
+  testFile.setTrashed(true);
+  Logger.log("Sheets & Full Drive Write OK: " + ss.getName() + " | " + folder.getName());
+  return "تم تفعيل صلاحيات الشيت والكتابة الكاملة في قوقل درايف بنجاح!";
 }
 
 function getOrCreateAnswersSheet() {

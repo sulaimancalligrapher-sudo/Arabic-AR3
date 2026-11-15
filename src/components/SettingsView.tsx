@@ -958,10 +958,23 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
 
               {/* Code Box */}
-              <div className="mt-4">
+              <div className="mt-4 space-y-3">
                 <pre className="p-4 rounded-xl bg-slate-950 border border-slate-800 text-[11px] font-mono text-slate-300 overflow-x-auto max-h-64 scrollbar-thin">
                   <code>{GOOGLE_APPS_SCRIPT_CODE}</code>
                 </pre>
+
+                <div className="p-4 rounded-xl bg-amber-500/5 border border-amber-500/25 text-xs space-y-2">
+                  <div className="font-bold text-amber-400">
+                    في حال استمرت رسالة إذن DriveApp.Folder.createFile:
+                  </div>
+                  <p className="text-slate-300 leading-relaxed">
+                    من القائمة اليسرى في محرر Apps Script افتح <strong>إعدادات المشروع (أيقونة الترس ⚙️)</strong> وفعّل خيار <strong>عرض ملف البيان &quot;appsscript.json&quot; في المحرر</strong>، ثم افتح ملف <code className="text-amber-300 font-mono">appsscript.json</code> وأضف سطري <code className="text-emerald-400 font-mono">oauthScopes</code> التاليين بداخله ثم احفظ وشغّل <code className="text-emerald-400 font-mono">authorizePermissions</code> وأعد النشر كإصدار جديد:
+                  </p>
+                  <pre dir="ltr" className="p-3 rounded-lg bg-slate-950 border border-slate-800 text-[11px] font-mono text-emerald-300 overflow-x-auto">{`"oauthScopes": [
+  "https://www.googleapis.com/auth/spreadsheets",
+  "https://www.googleapis.com/auth/drive"
+]`}</pre>
+                </div>
               </div>
             </div>
 
