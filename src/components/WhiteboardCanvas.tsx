@@ -751,13 +751,25 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     calculateCoverageScore();
   }, [strokes, calculateCoverageScore]);
 
-  // Capture composite board image safely as Base64 PNG (never taints exportCanvas even if template image lacks CORS)
-  const captureBoardBase64 = useCallback((): string => {
-    const maxExportWidth = 1200;
-    const scale = dimensions.width > maxExportWidth ? maxExportWidth / dimensions.width : 1;
+  // Capture composite board image safely as Base64 PNG with an optional bottom stamp bar (student info + scores)
+  const captureBoardBase64 = useCallback((stampInfo?: {
+    studentName: string;
+    studentId: string;
+    lessonTitle: string;
+    totalScore: number;
+    startEndScore: number;
+    pathScore: number;
+    coverageScore: number;
+    isBlindMode?: boolean;
+  }): string => {
+    const exportWidth = Math.max(780, Math.min(1200, dimensions.width || 800));
+    const scale = exportWidth / Math.max(1, dimensions.width || 800);
+    const boardHeight = Math.max(1, Math.round((dimensions.height || 500) * scale));
+    const footerHeight = stampInfo ? 78 : 0;
+
     const exportCanvas = document.createElement('canvas');
-    exportCanvas.width = Math.max(1, Math.round(dimensions.width * scale));
-    exportCanvas.height = Math.max(1, Math.round(dimensions.height * scale));
+    exportCanvas.width = exportWidth;
+    exportCanvas.height = boardHeight + footerHeight;
     const ctx = exportCanvas.getContext('2d')!;
 
     if (boardStyle === 'dark') {
@@ -769,20 +781,94 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     } else {
       ctx.fillStyle = '#ffffff';
     }
-    ctx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+    ctx.fillRect(0, 0, exportWidth, boardHeight);
 
     // Check if templateCanvasRef is origin-clean BEFORE drawing it onto exportCanvas
     if (templateCanvasRef.current && !template?.hideImage) {
       try {
         templateCanvasRef.current.toDataURL('image/png');
-        ctx.drawImage(templateCanvasRef.current, 0, 0, exportCanvas.width, exportCanvas.height);
+        ctx.drawImage(templateCanvasRef.current, 0, 0, exportWidth, boardHeight);
       } catch {
         // Template image is cross-origin tainted; skip it so exportCanvas stays clean and exports user strokes
       }
     }
 
     if (canvasRef.current) {
-      ctx.drawImage(canvasRef.current, 0, 0, exportCanvas.width, exportCanvas.height);
+      ctx.drawImage(canvasRef.current, 0, 0, exportWidth, boardHeight);
+    }
+
+    // Stamp student info, score badge, and breakdown on a crisp bottom band
+    if (stampInfo) {
+      const padX = 20;
+      const yTop = boardHeight;
+
+      // Dark slate footer background + gold top border
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(0, yTop, exportWidth, footerHeight);
+      ctx.fillStyle = '#f59e0b';
+      ctx.fillRect(0, yTop, exportWidth, 2.5);
+
+      ctx.direction = 'rtl';
+      ctx.textBaseline = 'middle';
+
+      // Row 1: Student Name & ID (right) | Lesson Title & Date (left)
+      const row1Y = yTop + 23;
+      ctx.textAlign = 'right';
+      ctx.fillStyle = '#f8fafc';
+      ctx.font = 'bold 15px Cairo, Tahoma, sans-serif';
+      const safeName = (stampInfo.studentName || '').slice(0, 32);
+      const safeId = (stampInfo.studentId || '').slice(0, 20);
+      ctx.fillText(`المشترك: ${safeName}   •   رقم التسجيل: ${safeId}`, exportWidth - padX, row1Y);
+
+      const now = new Date();
+      const dateStr = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')}`;
+      const safeTitle = (stampInfo.lessonTitle || '').slice(0, 26);
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#cbd5e1';
+      ctx.font = '600 13px Cairo, Tahoma, sans-serif';
+      ctx.fillText(`${safeTitle}  |  ${dateStr}`, padX, row1Y);
+
+      // Subtle divider between rows
+      ctx.fillStyle = 'rgba(148, 163, 184, 0.16)';
+      ctx.fillRect(padX, yTop + 40, exportWidth - padX * 2, 1);
+
+      // Row 2: Final Score Badge (right) | Detailed Breakdown (left)
+      const row2Y = yTop + 58;
+      const scoreVal = Math.round(stampInfo.totalScore);
+      const badgeColor = scoreVal >= 75 ? '#10b981' : scoreVal >= 50 ? '#f59e0b' : '#f43f5e';
+      const badgeBg = scoreVal >= 75 ? 'rgba(16, 185, 129, 0.16)' : scoreVal >= 50 ? 'rgba(245, 158, 11, 0.16)' : 'rgba(244, 63, 94, 0.18)';
+
+      const scoreLabel = `الدرجة النهائية: ${scoreVal}%`;
+      ctx.font = 'bold 14px Cairo, Tahoma, sans-serif';
+      const pillWidth = Math.ceil(ctx.measureText(scoreLabel).width) + 24;
+      const pillHeight = 26;
+      const pillX = exportWidth - padX - pillWidth;
+      const pillY = row2Y - pillHeight / 2;
+
+      ctx.beginPath();
+      if (typeof ctx.roundRect === 'function') {
+        ctx.roundRect(pillX, pillY, pillWidth, pillHeight, 8);
+      } else {
+        ctx.rect(pillX, pillY, pillWidth, pillHeight);
+      }
+      ctx.fillStyle = badgeBg;
+      ctx.fill();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = badgeColor;
+      ctx.stroke();
+
+      ctx.textAlign = 'center';
+      ctx.fillStyle = badgeColor;
+      ctx.fillText(scoreLabel, pillX + pillWidth / 2, row2Y + 1);
+
+      // Score breakdown on the left side of Row 2
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#e2e8f0';
+      ctx.font = '600 13px Cairo, Tahoma, sans-serif';
+      const breakdownText = stampInfo.isBlindMode
+        ? `الاتزان: ${stampInfo.startEndScore}%  •  التشابه: ${stampInfo.pathScore}%  •  المعالم: ${stampInfo.coverageScore}%`
+        : `البداية/النهاية: ${stampInfo.startEndScore}%  •  المسار: ${stampInfo.pathScore}%  •  السُمك: ${stampInfo.coverageScore}%`;
+      ctx.fillText(breakdownText, padX, row2Y + 1);
     }
 
     return exportCanvas.toDataURL('image/png');
@@ -1051,7 +1137,16 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     setSubmitAnswerResult(null);
 
     try {
-      const imageBase64 = captureBoardBase64();
+      const imageBase64 = captureBoardBase64({
+        studentName: currentUser.name,
+        studentId: currentUser.id,
+        lessonTitle: template.title,
+        totalScore: evaluationModal.totalScore,
+        startEndScore: evaluationModal.startEndScore,
+        pathScore: evaluationModal.pathScore,
+        coverageScore: evaluationModal.coverageScore,
+        isBlindMode: Boolean(template.hideImage)
+      });
       const details = `البداية/النهاية: ${evaluationModal.startEndScore}% | المسار: ${evaluationModal.pathScore}% | السُمك: ${evaluationModal.coverageScore}%`;
       const res = await sheetService.submitLessonAnswer({
         studentId: currentUser.id,
