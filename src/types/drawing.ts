@@ -8,7 +8,7 @@ export type PenType = 'calligraphy' | 'marker' | 'brush' | 'eraser';
 
 export type GuideColor = 'yellow' | 'green' | 'white' | 'cyan' | 'black';
 
-export type LessonDifficulty = 'سهل' | 'متوسط' | 'متقدم' | 'صعب' | 'easy' | 'normal' | 'advanced';
+export type LessonDifficulty = 'سهل' | 'متوسط' | 'متقدم' | string;
 
 export interface LessonStep {
   id: string;
@@ -30,7 +30,10 @@ export interface DrawingTemplate {
   titleEn?: string;
   arabicAudioText?: string;  // العامود E: نص للقراءة الآلية (إذا فارغ يُقرأ العنوان)
   repeatCount?: number;      // العامود F: عدد التكرار (الافتراضي 1)
-  difficulty?: LessonDifficulty; // العامود G: المستوى (سهل / متوسط / متقدم / صعب)
+  difficulty?: LessonDifficulty; // العامود G: المستوى (سهل / متوسط / متقدم)
+  hideDots?: boolean;        // إخفاء نقاط البداية الخضراء والنهاية الحمراء
+  hideImage?: boolean;       // إخفاء صورة الحرف تماماً (اختبار الذاكرة على سبورة بيضاء)
+  slotIndex?: number;        // ترتيب التمرين في الموضوع (1, 2, 3...)
   description?: string;
   svgData?: string;
   guideColor?: GuideColor;

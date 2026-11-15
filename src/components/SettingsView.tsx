@@ -132,6 +132,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [formAudioText, setFormAudioText] = useState('');
   const [formRepeatCount, setFormRepeatCount] = useState<number>(1);
   const [formDifficulty, setFormDifficulty] = useState<LessonDifficulty>('سهل');
+  const [formHideDots, setFormHideDots] = useState<boolean>(false);
+  const [formHideImage, setFormHideImage] = useState<boolean>(false);
   const [formSteps, setFormSteps] = useState<LessonStep[]>([]);
   const [formStepsData, setFormStepsData] = useState<string>('');
 
@@ -281,6 +283,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setFormAudioText(tpl.arabicAudioText || tpl.title);
     setFormRepeatCount(Number(tpl.repeatCount) || 1);
     setFormDifficulty(tpl.difficulty || 'سهل');
+    setFormHideDots(!!tpl.hideDots);
+    setFormHideImage(!!tpl.hideImage);
     setFormSteps(tpl.steps || []);
     setFormStepsData(tpl.stepsData || (tpl.steps ? JSON.stringify(tpl.steps) : ''));
     setIsAddModalOpen(true);
@@ -297,6 +301,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setFormAudioText('');
     setFormRepeatCount(1);
     setFormDifficulty('سهل');
+    setFormHideDots(false);
+    setFormHideImage(false);
     setFormSteps([]);
     setFormStepsData('');
     setIsAddModalOpen(true);
@@ -329,6 +335,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       arabicAudioText: formAudioText.trim() || formTitle.trim(),
       repeatCount: Number(formRepeatCount) || 1,
       difficulty: formDifficulty,
+      hideDots: formHideDots,
+      hideImage: formHideImage,
       svgData: editingTemplate?.svgData || '',
       steps: formSteps,
       stepsData: formStepsData || (formSteps.length > 0 ? JSON.stringify(formSteps) : '')
@@ -1513,11 +1521,38 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     onChange={(e) => setFormDifficulty(e.target.value as any)}
                     className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-slate-100 text-xs focus:outline-hidden focus:border-amber-500 cursor-pointer"
                   >
-                    <option value="سهل">سهل</option>
-                    <option value="متوسط">متوسط</option>
-                    <option value="متقدم">متقدم</option>
-                    <option value="صعب">صعب</option>
+                    <option value="سهل">سهل (المؤشرات كافية للاجتياز)</option>
+                    <option value="متوسط">متوسط (يشترط الالتزام بمسار الحرف)</option>
+                    <option value="متقدم">متقدم (يشترط المسار وسُمك الحرف 75%)</option>
                   </select>
+                </div>
+              </div>
+
+              {/* أنماط التحدي الخاصة بالدرس (تحديد المعلم) */}
+              <div className="p-3.5 rounded-2xl bg-slate-950/70 border border-amber-500/20 space-y-2.5">
+                <span className="block text-xs font-bold text-amber-400">
+                  🎯 أنماط وتحديات إضافية للدرس (اختياري للمعلم):
+                </span>
+                <div className="flex flex-col sm:flex-row gap-3 text-xs">
+                  <label className="flex items-center gap-2 cursor-pointer text-slate-300 hover:text-white">
+                    <input
+                      type="checkbox"
+                      checked={formHideDots}
+                      onChange={(e) => setFormHideDots(e.target.checked)}
+                      className="rounded border-slate-700 text-amber-500 focus:ring-amber-500"
+                    />
+                    <span>إخفاء نقاط البداية والنهاية (بدون مؤشرات ملونة)</span>
+                  </label>
+
+                  <label className="flex items-center gap-2 cursor-pointer text-slate-300 hover:text-white">
+                    <input
+                      type="checkbox"
+                      checked={formHideImage}
+                      onChange={(e) => setFormHideImage(e.target.checked)}
+                      className="rounded border-slate-700 text-amber-500 focus:ring-amber-500"
+                    />
+                    <span>إخفاء صورة الحرف (اختبار الذاكرة التام على سبورة بيضاء)</span>
+                  </label>
                 </div>
               </div>
 
@@ -1564,6 +1599,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         category: formCategory.trim() || 'حروف',
                         repeatCount: formRepeatCount,
                         difficulty: formDifficulty,
+                        hideDots: formHideDots,
+                        hideImage: formHideImage,
                         svgData: editingTemplate?.svgData || '',
                         steps: formSteps,
                         stepsData: formStepsData || (formSteps.length > 0 ? JSON.stringify(formSteps) : '')

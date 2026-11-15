@@ -360,12 +360,9 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
               <div className="w-6 h-6 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center font-bold text-[11px] shrink-0">
                 <User className="w-3.5 h-3.5" />
               </div>
-              <div className="text-right leading-tight max-w-[130px] truncate">
-                <div className="font-bold text-slate-100 truncate text-[11px]">
+              <div className="text-right leading-tight max-w-[140px] truncate">
+                <div className="font-bold text-slate-100 truncate text-xs">
                   {currentUser.name}
-                </div>
-                <div className="text-[10px] font-mono text-amber-400">
-                  ID: {currentUser.id}
                 </div>
               </div>
               {onLogout && (
@@ -415,11 +412,8 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
 
           {currentUser ? (
             <div className="flex items-center gap-1 min-w-0 text-right">
-              <span className="text-[11px] font-bold text-amber-300 truncate max-w-[100px]">
+              <span className="text-xs font-bold text-amber-300 truncate max-w-[130px]">
                 {currentUser.name}
-              </span>
-              <span className="text-[9px] font-mono text-amber-400/80 bg-amber-500/10 px-1 rounded">
-                #{currentUser.id}
               </span>
             </div>
           ) : template ? (
@@ -504,7 +498,6 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
                 </div>
                 <div className="text-right">
                   <div className="text-xs font-bold text-slate-100">{currentUser.name}</div>
-                  <div className="text-[10px] font-mono text-amber-400">رقم المشترك (ID): {currentUser.id}</div>
                 </div>
               </div>
               {onLogout && (

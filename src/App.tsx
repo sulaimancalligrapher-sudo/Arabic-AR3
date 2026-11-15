@@ -105,16 +105,18 @@ export default function App() {
 
   // User Session State (ID registrants)
   const [currentUser, setCurrentUser] = useState<RegistrantUser | null>(() => sheetService.getStoredUser());
-  const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
+  const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(() => !sheetService.getStoredUser());
 
   const handleLoginSuccess = (user: RegistrantUser) => {
     setCurrentUser(user);
     sheetService.saveStoredUser(user);
+    setIsLoginModalOpen(false);
   };
 
   const handleLogout = () => {
     setCurrentUser(null);
     sheetService.saveStoredUser(null);
+    setIsLoginModalOpen(true);
     audioService.playChime(350, 0.1);
   };
 
@@ -423,6 +425,8 @@ export default function App() {
               syncHistoryState();
             }}
             onGoalAchieved={handleGoalAchieved}
+            currentUser={currentUser}
+            totalLessonsInTopic={allTemplates.filter(t => (t.topic || 'خط النسخ').trim() === (selectedTemplate?.topic || 'خط النسخ').trim()).length}
           />
 
           {/* Celebration Achievement Banner */}
@@ -548,8 +552,13 @@ export default function App() {
       {/* Participant Login Modal */}
       <LoginModal
         isOpen={isLoginModalOpen}
-        onClose={() => setIsLoginModalOpen(false)}
+        onClose={() => {
+          if (currentUser) {
+            setIsLoginModalOpen(false);
+          }
+        }}
         onLoginSuccess={handleLoginSuccess}
+        canDismiss={!!currentUser}
       />
 
     </div>

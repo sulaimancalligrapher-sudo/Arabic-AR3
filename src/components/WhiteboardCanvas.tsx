@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useState, useCallback, useImperativeHandle, f
 import { BoardStyle, PenType, Stroke, Point, DrawingTemplate, GuideColor, LessonStep } from '../types/drawing';
 import { audioService } from '../services/audioService';
 import { formatDirectImageUrl } from '../utils/urlHelper';
-import { getArabicOrdinal, getStepAudioPrompt } from '../services/sheetService';
+import { getArabicOrdinal, getStepAudioPrompt, RegistrantUser, sheetService } from '../services/sheetService';
 import { 
   AlertCircle, 
   CheckCircle2, 
@@ -16,7 +16,13 @@ import {
   X,
   Camera,
   BookOpen,
-  FolderOpen
+  FolderOpen,
+  Save,
+  ExternalLink,
+  Loader2,
+  Eye,
+  EyeOff,
+  Sparkles
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -45,6 +51,8 @@ interface WhiteboardCanvasProps {
   calligraphyAngle?: number;
   currentRepetition?: number;
   isFullscreen?: boolean;
+  currentUser?: RegistrantUser | null;
+  totalLessonsInTopic?: number;
   onToggleFullscreen?: () => void;
   onOpenHelp?: () => void;
   onOpenLibrary?: () => void;
@@ -68,6 +76,8 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
   calligraphyAngle = 120,
   currentRepetition = 1,
   isFullscreen = false,
+  currentUser,
+  totalLessonsInTopic,
   onToggleFullscreen,
   onOpenHelp,
   onOpenLibrary,
@@ -118,6 +128,18 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     feedback: string;
   } | null>(null);
 
+  // Answer submission to Google Drive and 'answers 1' sheet
+  const [isSubmittingAnswer, setIsSubmittingAnswer] = useState(false);
+  const [submitAnswerResult, setSubmitAnswerResult] = useState<{
+    success: boolean;
+    message: string;
+    imageUrl?: string;
+    completionStatus?: string;
+  } | null>(null);
+
+  // Challenge Mode: Ghost overlay comparison for memory test
+  const [showGhostOverlay, setShowGhostOverlay] = useState(false);
+
   const resetStrokeStats = useCallback(() => {
     strokeStatsRef.current = {
       total: 0,
@@ -139,6 +161,8 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     cell: number;
     totalCells: number;
   } | null>(null);
+  const drawBoundsRef = useRef<{ drawX: number; drawY: number; drawW: number; drawH: number } | null>(null);
+  const stepScoresRef = useRef<{ startEnd: number; path: number; brokenAway: boolean }[]>([]);
   const hasAchievedGoalRef = useRef(false);
 
   // Canvas dimensions
@@ -172,7 +196,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       redrawCanvas();
       drawTemplateGuide();
     }
-  }, [dimensions, template, guideColor, templateOpacity, currentStepIndex]);
+  }, [dimensions, template, guideColor, templateOpacity, currentStepIndex, showGhostOverlay]);
 
   // Reset goal achieved state and step progression when template or repetition changes (requires ( ابدأ ) for every lesson)
   useEffect(() => {
@@ -180,8 +204,11 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     setCurrentStepIndex(0);
     setStepAlert(null);
     setEvaluationModal(null);
+    setSubmitAnswerResult(null);
+    setShowGhostOverlay(false);
     setIsLessonStarted(false);
     strokeStartedAtGreenRef.current = false;
+    stepScoresRef.current = [];
     resetStrokeStats();
     drawTemplateGuide();
   }, [template, currentRepetition, resetStrokeStats]);
@@ -314,7 +341,8 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     drawX: number,
     drawY: number,
     drawW: number,
-    drawH: number
+    drawH: number,
+    shouldDrawDots = true
   ) => {
     if (!steps || steps.length === 0 || stepIndex >= steps.length) {
       activeStepPointsRef.current = null;
@@ -336,6 +364,8 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       step: s,
       stepIndex
     };
+
+    if (!shouldDrawDots) return;
 
     ctx.save();
     ctx.shadowColor = 'rgba(0, 0, 0, 0.45)';
@@ -436,6 +466,59 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     return added;
   };
 
+  // Extract pixel-level letter grid using a dedicated sampling canvas (works even when hideImage is true!)
+  const extractLetterGridFromImage = (
+    img: HTMLImageElement,
+    tWidth: number,
+    tHeight: number,
+    drawX: number,
+    drawY: number,
+    drawW: number,
+    drawH: number,
+    steps?: LessonStep[]
+  ) => {
+    const cell = 4;
+    const gw = Math.ceil(tWidth / cell);
+    const gh = Math.ceil(tHeight / cell);
+    const grid = new Uint8Array(gw * gh);
+    let totalCells = 0;
+    const pts: { x: number; y: number }[] = [];
+
+    try {
+      const sampleCanvas = document.createElement('canvas');
+      sampleCanvas.width = tWidth;
+      sampleCanvas.height = tHeight;
+      const sCtx = sampleCanvas.getContext('2d');
+      if (sCtx) {
+        sCtx.drawImage(img, drawX, drawY, drawW, drawH);
+        const imgData = sCtx.getImageData(0, 0, tWidth, tHeight);
+        const data = imgData.data;
+
+        for (let y = 0; y < tHeight; y += cell) {
+          const gy = Math.floor(y / cell);
+          for (let x = 0; x < tWidth; x += cell) {
+            const idx = (y * tWidth + x) * 4;
+            if (data[idx + 3] > 30) {
+              const gx = Math.floor(x / cell);
+              grid[gy * gw + gx] = 1;
+              totalCells++;
+              pts.push({ x, y });
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Guide point sampling error (CORS or empty):', err);
+    }
+
+    if (totalCells === 0 && steps && steps.length > 0) {
+      totalCells = rasterizeStepCorridorsIntoGrid(grid, gw, gh, cell, steps, drawX, drawY, drawW, drawH, pts);
+    }
+
+    guidePointsRef.current = pts;
+    letterGridRef.current = { grid, width: gw, height: gh, cell, totalCells };
+  };
+
   // Draw Template Guide Layer (Supports both Google Drive image links and SVG data)
   const drawTemplateGuide = () => {
     const tCanvas = templateCanvasRef.current;
@@ -448,6 +531,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
 
     if (!template) {
       activeStepPointsRef.current = null;
+      drawBoundsRef.current = null;
       return;
     }
 
@@ -459,7 +543,11 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       black: '#0f172a'
     };
 
-    const activeColor = colorHexMap[guideColor] || '#facc15';
+    const isBlindMode = !!template.hideImage;
+    const shouldRenderImage = !isBlindMode || showGhostOverlay;
+    const shouldRenderDots = !template.hideDots && !isBlindMode;
+    const activeColor = isBlindMode && showGhostOverlay ? '#f59e0b' : (colorHexMap[guideColor] || '#facc15');
+    const effectiveOpacity = isBlindMode && showGhostOverlay ? 0.45 : templateOpacity;
 
     // 1. Direct Image URL (Google Drive transparent PNG or web URL)
     if (template.imageUrl && template.imageUrl.trim()) {
@@ -469,9 +557,6 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       img.src = directUrl;
 
       img.onload = () => {
-        ctx.save();
-        ctx.globalAlpha = templateOpacity;
-
         const padding = Math.min(tCanvas.width, tCanvas.height) * 0.08;
         const availW = tCanvas.width - padding * 2;
         const availH = tCanvas.height - padding * 2;
@@ -480,68 +565,41 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         const drawH = (img.height || 500) * scale;
         const drawX = (tCanvas.width - drawW) / 2;
         const drawY = (tCanvas.height - drawH) / 2;
+        drawBoundsRef.current = { drawX, drawY, drawW, drawH };
 
-        // Draw image onto an offscreen canvas to tint black calligraphy lines into active guide color
-        try {
-          const offscreen = document.createElement('canvas');
-          offscreen.width = drawW;
-          offscreen.height = drawH;
-          const offCtx = offscreen.getContext('2d');
-          if (offCtx) {
-            offCtx.drawImage(img, 0, 0, drawW, drawH);
-            offCtx.globalCompositeOperation = 'source-in';
-            offCtx.fillStyle = activeColor;
-            offCtx.fillRect(0, 0, drawW, drawH);
-            ctx.drawImage(offscreen, drawX, drawY);
-          } else {
+        if (shouldRenderImage) {
+          ctx.save();
+          ctx.globalAlpha = effectiveOpacity;
+
+          // Draw image onto an offscreen canvas to tint black calligraphy lines into active guide color
+          try {
+            const offscreen = document.createElement('canvas');
+            offscreen.width = drawW;
+            offscreen.height = drawH;
+            const offCtx = offscreen.getContext('2d');
+            if (offCtx) {
+              offCtx.drawImage(img, 0, 0, drawW, drawH);
+              offCtx.globalCompositeOperation = 'source-in';
+              offCtx.fillStyle = activeColor;
+              offCtx.fillRect(0, 0, drawW, drawH);
+              ctx.drawImage(offscreen, drawX, drawY);
+            } else {
+              ctx.drawImage(img, drawX, drawY, drawW, drawH);
+            }
+          } catch {
             ctx.drawImage(img, drawX, drawY, drawW, drawH);
           }
-        } catch {
-          ctx.drawImage(img, drawX, drawY, drawW, drawH);
+
+          ctx.restore();
         }
 
-        ctx.restore();
-
-        // Render ONLY the active step marker (No arrows, green start dot & red end dot)
+        // Render ONLY the active step marker (No arrows, green start dot & red end dot) if enabled
         if (template.steps && template.steps.length > 0) {
-          drawActiveStepMarker(ctx, template.steps, currentStepIndex, drawX, drawY, drawW, drawH);
+          drawActiveStepMarker(ctx, template.steps, currentStepIndex, drawX, drawY, drawW, drawH, shouldRenderDots);
         }
 
-        // Extract pixel-level letter body mask for precise coverage and off-path detection
-        const cell = 4;
-        const gw = Math.ceil(tCanvas.width / cell);
-        const gh = Math.ceil(tCanvas.height / cell);
-        const grid = new Uint8Array(gw * gh);
-        let totalCells = 0;
-        const pts: { x: number; y: number }[] = [];
-
-        try {
-          const imgData = ctx.getImageData(0, 0, tCanvas.width, tCanvas.height);
-          const data = imgData.data;
-
-          for (let y = 0; y < tCanvas.height; y += cell) {
-            const gy = Math.floor(y / cell);
-            for (let x = 0; x < tCanvas.width; x += cell) {
-              const idx = (y * tCanvas.width + x) * 4;
-              if (data[idx + 3] > 30) {
-                const gx = Math.floor(x / cell);
-                grid[gy * gw + gx] = 1;
-                totalCells++;
-                pts.push({ x, y });
-              }
-            }
-          }
-        } catch (err) {
-          console.warn('Guide point sampling error (CORS or empty):', err);
-        }
-
-        // 100% Reliable Fallback: If canvas was tainted or totalCells is 0, rasterize step corridors
-        if (totalCells === 0 && template.steps && template.steps.length > 0) {
-          totalCells = rasterizeStepCorridorsIntoGrid(grid, gw, gh, cell, template.steps, drawX, drawY, drawW, drawH, pts);
-        }
-
-        guidePointsRef.current = pts;
-        letterGridRef.current = { grid, width: gw, height: gh, cell, totalCells };
+        // Extract pixel-level letter body mask in memory (even when hideImage is active)
+        extractLetterGridFromImage(img, tCanvas.width, tCanvas.height, drawX, drawY, drawW, drawH, template.steps);
       };
       return;
     }
@@ -557,9 +615,6 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(coloredSvg);
 
       img.onload = () => {
-        ctx.save();
-        ctx.globalAlpha = templateOpacity;
-
         const padding = Math.min(tCanvas.width, tCanvas.height) * 0.08;
         const availW = tCanvas.width - padding * 2;
         const availH = tCanvas.height - padding * 2;
@@ -568,50 +623,23 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         const drawH = (img.height || 500) * scale;
         const drawX = (tCanvas.width - drawW) / 2;
         const drawY = (tCanvas.height - drawH) / 2;
+        drawBoundsRef.current = { drawX, drawY, drawW, drawH };
 
-        ctx.shadowColor = activeColor;
-        ctx.shadowBlur = 8;
-        ctx.drawImage(img, drawX, drawY, drawW, drawH);
-        ctx.restore();
+        if (shouldRenderImage) {
+          ctx.save();
+          ctx.globalAlpha = effectiveOpacity;
+          ctx.shadowColor = activeColor;
+          ctx.shadowBlur = 8;
+          ctx.drawImage(img, drawX, drawY, drawW, drawH);
+          ctx.restore();
+        }
 
-        // Render ONLY the active step marker (No arrows, green start dot & red end dot)
+        // Render ONLY the active step marker (No arrows, green start dot & red end dot) if enabled
         if (template.steps && template.steps.length > 0) {
-          drawActiveStepMarker(ctx, template.steps, currentStepIndex, drawX, drawY, drawW, drawH);
+          drawActiveStepMarker(ctx, template.steps, currentStepIndex, drawX, drawY, drawW, drawH, shouldRenderDots);
         }
 
-        const cell = 4;
-        const gw = Math.ceil(tCanvas.width / cell);
-        const gh = Math.ceil(tCanvas.height / cell);
-        const grid = new Uint8Array(gw * gh);
-        let totalCells = 0;
-        const pts: { x: number; y: number }[] = [];
-
-        try {
-          const imgData = ctx.getImageData(0, 0, tCanvas.width, tCanvas.height);
-          const data = imgData.data;
-
-          for (let y = 0; y < tCanvas.height; y += cell) {
-            const gy = Math.floor(y / cell);
-            for (let x = 0; x < tCanvas.width; x += cell) {
-              const idx = (y * tCanvas.width + x) * 4;
-              if (data[idx + 3] > 30) {
-                const gx = Math.floor(x / cell);
-                grid[gy * gw + gx] = 1;
-                totalCells++;
-                pts.push({ x, y });
-              }
-            }
-          }
-        } catch (err) {
-          console.warn('Guide point sampling error:', err);
-        }
-
-        if (totalCells === 0 && template.steps && template.steps.length > 0) {
-          totalCells = rasterizeStepCorridorsIntoGrid(grid, gw, gh, cell, template.steps, drawX, drawY, drawW, drawH, pts);
-        }
-
-        guidePointsRef.current = pts;
-        letterGridRef.current = { grid, width: gw, height: gh, cell, totalCells };
+        extractLetterGridFromImage(img, tCanvas.width, tCanvas.height, drawX, drawY, drawW, drawH, template.steps);
       };
     }
   };
@@ -723,12 +751,355 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     calculateCoverageScore();
   }, [strokes, calculateCoverageScore]);
 
+  // Capture composite board image safely as Base64 PNG (falls back to user strokes if template image is CORS-tainted)
+  const captureBoardBase64 = useCallback((): string => {
+    const exportCanvas = document.createElement('canvas');
+    exportCanvas.width = dimensions.width;
+    exportCanvas.height = dimensions.height;
+    const ctx = exportCanvas.getContext('2d')!;
+
+    if (boardStyle === 'dark') {
+      ctx.fillStyle = '#0f172a';
+    } else if (boardStyle === 'green') {
+      ctx.fillStyle = '#064e3b';
+    } else if (boardStyle === 'grid') {
+      ctx.fillStyle = '#fdfbf7';
+    } else {
+      ctx.fillStyle = '#ffffff';
+    }
+    ctx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+
+    // Draw template if visible and not blind mode
+    if (templateCanvasRef.current && !template?.hideImage) {
+      try {
+        ctx.drawImage(templateCanvasRef.current, 0, 0);
+        // Test if canvas is clean
+        exportCanvas.toDataURL('image/png');
+      } catch {
+        // Re-fill clean background if template image tainted the canvas
+        ctx.fillStyle = boardStyle === 'dark' ? '#0f172a' : boardStyle === 'green' ? '#064e3b' : boardStyle === 'grid' ? '#fdfbf7' : '#ffffff';
+        ctx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+      }
+    }
+
+    if (canvasRef.current) {
+      ctx.drawImage(canvasRef.current, 0, 0);
+    }
+
+    return exportCanvas.toDataURL('image/png');
+  }, [dimensions, boardStyle, template]);
+
+  // Open Evaluation Modal with scores, confetti & voice
+  const openEvaluationResults = useCallback((
+    startEndScore: number,
+    pathScore: number,
+    coverageScore: number,
+    customFeedback?: string
+  ) => {
+    const finalScore = Math.min(
+      100,
+      Math.max(20, Math.round(startEndScore * 0.20 + pathScore * 0.50 + coverageScore * 0.30))
+    );
+
+    let feedback = customFeedback || '';
+    if (!feedback) {
+      if (finalScore >= 88) feedback = 'ما شاء الله! جريان قلم متقن ومسار متميز 🌟';
+      else if (finalScore >= 72) feedback = 'جيد جداً! رسم دقيق مع استقرار في القلم 👍';
+      else if (finalScore >= 50) feedback = 'محاولة طيبة! واصل التدريب لملء عرض الحرف والالتزام بالمسار ✍️';
+      else feedback = 'بداية تحتاج إلى تركيز أكثر على شكل الحرف ومساره ✍️';
+    }
+
+    setEvaluationModal({
+      isOpen: true,
+      totalScore: finalScore,
+      startEndScore,
+      pathScore,
+      coverageScore,
+      feedback
+    });
+    setSubmitAnswerResult(null);
+
+    if (finalScore >= 60) {
+      confetti({
+        particleCount: 90,
+        spread: 75,
+        origin: { y: 0.6 }
+      });
+      audioService.playSuccessFanfare();
+    } else {
+      audioService.playChime(440, 0.2);
+    }
+
+    if (isLessonStarted && !template?.hideDots && !template?.hideImage) {
+      audioService.speakArabic(`حققت درجة ${finalScore} في المئة. ${feedback}`);
+    }
+    setStepAlert({
+      type: 'success',
+      message: `تم التقييم: الدرجة النهائية ${finalScore}% 🎉`,
+      timestamp: Date.now()
+    });
+    if (onGoalAchieved) {
+      onGoalAchieved(finalScore);
+    }
+  }, [isLessonStarted, template, onGoalAchieved]);
+
+  // Evaluate Blind Memory Test (hideImage) or No-Dots Mode (hideDots)
+  const handleFinishChallengeEvaluation = useCallback(() => {
+    const userStrokes = strokes.filter(s => s.penType !== 'eraser' && s.points.length > 0);
+    if (userStrokes.length === 0) {
+      audioService.playErrorSound();
+      setStepAlert({
+        type: 'error',
+        message: '⚠️ ارسم الحرف أولاً ثم اضغط للتقييم ✍️',
+        timestamp: Date.now()
+      });
+      return;
+    }
+
+    // Collect all user drawn points
+    const drawnPts: Point[] = [];
+    userStrokes.forEach(s => s.points.forEach(p => drawnPts.push(p)));
+
+    // 1. BLIND MEMORY MODE (hideImage = true): Bounding-Box & Normalized 28x28 Shape Comparison
+    if (template?.hideImage) {
+      const refPts = guidePointsRef.current;
+      let dMinX = Infinity, dMinY = Infinity, dMaxX = -Infinity, dMaxY = -Infinity;
+      drawnPts.forEach(p => {
+        if (p.x < dMinX) dMinX = p.x;
+        if (p.y < dMinY) dMinY = p.y;
+        if (p.x > dMaxX) dMaxX = p.x;
+        if (p.y > dMaxY) dMaxY = p.y;
+      });
+      const dW = Math.max(20, dMaxX - dMinX);
+      const dH = Math.max(20, dMaxY - dMinY);
+      const dAspect = dW / dH;
+
+      let shapeScore = 65;
+      let overlapScore = 65;
+      let startEndScore = 75;
+
+      if (refPts.length > 10) {
+        let rMinX = Infinity, rMinY = Infinity, rMaxX = -Infinity, rMaxY = -Infinity;
+        refPts.forEach(p => {
+          if (p.x < rMinX) rMinX = p.x;
+          if (p.y < rMinY) rMinY = p.y;
+          if (p.x > rMaxX) rMaxX = p.x;
+          if (p.y > rMaxY) rMaxY = p.y;
+        });
+        const rW = Math.max(20, rMaxX - rMinX);
+        const rH = Math.max(20, rMaxY - rMinY);
+        const rAspect = rW / rH;
+
+        const aspectSim = Math.max(0, 1 - Math.abs(dAspect - rAspect) / Math.max(dAspect, rAspect, 1));
+
+        // Rasterize both normalized shapes into a 28x28 grid with isotropic scaling
+        const N = 28;
+        const refGrid = new Uint8Array(N * N);
+        const drawnGrid = new Uint8Array(N * N);
+
+        const rMaxDim = Math.max(rW, rH);
+        const rOffX = (rMaxDim - rW) / 2;
+        const rOffY = (rMaxDim - rH) / 2;
+        refPts.forEach(p => {
+          const gx = Math.min(N - 1, Math.max(0, Math.floor(((p.x - rMinX + rOffX) / rMaxDim) * (N - 1))));
+          const gy = Math.min(N - 1, Math.max(0, Math.floor(((p.y - rMinY + rOffY) / rMaxDim) * (N - 1))));
+          refGrid[gy * N + gx] = 1;
+        });
+
+        const dMaxDim = Math.max(dW, dH);
+        const dOffX = (dMaxDim - dW) / 2;
+        const dOffY = (dMaxDim - dH) / 2;
+        drawnPts.forEach(p => {
+          const gx = Math.min(N - 1, Math.max(0, Math.floor(((p.x - dMinX + dOffX) / dMaxDim) * (N - 1))));
+          const gy = Math.min(N - 1, Math.max(0, Math.floor(((p.y - dMinY + dOffY) / dMaxDim) * (N - 1))));
+          // Dilate drawn cell slightly (+/- 1 cell) for natural calligraphy hand tolerance
+          for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+              const nx = gx + dx;
+              const ny = gy + dy;
+              if (nx >= 0 && nx < N && ny >= 0 && ny < N) {
+                drawnGrid[ny * N + nx] = 1;
+              }
+            }
+          }
+        });
+
+        // Compute precision & recall against reference grid (dilated by 1 for recall)
+        let refTotal = 0;
+        let refHit = 0;
+        let drawnTotal = 0;
+        let drawnHit = 0;
+
+        for (let y = 0; y < N; y++) {
+          for (let x = 0; x < N; x++) {
+            const idx = y * N + x;
+            if (refGrid[idx] === 1) {
+              refTotal++;
+              if (drawnGrid[idx] === 1) refHit++;
+            }
+            if (drawnGrid[idx] === 1) {
+              drawnTotal++;
+              // Check if drawn cell is within 1 cell of reference
+              let nearRef = false;
+              for (let dy = -1; dy <= 1 && !nearRef; dy++) {
+                for (let dx = -1; dx <= 1 && !nearRef; dx++) {
+                  const nx = x + dx;
+                  const ny = y + dy;
+                  if (nx >= 0 && nx < N && ny >= 0 && ny < N && refGrid[ny * N + nx] === 1) {
+                    nearRef = true;
+                  }
+                }
+              }
+              if (nearRef) drawnHit++;
+            }
+          }
+        }
+
+        const recall = refTotal > 0 ? refHit / refTotal : 0;
+        const precision = drawnTotal > 0 ? drawnHit / drawnTotal : 0;
+        const dice = (recall + precision) > 0 ? (2 * recall * precision) / (recall + precision) : 0;
+
+        shapeScore = Math.min(100, Math.max(15, Math.round((dice * 0.72 + aspectSim * 0.28) * 100)));
+        overlapScore = Math.min(100, Math.max(15, Math.round(recall * 100)));
+      }
+
+      // Check step directional alignment in normalized bounding box if steps exist
+      if (template.steps && template.steps.length > 0 && drawBoundsRef.current) {
+        const firstUserPt = userStrokes[0].points[0];
+        const lastStroke = userStrokes[userStrokes.length - 1];
+        const lastUserPt = lastStroke.points[lastStroke.points.length - 1];
+        const firstStep = template.steps[0];
+        const lastStep = template.steps[template.steps.length - 1];
+
+        const uStartNormX = (firstUserPt.x - dMinX) / dW;
+        const uStartNormY = (firstUserPt.y - dMinY) / dH;
+        const uEndNormX = (lastUserPt.x - dMinX) / dW;
+        const uEndNormY = (lastUserPt.y - dMinY) / dH;
+
+        const startErr = Math.hypot(uStartNormX - firstStep.startX, uStartNormY - firstStep.startY);
+        const endErr = Math.hypot(uEndNormX - lastStep.endX, uEndNormY - lastStep.endY);
+        startEndScore = Math.min(100, Math.max(20, Math.round(100 - (startErr + endErr) * 55)));
+      } else {
+        startEndScore = shapeScore;
+      }
+
+      // Reveal translucent gold ghost overlay of original letter for visual comparison
+      setShowGhostOverlay(true);
+      openEvaluationResults(
+        startEndScore,
+        shapeScore,
+        overlapScore,
+        shapeScore >= 80
+          ? 'ذاكرة بصرية مذهلة! تطابق رائع مع الحرف الأصلي 🏆'
+          : shapeScore >= 60
+          ? 'محاولة جيدة من الذاكرة! قارن رسمتك مع الظل الذهبي للحرف ✍️'
+          : 'أحسنت المحاولة! راجع الظل الذهبي للحرف وأعد التجربة 💪'
+      );
+      return;
+    }
+
+    // 2. NO-DOTS MODE (hideDots = true) or NO-STEPS TEMPLATE: Evaluate against visible guide
+    let core = 0;
+    let grazing = 0;
+    drawnPts.forEach(p => {
+      const cls = classifyPoint(p.x, p.y);
+      if (cls === 'core') core++;
+      else if (cls === 'grazing') grazing++;
+    });
+    const pathScore = Math.min(
+      100,
+      Math.max(15, Math.round(((core * 1.0 + grazing * 0.45) / Math.max(1, drawnPts.length)) * 100))
+    );
+    const coverageScore = calculateCoverageScore();
+
+    let startEndScore = pathScore;
+    if (template?.steps && template.steps.length > 0 && drawBoundsRef.current) {
+      const { drawX, drawY, drawW, drawH } = drawBoundsRef.current;
+      const firstStep = template.steps[0];
+      const lastStep = template.steps[template.steps.length - 1];
+      const sx = drawX + firstStep.startX * drawW;
+      const sy = drawY + firstStep.startY * drawH;
+      const ex = drawX + lastStep.endX * drawW;
+      const ey = drawY + lastStep.endY * drawH;
+
+      const uStart = userStrokes[0].points[0];
+      const lastStroke = userStrokes[userStrokes.length - 1];
+      const uEnd = lastStroke.points[lastStroke.points.length - 1];
+
+      const threshold = Math.max(45, penSize * 2.5);
+      const startDist = Math.hypot(uStart.x - sx, uStart.y - sy);
+      const endDist = Math.hypot(uEnd.x - ex, uEnd.y - ey);
+      const sPct = Math.max(0, Math.min(100, Math.round(100 - Math.max(0, startDist - threshold * 0.5) * 0.8)));
+      const ePct = Math.max(0, Math.min(100, Math.round(100 - Math.max(0, endDist - threshold * 0.5) * 0.8)));
+      startEndScore = Math.round((sPct + ePct) / 2);
+    }
+
+    openEvaluationResults(startEndScore, pathScore, coverageScore);
+  }, [strokes, template, penSize, classifyPoint, calculateCoverageScore, openEvaluationResults]);
+
+  // Submit student answer & upload drawing image to Google Drive + sheet 'answers 1'
+  const handleSubmitAnswer = async () => {
+    if (!evaluationModal || !template) return;
+    if (!currentUser) {
+      setSubmitAnswerResult({
+        success: false,
+        message: 'يرجى تسجيل الدخول أولاً لحفظ إجابتك'
+      });
+      return;
+    }
+
+    setIsSubmittingAnswer(true);
+    setSubmitAnswerResult(null);
+
+    try {
+      const imageBase64 = captureBoardBase64();
+      const details = `البداية/النهاية: ${evaluationModal.startEndScore}% | المسار: ${evaluationModal.pathScore}% | السُمك: ${evaluationModal.coverageScore}%`;
+      const res = await sheetService.submitLessonAnswer({
+        studentId: currentUser.id,
+        studentName: currentUser.name,
+        topic: template.topic || 'خط النسخ',
+        slotIndex: template.slotIndex || 1,
+        category: template.category || 'حروف',
+        text: template.title,
+        imageBase64,
+        score: evaluationModal.totalScore,
+        details,
+        totalLessonsInTopic: totalLessonsInTopic || 1
+      });
+
+      if (res.success) {
+        audioService.playSuccessSound();
+        setSubmitAnswerResult({
+          success: true,
+          message: `تم تسجيل الإجابة بنجاح! (${res.completionStatus || 'محفوظ'})`,
+          imageUrl: res.imageUrl,
+          completionStatus: res.completionStatus
+        });
+      } else {
+        audioService.playErrorSound();
+        setSubmitAnswerResult({
+          success: false,
+          message: res.error || 'تعذر حفظ الإجابة في Google Sheets'
+        });
+      }
+    } catch {
+      audioService.playErrorSound();
+      setSubmitAnswerResult({
+        success: false,
+        message: 'حدث خطأ أثناء الاتصال بالخادم لرفع الإجابة'
+      });
+    } finally {
+      setIsSubmittingAnswer(false);
+    }
+  };
+
   // Start exercise with voice unlock and pronunciation
   const handleStartLesson = async () => {
     await audioService.unlockAudio();
     setIsLessonStarted(true);
     setStepAlert(null);
-    if (template?.steps && template.steps[currentStepIndex]) {
+    stepScoresRef.current = [];
+    if (template?.steps && template.steps[currentStepIndex] && !template.hideDots && !template.hideImage) {
       const prompt = getStepAudioPrompt(template.steps[currentStepIndex]);
       audioService.speakArabic(prompt);
     }
@@ -782,8 +1153,10 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       hasBrokenAway: false
     };
 
-    // Step constraint check: Student must start at the green launch dot 🟢
-    if (template?.steps && template.steps.length > 0 && activeStepPointsRef.current && penType !== 'eraser') {
+    const isChallengeMode = !!(template.hideDots || template.hideImage);
+
+    // Step constraint check: In standard step mode, student must start at the green launch dot 🟢
+    if (!isChallengeMode && template?.steps && template.steps.length > 0 && activeStepPointsRef.current && penType !== 'eraser') {
       const active = activeStepPointsRef.current;
       const startDist = Math.hypot(x - active.sx, y - active.sy);
       const startThreshold = Math.max(38, penSize * 2.2);
@@ -848,8 +1221,10 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
 
     curStroke.points.push({ x, y, pressure, time: Date.now() });
 
-    // Track path adherence
-    if (penType !== 'eraser' && template?.steps && template.steps.length > 0) {
+    const isChallengeMode = !!(template?.hideDots || template?.hideImage);
+
+    // Track path adherence in standard guided mode
+    if (!isChallengeMode && penType !== 'eraser' && template?.steps && template.steps.length > 0) {
       strokeStatsRef.current.total++;
       const classification = classifyPoint(x, y);
 
@@ -866,15 +1241,18 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
           strokeStatsRef.current.maxConsecutiveOffPath = strokeStatsRef.current.offPathConsecutive;
         }
 
-        // Break-away check: If consecutive points in empty space >= 8, mark break away and alert
+        // Break-away alert (live warning for Medium and Advanced levels)
         if (strokeStatsRef.current.offPathConsecutive >= 8) {
           strokeStatsRef.current.hasBrokenAway = true;
-          setStepAlert({
-            type: 'error',
-            message: '⚠️ تنبيه: خرج القلم عن مسار الحرف! التزم بالحبر',
-            timestamp: Date.now()
-          });
-          audioService.playErrorSound();
+          const difficulty = template.difficulty || 'سهل';
+          if (difficulty !== 'سهل') {
+            setStepAlert({
+              type: 'error',
+              message: '⚠️ تنبيه: خرج القلم عن مسار الحرف! التزم بالحبر',
+              timestamp: Date.now()
+            });
+            audioService.playErrorSound();
+          }
         }
       }
     }
@@ -898,8 +1276,10 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       activePointerStrokeRef.current = null;
       redrawCanvas();
 
-      // Step constraint check: Validate reaching the red target dot 🔴
-      if (template?.steps && template.steps.length > 0 && activeStepPointsRef.current && penType !== 'eraser') {
+      const isChallengeMode = !!(template?.hideDots || template?.hideImage);
+
+      // Step constraint check in standard step-by-step mode
+      if (!isChallengeMode && template?.steps && template.steps.length > 0 && activeStepPointsRef.current && penType !== 'eraser') {
         if (strokeStartedAtGreenRef.current) {
           const active = activeStepPointsRef.current;
           const lastPt = finishedStroke.points[finishedStroke.points.length - 1];
@@ -907,97 +1287,89 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
           const endThreshold = Math.max(40, penSize * 2.4);
 
           if (endDist <= endThreshold) {
-            // Check stroke adherence to letter path!
             const stats = strokeStatsRef.current;
             const total = Math.max(1, stats.total);
+            const rawPathScore = Math.min(100, Math.max(25, Math.round(((stats.corePoints * 1.0 + stats.grazingPoints * 0.45) / total) * 100)));
+            const difficulty = template.difficulty || 'سهل';
+            const brokeAway = stats.hasBrokenAway || stats.maxConsecutiveOffPath >= 8;
+            const offCenter = rawPathScore < 45;
 
-            // User Test 2 condition: Did student break away into empty space and arc back?
-            if (stats.hasBrokenAway || stats.maxConsecutiveOffPath >= 8) {
+            // Level 2 (متوسط) & Level 3 (متقدم): Strictly block if pencil left the path or broke away
+            if ((difficulty === 'متوسط' || difficulty === 'متقدم') && (brokeAway || offCenter)) {
               audioService.playErrorSound();
               setStepAlert({
                 type: 'error',
-                message: 'تنبيه: خرج القلم عن مسار الحرف! يجب الاستمرار على مسار الخط دون انقطاع ✍️',
+                message: brokeAway
+                  ? 'تنبيه: خرج القلم عن مسار الحرف! يجب الاستمرار على المسار دون انقطاع ✍️'
+                  : 'تنبيه: يجب الرسم فوق مسار خط الحرف بدقة ✍️',
                 timestamp: Date.now()
               });
               if (isLessonStarted) {
-                audioService.speakArabic('خرج القلم عن مسار الحرف! التزم بالخط دون انقطاع');
+                audioService.speakArabic(brokeAway ? 'خرج القلم عن مسار الحرف! التزم بالخط دون انقطاع' : 'ارسم فوق مسار الحرف بدقة');
               }
             } else {
-              // Path accuracy score:
-              // Core points inside thickness: 100% credit
-              // Grazing points: 45% credit
-              const pathScore = Math.min(100, Math.max(25, Math.round(((stats.corePoints * 1.0 + stats.grazingPoints * 0.45) / total) * 100)));
+              // Calculate adjusted step path score (in 'سهل', penalize off-path strokes cleanly instead of blocking)
+              const effectivePathScore = (difficulty === 'سهل' && (brokeAway || offCenter))
+                ? Math.min(rawPathScore, 55)
+                : rawPathScore;
 
-              if (pathScore < 45) {
-                // Stroke drew mostly outside or off-center
+              const nextIdx = currentStepIndex + 1;
+              const coverageScore = calculateCoverageScore();
+
+              // Level 3 (متقدم): On final step, enforce stroke thickness coverage >= 75%
+              if (difficulty === 'متقدم' && nextIdx >= template.steps.length && coverageScore < 75) {
                 audioService.playErrorSound();
                 setStepAlert({
                   type: 'error',
-                  message: 'تنبيه: يجب الرسم فوق مسار خط الحرف بدقة ✍️',
+                  message: `⚠️ المستوى المتقدم يتطلب تغطية سُمك الحرف بنسبة 75% على الأقل (الحالي: ${coverageScore}%) — املأ عرض الحرف`,
                   timestamp: Date.now()
                 });
                 if (isLessonStarted) {
-                  audioService.speakArabic('ارسم فوق مسار الحرف بدقة');
+                  audioService.speakArabic('تغطية سمك الحرف غير مكتملة للمستوى المتقدم، حاول ملء عرض الحرف');
+                }
+                strokeStartedAtGreenRef.current = false;
+                return;
+              }
+
+              // Record step result
+              stepScoresRef.current[currentStepIndex] = {
+                startEnd: 100,
+                path: effectivePathScore,
+                brokenAway: brokeAway
+              };
+
+              audioService.playStepSuccessSound();
+
+              if (nextIdx < template.steps.length) {
+                setCurrentStepIndex(nextIdx);
+                const nextStep = template.steps[nextIdx];
+                const stepName = getArabicOrdinal(currentStepIndex + 1);
+                const hasWarning = difficulty === 'سهل' && (brokeAway || offCenter);
+                setStepAlert({
+                  type: 'success',
+                  message: hasWarning
+                    ? `تم اجتياز ${stepName} — ملاحظة: حاول الالتزام بمسار الحرف ✍️`
+                    : `رائع! أتممت ${stepName} بنجاح ✓`,
+                  timestamp: Date.now()
+                });
+                if (isLessonStarted) {
+                  const nextPrompt = getStepAudioPrompt(nextStep);
+                  setTimeout(() => {
+                    audioService.speakArabic(nextPrompt);
+                  }, 400);
                 }
               } else {
-                // Reached red dot AND followed path continuously!
-                audioService.playStepSuccessSound();
-                const nextIdx = currentStepIndex + 1;
+                // ALL STEPS COMPLETED! Average path scores across recorded steps
+                const recorded = stepScoresRef.current.filter(Boolean);
+                const avgPathScore = recorded.length > 0
+                  ? Math.round(recorded.reduce((acc, s) => acc + s.path, 0) / recorded.length)
+                  : effectivePathScore;
+                const anyBroken = recorded.some(s => s.brokenAway);
+                const customNote = (difficulty === 'سهل' && anyBroken)
+                  ? 'تم اجتياز النقاط بنجاح! ننصح بالالتزام بمسار الحرف أكثر في التمرين القادم ✍️'
+                  : undefined;
 
-                if (nextIdx < template.steps.length) {
-                  setCurrentStepIndex(nextIdx);
-                  const nextStep = template.steps[nextIdx];
-                  const stepName = getArabicOrdinal(currentStepIndex + 1);
-                  setStepAlert({
-                    type: 'success',
-                    message: `رائع! أتممت ${stepName} بنجاح ✓`,
-                    timestamp: Date.now()
-                  });
-                  if (isLessonStarted) {
-                    const nextPrompt = getStepAudioPrompt(nextStep);
-                    setTimeout(() => {
-                      audioService.speakArabic(nextPrompt);
-                    }, 400);
-                  }
-                } else {
-                  // ALL STEPS COMPLETED! Generate comprehensive evaluation scorecard
-                  const startEndScore = 100; // Both start and end points satisfied
-                  const coverageScore = calculateCoverageScore();
-                  // Combined grade: 20% Start/End + 50% Path Adherence + 30% Width Fill / Coverage
-                  const finalScore = Math.min(100, Math.max(30, Math.round(startEndScore * 0.20 + pathScore * 0.50 + coverageScore * 0.30)));
-
-                  let feedback = '';
-                  if (finalScore >= 88) feedback = 'ما شاء الله! جريان قلم متقن ومسار متميز 🌟';
-                  else if (finalScore >= 72) feedback = 'جيد جداً! رسم دقيق مع استقرار في القلم 👍';
-                  else feedback = 'محاولة طيبة! حاول ملء عرض الحرف والالتزام بالمسار أكثر ✍️';
-
-                  setEvaluationModal({
-                    isOpen: true,
-                    totalScore: finalScore,
-                    startEndScore,
-                    pathScore,
-                    coverageScore,
-                    feedback
-                  });
-
-                  confetti({
-                    particleCount: 90,
-                    spread: 75,
-                    origin: { y: 0.6 }
-                  });
-                  audioService.playSuccessFanfare();
-                  if (isLessonStarted) {
-                    audioService.speakArabic(`ممتاز جداً! حققت درجة ${finalScore} في المئة. ${feedback}`);
-                  }
-                  setStepAlert({
-                    type: 'success',
-                    message: `مبارك! أتممت كتابة الحرف بدرجة ${finalScore}% بنجاح 🎉`,
-                    timestamp: Date.now()
-                  });
-                  if (onGoalAchieved) {
-                    onGoalAchieved(finalScore);
-                  }
-                }
+                openEvaluationResults(100, avgPathScore, coverageScore, customNote);
               }
             }
           } else {
@@ -1510,21 +1882,66 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                 <span className="truncate">{stepAlert.message}</span>
               </div>
             ) : template ? (
-              <div className="flex items-center gap-1.5 sm:gap-3">
-                {/* Lesson Start Button: strictly ( ابدأ ) - clear and prominent on all devices */}
+              <div className="flex items-center gap-1.5 sm:gap-2.5">
+                {/* Lesson Start Button: strictly ( ابدأ ) */}
                 {!isLessonStarted && (
                   <button
                     type="button"
                     onClick={handleStartLesson}
                     className="px-2.5 sm:px-3.5 py-1 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 font-bold text-xs sm:text-sm shadow-md hover:brightness-110 active:scale-95 transition-all cursor-pointer whitespace-nowrap shrink-0 animate-pulse"
-                    title="بدء التمرين وسماع التوجيه الصوتي"
+                    title="بدء التمرين"
                   >
                     ( ابدأ )
                   </button>
                 )}
 
-                {/* If steps exist: Step Number, Progress Dots, Step Voice, Reset Step */}
-                {template.steps && template.steps.length > 0 ? (
+                {/* Challenge Modes (hideImage or hideDots) or No-Steps Templates */}
+                {(template.hideImage || template.hideDots || !template.steps || template.steps.length === 0) ? (
+                  <>
+                    {isLessonStarted ? (
+                      <button
+                        type="button"
+                        onClick={handleFinishChallengeEvaluation}
+                        className="px-2.5 sm:px-3.5 py-1 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 text-slate-950 font-bold text-xs sm:text-sm shadow-md hover:brightness-110 active:scale-95 transition-all cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1"
+                        title="إنهاء الرسم وعرض التقييم"
+                      >
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>
+                          {template.hideImage ? '( تقييم رسمة الذاكرة 🏆 )' : '( إنهاء وتقييم )'}
+                        </span>
+                      </button>
+                    ) : (
+                      <span className="hidden sm:inline text-xs font-semibold text-amber-300/90 whitespace-nowrap">
+                        {template.hideImage
+                          ? '🧠 تحدي الذاكرة (سبورة بيضاء)'
+                          : template.hideDots
+                          ? '🎯 تحدي بدون مؤشرات'
+                          : '✍️ انقر ( ابدأ ) للرسم'}
+                      </span>
+                    )}
+
+                    {/* Reset Challenge Button */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCurrentStepIndex(0);
+                        setStepAlert(null);
+                        setEvaluationModal(null);
+                        setSubmitAnswerResult(null);
+                        setShowGhostOverlay(false);
+                        setIsLessonStarted(false);
+                        strokeStartedAtGreenRef.current = false;
+                        stepScoresRef.current = [];
+                        resetStrokeStats();
+                      }}
+                      className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer shrink-0"
+                      title="إعادة التمرين"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                    </button>
+                  </>
+                ) : (
+                  /* Standard Step-by-Step Guided Mode */
                   <>
                     {/* Step Number Only: '1 من 3' on mobile to save space, 'الخطوة 1 من 3' on desktop */}
                     <div className="flex items-center gap-1 shrink-0">
@@ -1574,8 +1991,11 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                         setCurrentStepIndex(0);
                         setStepAlert(null);
                         setEvaluationModal(null);
+                        setSubmitAnswerResult(null);
+                        setShowGhostOverlay(false);
                         setIsLessonStarted(false);
                         strokeStartedAtGreenRef.current = false;
+                        stepScoresRef.current = [];
                         resetStrokeStats();
                       }}
                       className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer shrink-0"
@@ -1584,11 +2004,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                       <RotateCcw className="w-3.5 h-3.5" />
                     </button>
                   </>
-                ) : isLessonStarted ? (
-                  <span className="text-xs text-emerald-400 font-semibold truncate">
-                    ابدأ في رسم الحرف ✍️
-                  </span>
-                ) : null}
+                )}
               </div>
             ) : (
               <span className="text-xs text-amber-300 hidden sm:inline">اختر درساً أولاً ثم انقر ( ابدأ ) لبدء الرسم</span>
@@ -1626,15 +2042,39 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         </div>
       </div>
 
+      {/* Floating Comparison Bar when inspecting Ghost Overlay outside modal */}
+      {template?.hideImage && showGhostOverlay && !evaluationModal?.isOpen && (
+        <div className="absolute bottom-4 inset-x-0 z-30 flex justify-center pointer-events-none px-4">
+          <div className="pointer-events-auto flex items-center gap-2 px-3 py-1.5 rounded-2xl bg-slate-900/95 border border-amber-500/40 shadow-xl text-xs">
+            <span className="text-amber-300 font-bold">👻 مقارنة الظل الذهبي للحرف</span>
+            <button
+              type="button"
+              onClick={() => setShowGhostOverlay(prev => !prev)}
+              className="px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold cursor-pointer flex items-center gap-1"
+            >
+              <EyeOff className="w-3.5 h-3.5" />
+              <span>إخفاء الظل</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setEvaluationModal(prev => prev ? { ...prev, isOpen: true } : null)}
+              className="px-2.5 py-1 rounded-xl bg-amber-500 text-slate-950 font-bold hover:brightness-110 cursor-pointer"
+            >
+              العودة للتقييم
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Layer 4: Calligraphy Evaluation Scorecard Modal (بطاقة تقييم رسم الحرف) */}
       {evaluationModal && evaluationModal.isOpen && (
         <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-md animate-in fade-in duration-200">
-          <div className="relative w-full max-w-sm sm:max-w-md bg-gradient-to-b from-slate-900 via-slate-900 to-slate-950 border border-amber-500/40 rounded-3xl p-5 sm:p-6 shadow-[0_0_50px_rgba(245,158,11,0.25)] text-white text-center">
+          <div className="relative w-full max-w-sm sm:max-w-md bg-gradient-to-b from-slate-900 via-slate-900 to-slate-950 border border-amber-500/40 rounded-3xl p-5 sm:p-6 shadow-[0_0_50px_rgba(245,158,11,0.25)] text-white text-center max-h-[92vh] overflow-y-auto">
             
             {/* Close button */}
             <button
               onClick={() => {
-                setEvaluationModal(null);
+                setEvaluationModal(prev => prev ? { ...prev, isOpen: false } : null);
                 setIsLessonStarted(false);
               }}
               className="absolute top-4 left-4 p-1.5 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors cursor-pointer"
@@ -1648,7 +2088,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
             </div>
 
             <h3 className="text-lg sm:text-xl font-bold font-ruqaa text-amber-300 mb-1">
-              بطاقة تقييم كتابة الحرف
+              {template?.hideImage ? 'بطاقة تقييم اختبار الذاكرة 🧠' : 'بطاقة تقييم كتابة الحرف'}
             </h3>
             
             {/* Final Big Score */}
@@ -1666,7 +2106,9 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
               {/* Criterion 1 */}
               <div>
                 <div className="flex justify-between mb-1">
-                  <span className="text-slate-300">نقطتا البداية والنهاية (🟢 → 🔴)</span>
+                  <span className="text-slate-300">
+                    {template?.hideImage ? 'اتجاه البداية والنهاية المرسوم' : 'نقطتا البداية والنهاية (🟢 → 🔴)'}
+                  </span>
                   <span className="font-bold text-emerald-400">{evaluationModal.startEndScore}%</span>
                 </div>
                 <div className="w-full bg-slate-700 rounded-full h-2 overflow-hidden">
@@ -1680,7 +2122,9 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
               {/* Criterion 2 */}
               <div>
                 <div className="flex justify-between mb-1">
-                  <span className="text-slate-300">دقة المسار (عدم الخروج عن الحرف)</span>
+                  <span className="text-slate-300">
+                    {template?.hideImage ? 'تطابق الشكل والنسب من الذاكرة' : 'دقة المسار (عدم الخروج عن الحرف)'}
+                  </span>
                   <span className="font-bold text-amber-400">{evaluationModal.pathScore}%</span>
                 </div>
                 <div className="w-full bg-slate-700 rounded-full h-2 overflow-hidden">
@@ -1694,7 +2138,9 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
               {/* Criterion 3 */}
               <div>
                 <div className="flex justify-between mb-1">
-                  <span className="text-slate-300">تغطية سُمك الحرف (ملء عرض الخط)</span>
+                  <span className="text-slate-300">
+                    {template?.hideImage ? 'تغطية معالم الحرف الأصلي' : 'تغطية سُمك الحرف (ملء عرض الخط)'}
+                  </span>
                   <span className="font-bold text-sky-400">{evaluationModal.coverageScore}%</span>
                 </div>
                 <div className="w-full bg-slate-700 rounded-full h-2 overflow-hidden">
@@ -1706,14 +2152,86 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
               </div>
             </div>
 
+            {/* Blind Memory Mode: Compare Ghost Overlay Toggle */}
+            {template?.hideImage && (
+              <button
+                type="button"
+                onClick={() => {
+                  setShowGhostOverlay(true);
+                  setEvaluationModal(prev => prev ? { ...prev, isOpen: false } : null);
+                }}
+                className="w-full mb-3 py-2 px-3 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+              >
+                <Eye className="w-4 h-4" />
+                <span>معاينة الظل الذهبي للحرف الأصلي على السبورة للمقارنة 👻</span>
+              </button>
+            )}
+
+            {/* Save & Upload Answer to Google Drive & Sheet 'answers 1' */}
+            <div className="mb-3">
+              <button
+                type="button"
+                onClick={handleSubmitAnswer}
+                disabled={isSubmittingAnswer || submitAnswerResult?.success}
+                className={`w-full py-2.5 px-4 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg transition-all cursor-pointer ${
+                  submitAnswerResult?.success
+                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 cursor-default'
+                    : 'bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white active:scale-95 disabled:opacity-60'
+                }`}
+              >
+                {isSubmittingAnswer ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>جارِ رفع الصورة وتسجيل الإجابة...</span>
+                  </>
+                ) : submitAnswerResult?.success ? (
+                  <>
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                    <span>تم تسجيل الإجابة وحفظ الصورة بنجاح ✓</span>
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-4 h-4" />
+                    <span>تسجيل الإجابة 💾</span>
+                  </>
+                )}
+              </button>
+
+              {submitAnswerResult && (
+                <div
+                  className={`mt-2 p-2.5 rounded-xl text-[11px] font-semibold flex flex-col gap-1 text-right ${
+                    submitAnswerResult.success
+                      ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-300'
+                      : 'bg-rose-500/15 border border-rose-500/30 text-rose-300'
+                  }`}
+                >
+                  <div>{submitAnswerResult.message}</div>
+                  {submitAnswerResult.imageUrl && submitAnswerResult.imageUrl.startsWith('http') && (
+                    <a
+                      href={submitAnswerResult.imageUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-sky-400 hover:text-sky-300 underline w-fit"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      <span>عرض صورة التمرين المحفوظة في Google Drive</span>
+                    </a>
+                  )}
+                </div>
+              )}
+            </div>
+
             {/* Action Buttons */}
-            <div className="flex items-center gap-2 mt-4">
+            <div className="flex items-center gap-2 mt-2">
               <button
                 onClick={() => {
                   setEvaluationModal(null);
+                  setSubmitAnswerResult(null);
+                  setShowGhostOverlay(false);
                   setIsLessonStarted(false);
                   setCurrentStepIndex(0);
                   setStepAlert(null);
+                  stepScoresRef.current = [];
                   resetStrokeStats();
                   const canvas = canvasRef.current;
                   if (canvas) {
@@ -1732,6 +2250,8 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                 <button
                   onClick={() => {
                     setEvaluationModal(null);
+                    setSubmitAnswerResult(null);
+                    setShowGhostOverlay(false);
                     setIsLessonStarted(false);
                     onNextRepetition();
                   }}
@@ -1744,6 +2264,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                 <button
                   onClick={() => {
                     setEvaluationModal(null);
+                    setSubmitAnswerResult(null);
                     setIsLessonStarted(false);
                   }}
                   className="flex-1 py-2.5 px-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg hover:brightness-110 transition-all cursor-pointer"

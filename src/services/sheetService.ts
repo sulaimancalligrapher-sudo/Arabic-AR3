@@ -1,4 +1,4 @@
-import { DrawingTemplate, LessonStep } from '../types/drawing';
+import { DrawingTemplate, LessonStep, LessonDifficulty } from '../types/drawing';
 import { DRAWING_TEMPLATES } from '../data/drawingTemplates';
 import { formatDirectImageUrl } from '../utils/urlHelper';
 
@@ -7,7 +7,7 @@ const LOCAL_TEMPLATES_KEY = 'arabic_ar_horizontal_templates_v2';
 const LOCAL_STEPS_CACHE_KEY = 'arabic_ar_steps_backup_cache';
 
 // Default built-in Google Apps Script URL so all devices (mobile, tablet, PC) connect automatically
-export const DEFAULT_SHEET_URL = 'https://script.google.com/macros/s/AKfycbzd9L7BL9tQu-7OkyFX3mNreodryMJO3EGcdcaYP-tnWG9b1reETX7gLEseLSmgsjGOVw/exec';
+export const DEFAULT_SHEET_URL = 'https://script.google.com/macros/s/AKfycbzRDyx7Tb5uLKInIWdFBa0vPxxdide_pWRFdXQ5qPdYzkUXmKxn8HPyoIjZxDUJD_TM7A/exec';
 
 /**
  * Return authentic Arabic ordinal word for steps
@@ -85,6 +85,40 @@ export function parseStepsData(raw: any): LessonStep[] {
   return [];
 }
 
+/**
+ * Parse difficulty and challenge flags from Column 6 (المستوى)
+ * e.g. "سهل", "متوسط|بدون_نقاط", "متقدم|بدون_صورة"
+ */
+export function parseDifficultyField(raw: any): {
+  difficulty: LessonDifficulty;
+  hideDots: boolean;
+  hideImage: boolean;
+} {
+  const str = String(raw || 'سهل').trim();
+  const hideDots = str.includes('بدون_نقاط') || str.includes('إخفاء_النقاط') || str.includes('no_dots');
+  const hideImage = str.includes('بدون_صورة') || str.includes('اختبار_ذاكرة') || str.includes('no_image');
+  
+  let baseDifficulty: LessonDifficulty = 'سهل';
+  if (str.includes('متقدم') || str.includes('advanced') || str.includes('صعب')) {
+    baseDifficulty = 'متقدم';
+  } else if (str.includes('متوسط') || str.includes('normal') || str.includes('medium')) {
+    baseDifficulty = 'متوسط';
+  } else {
+    baseDifficulty = 'سهل';
+  }
+  return { difficulty: baseDifficulty, hideDots, hideImage };
+}
+
+/**
+ * Format difficulty and challenge flags for serialization into Column 6
+ */
+export function formatDifficultyField(difficulty: LessonDifficulty, hideDots?: boolean, hideImage?: boolean): string {
+  const parts: string[] = [difficulty || 'سهل'];
+  if (hideDots) parts.push('بدون_نقاط');
+  if (hideImage) parts.push('بدون_صورة');
+  return parts.join('|');
+}
+
 export interface SheetSyncStatus {
   connected: boolean;
   lastSyncTime: Date | null;
@@ -118,6 +152,8 @@ export const GOOGLE_APPS_SCRIPT_CODE = `/**
 
 const SHEET_NAME = "ArabicLessons";
 const REGISTRANTS_SHEET_NAME = "ID registrants";
+const ANSWERS_SHEET_NAME = "answers 1";
+const DRIVE_FOLDER_ID = "1kYNXRiFvHY09BYLRbINxerXC5cpYiIOX";
 const COLS_PER_LESSON = 7;
 const SUB_HEADERS = [
   "الفئة",
@@ -128,6 +164,64 @@ const SUB_HEADERS = [
   "المستوى",
   "خطوات الحرف"
 ];
+
+const ANSWER_SUB_HEADERS = [
+  "الفئة",
+  "النص",
+  "صورة التمرين",
+  "الدرجة (%)",
+  "تفاصيل"
+];
+
+function getOrCreateAnswersSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(ANSWERS_SHEET_NAME);
+  if (!sheet) {
+    sheet = ss.insertSheet(ANSWERS_SHEET_NAME);
+    const headers = [
+      "وقت الارسال",
+      "رقم تسجيل المشترك",
+      "اسم المشترك",
+      "موضوع الدرس",
+      "حالة الانجاز"
+    ];
+    for (let k = 1; k <= 10; k++) {
+      for (let s = 0; s < ANSWER_SUB_HEADERS.length; s++) {
+        headers.push(ANSWER_SUB_HEADERS[s] + " " + k);
+      }
+    }
+    sheet.appendRow(headers);
+    const headerRange = sheet.getRange(1, 1, 1, headers.length);
+    headerRange.setBackground("#0f172a");
+    headerRange.setFontColor("#f8fafc");
+    headerRange.setFontWeight("bold");
+    headerRange.setFontSize(10);
+    sheet.setFrozenRows(1);
+    sheet.setFrozenColumns(5);
+  }
+  return sheet;
+}
+
+function ensureAnswersHeaderLength(sheet, slotNumber) {
+  const lastCol = Math.max(sheet.getLastColumn(), 5);
+  const neededCols = 5 + (slotNumber * 5);
+  if (neededCols > lastCol) {
+    const currentHeaders = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+    const newHeaders = [...currentHeaders];
+    const currentSlots = Math.floor((lastCol - 5) / 5);
+    for (let k = currentSlots + 1; k <= slotNumber; k++) {
+      for (let s = 0; s < ANSWER_SUB_HEADERS.length; s++) {
+        newHeaders.push(ANSWER_SUB_HEADERS[s] + " " + k);
+      }
+    }
+    sheet.getRange(1, 1, 1, newHeaders.length).setValues([newHeaders]);
+    const headerRange = sheet.getRange(1, 1, 1, newHeaders.length);
+    headerRange.setBackground("#0f172a");
+    headerRange.setFontColor("#f8fafc");
+    headerRange.setFontWeight("bold");
+    headerRange.setFontSize(10);
+  }
+}
 
 function getOrCreateRegistrantsSheet() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -483,6 +577,113 @@ function doPost(e) {
       return jsonResponse({ status: "success", added: true, user: { id: id, name: name } });
     }
 
+    // 6. SUBMIT ANSWER & UPLOAD TO GOOGLE DRIVE (answers 1)
+    if (action === "submit_answer") {
+      const studentId = String(body.studentId || '').trim();
+      const studentName = String(body.studentName || '').trim();
+      const topic = String(body.topic || 'خط النسخ').trim();
+      const slotIndex = Math.max(1, parseInt(body.slotIndex, 10) || 1);
+      const category = String(body.category || 'حروف').trim();
+      const text = String(body.text || '').trim();
+      const score = Number(body.score) || 0;
+      const details = String(body.details || '').trim();
+      const imageBase64 = String(body.imageBase64 || '').trim();
+      const totalLessons = Math.max(slotIndex, parseInt(body.totalLessonsInTopic, 10) || slotIndex);
+
+      let driveImageUrl = "";
+      if (imageBase64) {
+        try {
+          const folder = DriveApp.getFolderById(DRIVE_FOLDER_ID);
+          const base64Marker = "base64,";
+          const markerIdx = imageBase64.indexOf(base64Marker);
+          const cleanBase64 = markerIdx !== -1 ? imageBase64.slice(markerIdx + base64Marker.length) : imageBase64;
+          const decoded = Utilities.base64Decode(cleanBase64);
+          const timestampStr = Utilities.formatDate(new Date(), "GMT+3", "yyyyMMdd_HHmmss");
+          const fileName = "إجابة_" + (studentName || studentId) + "_" + (text || ("تمرين" + slotIndex)) + "_" + timestampStr + ".png";
+          const blob = Utilities.newBlob(decoded, "image/png", fileName);
+          const file = folder.createFile(blob);
+          file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+          driveImageUrl = "https://lh3.googleusercontent.com/d/" + file.getId();
+        } catch (driveErr) {
+          driveImageUrl = "تعذر الرفع لقوقل درايف: " + driveErr.toString();
+        }
+      }
+
+      const answersSheet = getOrCreateAnswersSheet();
+      ensureAnswersHeaderLength(answersSheet, slotIndex);
+
+      const timestamp = Utilities.formatDate(new Date(), "GMT+3", "yyyy-MM-dd HH:mm:ss");
+      const data = answersSheet.getDataRange().getValues();
+
+      let targetRowIndex = -1;
+      for (let r = 1; r < data.length; r++) {
+        const rowId = String(data[r][1] || '').trim();
+        const rowTopic = String(data[r][3] || '').trim();
+        if (rowId === studentId && rowTopic === topic) {
+          targetRowIndex = r + 1;
+          break;
+        }
+      }
+
+      const exerciseColStart = 6 + (slotIndex - 1) * 5; // e.g. slot 1 -> Col 6 (F)
+      const exerciseValues = [
+        category,
+        text,
+        driveImageUrl,
+        score + "%",
+        details
+      ];
+
+      let completionStatusText = "";
+
+      if (targetRowIndex === -1) {
+        targetRowIndex = answersSheet.getLastRow() + 1;
+        completionStatusText = "1/" + totalLessons + " مكتمل";
+        const baseRow = [
+          timestamp,
+          studentId,
+          studentName,
+          topic,
+          completionStatusText
+        ];
+        const fullRow = [...baseRow];
+        while (fullRow.length < exerciseColStart - 1) {
+          fullRow.push("");
+        }
+        fullRow.push(...exerciseValues);
+        answersSheet.getRange(targetRowIndex, 1, 1, fullRow.length).setValues([fullRow]);
+      } else {
+        answersSheet.getRange(targetRowIndex, 1, 1, 4).setValues([[timestamp, studentId, studentName, topic]]);
+        answersSheet.getRange(targetRowIndex, exerciseColStart, 1, 5).setValues([exerciseValues]);
+
+        // Count completed exercises in this row
+        const rowCells = answersSheet.getRange(targetRowIndex, 1, 1, answersSheet.getLastColumn()).getValues()[0];
+        let completedExercises = 0;
+        for (let col = 5; col < rowCells.length; col += 5) {
+          const exText = String(rowCells[col + 1] || '').trim();
+          const exScore = String(rowCells[col + 3] || '').trim();
+          if (exText || exScore) {
+            completedExercises++;
+          }
+        }
+        completionStatusText = completedExercises >= totalLessons
+          ? "مكتمل (" + completedExercises + "/" + totalLessons + ")"
+          : completedExercises + "/" + totalLessons + " تمارين مكتملة";
+        answersSheet.getRange(targetRowIndex, 5).setValue(completionStatusText);
+      }
+
+      return jsonResponse({
+        status: "success",
+        imageUrl: driveImageUrl,
+        completionStatus: completionStatusText,
+        studentId: studentId,
+        studentName: studentName,
+        topic: topic,
+        slotIndex: slotIndex,
+        score: score
+      });
+    }
+
     return jsonResponse({ status: "error", message: "Unknown action: " + action });
   } catch (err) {
     return jsonResponse({ status: "error", message: err.toString() });
@@ -610,6 +811,8 @@ class SheetService {
         parsedSteps = backupStepsMap[title];
       }
 
+      const diffObj = parseDifficultyField(item.difficulty);
+
       return {
         ...item,
         id: item.id || `tpl_${idx}_${Date.now()}`,
@@ -620,7 +823,10 @@ class SheetService {
         titleEn: item.titleEn || '',
         arabicAudioText: item.arabicAudioText || item.title || '',
         repeatCount: Number(item.repeatCount) || 1,
-        difficulty: item.difficulty || 'سهل',
+        difficulty: item.difficulty ? diffObj.difficulty : (item.difficulty || 'سهل'),
+        hideDots: item.hideDots !== undefined ? item.hideDots : diffObj.hideDots,
+        hideImage: item.hideImage !== undefined ? item.hideImage : diffObj.hideImage,
+        slotIndex: item.slotIndex !== undefined ? item.slotIndex : (idx + 1),
         svgData: item.svgData || '',
         steps: parsedSteps,
         stepsData: item.stepsData || (parsedSteps.length > 0 ? JSON.stringify(parsedSteps) : '')
@@ -661,7 +867,7 @@ class SheetService {
           return { success: true, lessons: [] };
         }
 
-        const validTemplates: DrawingTemplate[] = json.lessons.map((item: any) => {
+        const validTemplates: DrawingTemplate[] = json.lessons.map((item: any, slotIdx: number) => {
           const topic = (item.topic || 'خط النسخ').trim();
           const category = (item.category || 'حروف').trim();
           const rawImg = String(item.imageUrl || '').trim();
@@ -671,6 +877,7 @@ class SheetService {
 
           // Parse steps from stepsData using resilient parser
           const steps: LessonStep[] = parseStepsData(item.stepsData);
+          const diffObj = parseDifficultyField(item.difficulty);
 
           return {
             id: String(item.id || `sheet_${topic}_${title}`),
@@ -681,10 +888,13 @@ class SheetService {
             titleEn: String(item.titleEn || ''),
             arabicAudioText: tts,
             repeatCount: Number(item.repeatCount) || 1,
-            difficulty: (item.difficulty as any) || 'سهل',
+            difficulty: diffObj.difficulty,
+            hideDots: diffObj.hideDots,
+            hideImage: diffObj.hideImage,
+            slotIndex: Number(item.slotIndex) || (slotIdx + 1),
             description: String(item.description || ''),
             svgData: item.svgData || '',
-            tags: [topic, category, item.difficulty || 'سهل'],
+            tags: [topic, category, diffObj.difficulty],
             steps: steps,
             stepsData: item.stepsData || (steps.length > 0 ? JSON.stringify(steps) : '')
           };
@@ -728,6 +938,7 @@ class SheetService {
     }
 
     const stepsSerialized = lesson.stepsData || (lesson.steps && lesson.steps.length > 0 ? JSON.stringify(lesson.steps) : '');
+    const serializedDifficulty = formatDifficultyField(lesson.difficulty || 'سهل', lesson.hideDots, lesson.hideImage);
 
     try {
       const response = await fetch(url, {
@@ -743,7 +954,7 @@ class SheetService {
             title: lesson.title,
             arabicAudioText: lesson.arabicAudioText || lesson.title,
             repeatCount: Number(lesson.repeatCount) || 1,
-            difficulty: lesson.difficulty || 'سهل',
+            difficulty: serializedDifficulty,
             stepsData: stepsSerialized
           }
         })
@@ -803,7 +1014,7 @@ class SheetService {
             title: l.title,
             arabicAudioText: l.arabicAudioText || l.title,
             repeatCount: Number(l.repeatCount) || 1,
-            difficulty: l.difficulty || 'سهل',
+            difficulty: formatDifficultyField(l.difficulty || 'سهل', l.hideDots, l.hideImage),
             stepsData: l.stepsData || (l.steps && l.steps.length > 0 ? JSON.stringify(l.steps) : '')
           }))
         })
@@ -1039,6 +1250,61 @@ class SheetService {
       return { success: false, error: json.message || 'تعذر إضافة المشترك' };
     } catch (err: any) {
       return { success: false, error: err.message || 'خطأ في الاتصال بالخادم' };
+    }
+  }
+
+  /**
+   * Submit student's exercise answer, upload drawing to Google Drive folder 1kYNXRiFvHY09BYLRbINxerXC5cpYiIOX,
+   * and log row into sheet 'answers 1'
+   */
+  public async submitLessonAnswer(payload: {
+    studentId: string;
+    studentName: string;
+    topic: string;
+    slotIndex: number;
+    category: string;
+    text: string;
+    imageBase64: string;
+    score: number;
+    details: string;
+    totalLessonsInTopic?: number;
+  }): Promise<{ success: boolean; imageUrl?: string; completionStatus?: string; error?: string }> {
+    const url = this.getStoredSheetUrl();
+    if (!url) {
+      return { success: false, error: 'رابط Google Apps Script غير مضبوط' };
+    }
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+          action: 'submit_answer',
+          ...payload
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`خطأ في استجابة الخادم: ${response.status}`);
+      }
+
+      const json = await response.json();
+      if (json.status === 'success') {
+        return {
+          success: true,
+          imageUrl: json.imageUrl,
+          completionStatus: json.completionStatus
+        };
+      }
+      return {
+        success: false,
+        error: json.message || 'تعذر تسجيل الإجابة في جدول البيانات'
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err.message || 'حدث خطأ أثناء رفع الإجابة وحفظها'
+      };
     }
   }
 }
