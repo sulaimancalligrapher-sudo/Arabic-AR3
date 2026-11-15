@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useState, useCallback, useImperativeHandle, f
 import { BoardStyle, PenType, Stroke, Point, DrawingTemplate, GuideColor, LessonStep } from '../types/drawing';
 import { audioService } from '../services/audioService';
 import { formatDirectImageUrl } from '../utils/urlHelper';
-import { getArabicOrdinal, getStepAudioPrompt, RegistrantUser, sheetService } from '../services/sheetService';
+import { getArabicOrdinal, getArabicDrawingOrdinal, getStepAudioPrompt, RegistrantUser, sheetService } from '../services/sheetService';
 import { 
   AlertCircle, 
   CheckCircle2, 
@@ -57,6 +57,7 @@ interface WhiteboardCanvasProps {
   onOpenHelp?: () => void;
   onOpenLibrary?: () => void;
   onNextRepetition?: () => void;
+  onResetRepetition?: () => void;
   onAccuracyUpdate?: (accuracy: number) => void;
   onGoalAchieved?: (accuracy: number) => void;
 }
@@ -82,6 +83,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
   onOpenHelp,
   onOpenLibrary,
   onNextRepetition,
+  onResetRepetition,
   onAccuracyUpdate,
   onGoalAchieved,
 }, ref) => {
@@ -119,6 +121,15 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     hasBrokenAway: false
   });
   const [isLessonStarted, setIsLessonStarted] = useState(false);
+  const [pendingNextRepScore, setPendingNextRepScore] = useState<number | null>(null);
+  const repetitionScoresRef = useRef<{
+    rep: number;
+    totalScore: number;
+    startEndScore: number;
+    pathScore: number;
+    coverageScore: number;
+  }[]>([]);
+  const autoStartNextRepRef = useRef(false);
   const [evaluationModal, setEvaluationModal] = useState<{
     isOpen: boolean;
     totalScore: number;
@@ -126,6 +137,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     pathScore: number;
     coverageScore: number;
     feedback: string;
+    repetitionBreakdown?: { rep: number; score: number }[];
   } | null>(null);
 
   // Answer submission to Google Drive and 'answers 1' sheet
@@ -198,7 +210,14 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     }
   }, [dimensions, template, guideColor, templateOpacity, currentStepIndex, showGhostOverlay]);
 
-  // Reset goal achieved state and step progression when template or repetition changes (requires ( ابدأ ) for every lesson)
+  // Clear repetition cumulative history when template changes
+  useEffect(() => {
+    repetitionScoresRef.current = [];
+    autoStartNextRepRef.current = false;
+    setPendingNextRepScore(null);
+  }, [template]);
+
+  // Reset goal achieved state and step progression when template or repetition changes
   useEffect(() => {
     hasAchievedGoalRef.current = false;
     setCurrentStepIndex(0);
@@ -206,10 +225,32 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     setEvaluationModal(null);
     setSubmitAnswerResult(null);
     setShowGhostOverlay(false);
-    setIsLessonStarted(false);
+    setPendingNextRepScore(null);
     strokeStartedAtGreenRef.current = false;
     stepScoresRef.current = [];
+    activePointerStrokeRef.current = null;
+    activeAirStrokeRef.current = null;
+    setStrokes([]);
+    setRedoStack([]);
     resetStrokeStats();
+
+    const canvas = canvasRef.current;
+    if (canvas) {
+      const ctx = canvas.getContext('2d');
+      ctx?.clearRect(0, 0, canvas.width, canvas.height);
+    }
+
+    if (autoStartNextRepRef.current) {
+      autoStartNextRepRef.current = false;
+      setIsLessonStarted(true);
+      if (template?.steps && template.steps[0] && !template.hideDots && !template.hideImage) {
+        const prompt = getStepAudioPrompt(template.steps[0]);
+        setTimeout(() => audioService.speakArabic(prompt), 250);
+      }
+    } else {
+      setIsLessonStarted(false);
+    }
+
     drawTemplateGuide();
   }, [template, currentRepetition, resetStrokeStats]);
 
@@ -874,33 +915,159 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     return exportCanvas.toDataURL('image/png');
   }, [dimensions, boardStyle, template]);
 
-  // Open Evaluation Modal with scores, confetti & voice
+  // Build tailored evaluation text & automated voice feedback based on score, criteria & drawing mode (AR vs Normal)
+  const buildSmartEvaluationFeedback = useCallback((
+    finalScore: number,
+    startEndScore: number,
+    pathScore: number,
+    coverageScore: number,
+    arMode: boolean,
+    blindMode: boolean
+  ): { textFeedback: string; voiceFeedback: string } => {
+    const weakest =
+      coverageScore <= pathScore && coverageScore <= startEndScore
+        ? 'coverage'
+        : pathScore <= startEndScore
+        ? 'path'
+        : 'startEnd';
+
+    const adviceMap = {
+      coverage: blindMode
+        ? 'حاول ملء معالم الحرف ومساحته بشكل أوضح.'
+        : 'حاول ملء كامل سمك وعرض خط الحرف بالقلم.',
+      path: blindMode
+        ? 'قارن رسمتك مع الظل الذهبي للحرف وحاول ضبط النسب والانحناء.'
+        : 'التزم بالبقاء فوق مسار الحرف دون خروج عن الخط.',
+      startEnd: 'انتبه لنقطة انطلاق الحرف ونقطة نهايته بدقة.'
+    };
+
+    if (finalScore >= 85) {
+      return {
+        textFeedback: arMode
+          ? 'ما شاء الله! أداء متقن بالواقع المعزز، استحققت التاج الملكي 👑'
+          : 'ما شاء الله! خط متقن وجريان قلم متميز 🌟',
+        voiceFeedback: arMode
+          ? `ما شاء الله! حققت درجة ${finalScore} في المئة بالواقع المعزز. أداء متقن في الهواء، واستحققت التاج الملكي.`
+          : `ما شاء الله! حققت درجة ${finalScore} في المئة. خط متقن وتحكم ممتاز بالقلم، أحسنت.`
+      };
+    }
+
+    if (finalScore >= 70) {
+      const tip = adviceMap[weakest];
+      return {
+        textFeedback: arMode
+          ? `أحسنت! رسم جميل بالواقع المعزز وتُوّجت بالتاج الملكي 👑 (${tip})`
+          : `جيد جداً! رسم متوازن وجميل 👍 (${tip})`,
+        voiceFeedback: arMode
+          ? `أحسنت! حققت درجة ${finalScore} في المئة بالواقع المعزز وحصلت على التاج الملكي. ${tip}`
+          : `جيد جداً! حققت درجة ${finalScore} في المئة. ${tip}`
+      };
+    }
+
+    if (finalScore >= 50) {
+      const tip = adviceMap[weakest];
+      return {
+        textFeedback: arMode
+          ? `محاولة طيبة بالواقع المعزز! ${tip} (التاج عند 70% فأعلى) ✍️`
+          : `محاولة طيبة! ${tip} ✍️`,
+        voiceFeedback: arMode
+          ? `محاولة طيبة بالواقع المعزز، درجتك ${finalScore} في المئة. ${tip}`
+          : `محاولة طيبة، درجتك ${finalScore} في المئة. ${tip}`
+      };
+    }
+
+    const lowTip = arMode
+      ? 'ثبت يدك أمام الكاميرا وارسم ببطء وتأنٍ لتتحسن النتيجة.'
+      : adviceMap[weakest];
+    return {
+      textFeedback: `بداية تحتاج إلى تركيز أكثر: ${lowTip} 💪`,
+      voiceFeedback: `درجتك ${finalScore} في المئة. ${lowTip}`
+    };
+  }, []);
+
+  // Open Evaluation Modal OR advance inline repetition bar if repeatCount > 1
   const openEvaluationResults = useCallback((
     startEndScore: number,
     pathScore: number,
     coverageScore: number,
     customFeedback?: string
   ) => {
-    const finalScore = Math.min(
+    const attemptScore = Math.min(
       100,
       Math.max(20, Math.round(startEndScore * 0.20 + pathScore * 0.50 + coverageScore * 0.30))
     );
 
-    let feedback = customFeedback || '';
-    if (!feedback) {
-      if (finalScore >= 88) feedback = 'ما شاء الله! جريان قلم متقن ومسار متميز 🌟';
-      else if (finalScore >= 72) feedback = 'جيد جداً! رسم دقيق مع استقرار في القلم 👍';
-      else if (finalScore >= 50) feedback = 'محاولة طيبة! واصل التدريب لملء عرض الحرف والالتزام بالمسار ✍️';
-      else feedback = 'بداية تحتاج إلى تركيز أكثر على شكل الحرف ومساره ✍️';
+    const totalReps = Number(template?.repeatCount) || 1;
+    const repIdx = currentRepetition || 1;
+
+    // Store/update score for this repetition
+    const existingIdx = repetitionScoresRef.current.findIndex(r => r.rep === repIdx);
+    const repRecord = {
+      rep: repIdx,
+      totalScore: attemptScore,
+      startEndScore,
+      pathScore,
+      coverageScore
+    };
+    if (existingIdx !== -1) {
+      repetitionScoresRef.current[existingIdx] = repRecord;
+    } else {
+      repetitionScoresRef.current.push(repRecord);
     }
 
+    // Intermediate repetition: show score + "ابدأ الرسمة التالية" + ( ابدأ ) inside top bar only!
+    if (totalReps > 1 && repIdx < totalReps) {
+      setIsLessonStarted(false);
+      setStepAlert(null);
+      setPendingNextRepScore(attemptScore);
+      audioService.playStepSuccessSound();
+      const nextDrawingOrdinal = getArabicDrawingOrdinal(repIdx + 1);
+      audioService.speakArabic(`درجتك ${attemptScore} في المئة. انقر على زر ابدأ لترسم الرسمة ${nextDrawingOrdinal}`);
+      return;
+    }
+
+    // Final repetition (or single-rep lesson): compute overall final result
+    const allReps = repetitionScoresRef.current;
+    const isMultiRep = totalReps > 1 && allReps.length > 1;
+    const count = Math.max(1, allReps.length);
+
+    const finalScore = isMultiRep
+      ? Math.round(allReps.reduce((acc, r) => acc + r.totalScore, 0) / count)
+      : attemptScore;
+    const finalStartEnd = isMultiRep
+      ? Math.round(allReps.reduce((acc, r) => acc + r.startEndScore, 0) / count)
+      : startEndScore;
+    const finalPath = isMultiRep
+      ? Math.round(allReps.reduce((acc, r) => acc + r.pathScore, 0) / count)
+      : pathScore;
+    const finalCoverage = isMultiRep
+      ? Math.round(allReps.reduce((acc, r) => acc + r.coverageScore, 0) / count)
+      : coverageScore;
+
+    const smart = buildSmartEvaluationFeedback(
+      finalScore,
+      finalStartEnd,
+      finalPath,
+      finalCoverage,
+      isARMode,
+      Boolean(template?.hideImage)
+    );
+
+    const displayFeedback = customFeedback
+      ? `${customFeedback} — ${smart.textFeedback}`
+      : smart.textFeedback;
+
+    setPendingNextRepScore(null);
     setEvaluationModal({
       isOpen: true,
       totalScore: finalScore,
-      startEndScore,
-      pathScore,
-      coverageScore,
-      feedback
+      startEndScore: finalStartEnd,
+      pathScore: finalPath,
+      coverageScore: finalCoverage,
+      feedback: displayFeedback,
+      repetitionBreakdown: isMultiRep
+        ? allReps.map(r => ({ rep: r.rep, score: r.totalScore }))
+        : undefined
     });
     setSubmitAnswerResult(null);
 
@@ -915,18 +1082,23 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       audioService.playChime(440, 0.2);
     }
 
-    if (isLessonStarted && !template?.hideDots && !template?.hideImage) {
-      audioService.speakArabic(`حققت درجة ${finalScore} في المئة. ${feedback}`);
-    }
+    audioService.speakArabic(
+      isMultiRep
+        ? `أتممت جميع التكرارات! المعدل الكلي النهائي ${finalScore} في المئة. ${smart.voiceFeedback}`
+        : smart.voiceFeedback
+    );
+
     setStepAlert({
       type: 'success',
-      message: `تم التقييم: الدرجة النهائية ${finalScore}% 🎉`,
+      message: isMultiRep
+        ? `النتيجة الكلية النهائية: ${finalScore}% 🎉`
+        : `تم التقييم: الدرجة النهائية ${finalScore}% 🎉`,
       timestamp: Date.now()
     });
     if (onGoalAchieved) {
       onGoalAchieved(finalScore);
     }
-  }, [isLessonStarted, template, onGoalAchieved]);
+  }, [template, currentRepetition, isARMode, buildSmartEvaluationFeedback, onGoalAchieved]);
 
   // Evaluate Blind Memory Test (hideImage) or No-Dots Mode (hideDots)
   const handleFinishChallengeEvaluation = useCallback(() => {
@@ -1199,12 +1371,24 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
   // Start exercise with voice unlock and pronunciation
   const handleStartLesson = async () => {
     await audioService.unlockAudio();
+    setPendingNextRepScore(null);
     setIsLessonStarted(true);
     setStepAlert(null);
     stepScoresRef.current = [];
     if (template?.steps && template.steps[currentStepIndex] && !template.hideDots && !template.hideImage) {
       const prompt = getStepAudioPrompt(template.steps[currentStepIndex]);
       audioService.speakArabic(prompt);
+    }
+  };
+
+  // Start next repetition from inline top-bar button
+  const handleStartNextRepetition = async () => {
+    await audioService.unlockAudio();
+    autoStartNextRepRef.current = true;
+    setPendingNextRepScore(null);
+    setStepAlert(null);
+    if (onNextRepetition) {
+      onNextRepetition();
     }
   };
 
@@ -1509,6 +1693,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
 
     const x = virtualCursor.x * dimensions.width;
     const y = virtualCursor.y * dimensions.height;
+    const isChallengeMode = !!(template?.hideDots || template?.hideImage);
 
     if (isAirDrawing) {
       if (!template) {
@@ -1529,7 +1714,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
           audioService.playErrorSound();
           setStepAlert({
             type: 'error',
-            message: '⚠️ انقر على زر ( ابدأ ) في الشريط لبدء التمرين وسماع التوجيه 🎧',
+            message: '⚠️ انقر على زر ( ابدأ ) في الشريط لبدء التمرين 🎧',
             timestamp: Date.now()
           });
           audioService.speakArabic('انقر زر ابدأ لبدء التمرين');
@@ -1547,8 +1732,9 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
           maxConsecutiveOffPath: 0,
           hasBrokenAway: false
         };
-        // Start air stroke - validate green dot start
-        if (template?.steps && template.steps.length > 0 && activeStepPointsRef.current && penType !== 'eraser') {
+
+        // Start air stroke: only validate green dot in standard guided mode (NEVER in challenge/no-dots/blind modes)
+        if (!isChallengeMode && template?.steps && template.steps.length > 0 && activeStepPointsRef.current && penType !== 'eraser') {
           const active = activeStepPointsRef.current;
           const startDist = Math.hypot(x - active.sx, y - active.sy);
           const startThreshold = Math.max(50, penSize * 2.8);
@@ -1587,8 +1773,8 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         if (Math.hypot(x - lastPt.x, y - lastPt.y) >= 3) {
           curStroke.points.push({ x, y, pressure: 1, time: Date.now() });
 
-          // Track path adherence
-          if (penType !== 'eraser' && template?.steps && template.steps.length > 0) {
+          // Track path adherence only in standard guided mode
+          if (!isChallengeMode && penType !== 'eraser' && template?.steps && template.steps.length > 0) {
             strokeStatsRef.current.total++;
             const classification = classifyPoint(x, y);
 
@@ -1606,12 +1792,15 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
               }
               if (strokeStatsRef.current.offPathConsecutive >= 8) {
                 strokeStatsRef.current.hasBrokenAway = true;
-                setStepAlert({
-                  type: 'error',
-                  message: '⚠️ تنبيه: خرج القلم عن مسار الحرف! التزم بالحبر',
-                  timestamp: Date.now()
-                });
-                audioService.playErrorSound();
+                const difficulty = template.difficulty || 'سهل';
+                if (difficulty !== 'سهل') {
+                  setStepAlert({
+                    type: 'error',
+                    message: '⚠️ تنبيه: خرج القلم عن مسار الحرف! التزم بالحبر',
+                    timestamp: Date.now()
+                  });
+                  audioService.playErrorSound();
+                }
               }
             }
           }
@@ -1632,8 +1821,8 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         activeAirStrokeRef.current = null;
         redrawCanvas();
 
-        // Validate red dot finish for air stroke
-        if (template?.steps && template.steps.length > 0 && activeStepPointsRef.current && penType !== 'eraser') {
+        // Validate red dot finish ONLY in standard guided mode (NEVER in challenge/no-dots/blind modes)
+        if (!isChallengeMode && template?.steps && template.steps.length > 0 && activeStepPointsRef.current && penType !== 'eraser') {
           if (strokeStartedAtGreenRef.current) {
             const active = activeStepPointsRef.current;
             const lastPt = finishedAirStroke.points[finishedAirStroke.points.length - 1];
@@ -1643,83 +1832,82 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
             if (endDist <= endThreshold) {
               const stats = strokeStatsRef.current;
               const total = Math.max(1, stats.total);
+              const rawPathScore = Math.min(100, Math.max(25, Math.round(((stats.corePoints * 1.0 + stats.grazingPoints * 0.45) / total) * 100)));
+              const difficulty = template.difficulty || 'سهل';
+              const brokeAway = stats.hasBrokenAway || stats.maxConsecutiveOffPath >= 8;
+              const offCenter = rawPathScore < 45;
 
-              if (stats.hasBrokenAway || stats.maxConsecutiveOffPath >= 8) {
+              if ((difficulty === 'متوسط' || difficulty === 'متقدم') && (brokeAway || offCenter)) {
                 audioService.playErrorSound();
                 setStepAlert({
                   type: 'error',
-                  message: 'تنبيه: خرج القلم عن مسار الحرف! يجب الاستمرار على مسار الخط دون انقطاع ✍️',
+                  message: brokeAway
+                    ? 'تنبيه: خرج القلم عن مسار الحرف! يجب الاستمرار على مسار الخط دون انقطاع ✍️'
+                    : 'تنبيه: يجب الرسم فوق مسار خط الحرف بدقة ✍️',
                   timestamp: Date.now()
                 });
                 if (isLessonStarted) {
-                  audioService.speakArabic('خرج القلم عن مسار الحرف! التزم بالخط دون انقطاع');
+                  audioService.speakArabic(brokeAway ? 'خرج القلم عن مسار الحرف! التزم بالخط دون انقطاع' : 'ارسم فوق مسار الحرف بدقة');
                 }
               } else {
-                const pathScore = Math.min(100, Math.max(25, Math.round(((stats.corePoints * 1.0 + stats.grazingPoints * 0.45) / total) * 100)));
+                const effectivePathScore = (difficulty === 'سهل' && (brokeAway || offCenter))
+                  ? Math.min(rawPathScore, 55)
+                  : rawPathScore;
 
-                if (pathScore < 45) {
+                const nextIdx = currentStepIndex + 1;
+                const coverageScore = calculateCoverageScore();
+
+                if (difficulty === 'متقدم' && nextIdx >= template.steps.length && coverageScore < 75) {
                   audioService.playErrorSound();
                   setStepAlert({
                     type: 'error',
-                    message: 'تنبيه: يجب الرسم فوق مسار خط الحرف بدقة ✍️',
+                    message: `⚠️ المستوى المتقدم يتطلب تغطية سُمك الحرف بنسبة 75% على الأقل (الحالي: ${coverageScore}%) — املأ عرض الحرف`,
                     timestamp: Date.now()
                   });
                   if (isLessonStarted) {
-                    audioService.speakArabic('ارسم فوق مسار الحرف بدقة');
+                    audioService.speakArabic('تغطية سمك الحرف غير مكتملة للمستوى المتقدم، حاول ملء عرض الحرف');
+                  }
+                  strokeStartedAtGreenRef.current = false;
+                  return;
+                }
+
+                stepScoresRef.current[currentStepIndex] = {
+                  startEnd: 100,
+                  path: effectivePathScore,
+                  brokenAway: brokeAway
+                };
+
+                audioService.playStepSuccessSound();
+
+                if (nextIdx < template.steps.length) {
+                  setCurrentStepIndex(nextIdx);
+                  const nextStep = template.steps[nextIdx];
+                  const stepName = getArabicOrdinal(currentStepIndex + 1);
+                  const hasWarning = difficulty === 'سهل' && (brokeAway || offCenter);
+                  setStepAlert({
+                    type: 'success',
+                    message: hasWarning
+                      ? `تم اجتياز ${stepName} — ملاحظة: حاول الالتزام بمسار الحرف ✍️`
+                      : `رائع! أتممت ${stepName} بنجاح ✓`,
+                    timestamp: Date.now()
+                  });
+                  if (isLessonStarted) {
+                    const nextPrompt = getStepAudioPrompt(nextStep);
+                    setTimeout(() => {
+                      audioService.speakArabic(nextPrompt);
+                    }, 400);
                   }
                 } else {
-                  audioService.playStepSuccessSound();
-                  const nextIdx = currentStepIndex + 1;
-                  if (nextIdx < template.steps.length) {
-                    setCurrentStepIndex(nextIdx);
-                    const nextStep = template.steps[nextIdx];
-                    const stepName = getArabicOrdinal(currentStepIndex + 1);
-                    setStepAlert({
-                      type: 'success',
-                      message: `رائع! أتممت ${stepName} بنجاح ✓`,
-                      timestamp: Date.now()
-                    });
-                    if (isLessonStarted) {
-                      const nextPrompt = getStepAudioPrompt(nextStep);
-                      setTimeout(() => {
-                        audioService.speakArabic(nextPrompt);
-                      }, 400);
-                    }
-                  } else {
-                    const startEndScore = 100;
-                    const coverageScore = calculateCoverageScore();
-                    const finalScore = Math.min(100, Math.max(30, Math.round(startEndScore * 0.20 + pathScore * 0.50 + coverageScore * 0.30)));
+                  const recorded = stepScoresRef.current.filter(Boolean);
+                  const avgPathScore = recorded.length > 0
+                    ? Math.round(recorded.reduce((acc, s) => acc + s.path, 0) / recorded.length)
+                    : effectivePathScore;
+                  const anyBroken = recorded.some(s => s.brokenAway);
+                  const customNote = (difficulty === 'سهل' && anyBroken)
+                    ? 'تم اجتياز النقاط بنجاح! ننصح بالالتزام بمسار الحرف أكثر في المحاولة القادمة ✍️'
+                    : undefined;
 
-                    let feedback = '';
-                    if (finalScore >= 88) feedback = 'ما شاء الله! جريان قلم متقن ومسار متميز 🌟';
-                    else if (finalScore >= 72) feedback = 'جيد جداً! رسم دقيق مع استقرار في القلم 👍';
-                    else feedback = 'محاولة طيبة! حاول ملء عرض الحرف والالتزام بالمسار أكثر ✍️';
-
-                    setEvaluationModal({
-                      isOpen: true,
-                      totalScore: finalScore,
-                      startEndScore,
-                      pathScore,
-                      coverageScore,
-                      feedback
-                    });
-
-                    confetti({
-                      particleCount: 90,
-                      spread: 75,
-                      origin: { y: 0.6 }
-                    });
-                    audioService.playSuccessFanfare();
-                    if (isLessonStarted) {
-                      audioService.speakArabic(`ممتاز جداً! حققت درجة ${finalScore} في المئة. ${feedback}`);
-                    }
-                    setStepAlert({
-                      type: 'success',
-                      message: `مبارك! أتممت كتابة الحرف بدرجة ${finalScore}% بنجاح 🎉`,
-                      timestamp: Date.now()
-                    });
-                    if (onGoalAchieved) onGoalAchieved(finalScore);
-                  }
+                  openEvaluationResults(100, avgPathScore, coverageScore, customNote);
                 }
               }
             } else {
@@ -1738,7 +1926,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         }
       }
     }
-  }, [virtualCursor, isAirDrawing, isARMode, dimensions, penType, penColor, penSize, calligraphyAngle, redrawCanvas, currentStepIndex, template, onGoalAchieved, checkPointOnPath, classifyPoint, calculateCoverageScore, isLessonStarted]);
+  }, [virtualCursor, isAirDrawing, isARMode, dimensions, penType, penColor, penSize, calligraphyAngle, redrawCanvas, currentStepIndex, template, openEvaluationResults, classifyPoint, calculateCoverageScore, isLessonStarted, onOpenLibrary]);
 
   // Imperative actions exposed to parent component
   useImperativeHandle(ref, () => ({
@@ -1967,9 +2155,37 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
             )}
           </div>
 
-          {/* Center: In-Bar Smart Alert OR Step Guidance (رسائل الأخطاء الذكية أو رقم الخطوة والصوت) */}
+          {/* Center: Inline Next-Repetition Prompt OR In-Bar Smart Alert OR Step Guidance */}
           <div className="flex items-center justify-center flex-1 mx-1 sm:mx-2 overflow-hidden">
-            {stepAlert ? (
+            {pendingNextRepScore !== null && template ? (
+              <div className="flex items-center gap-1.5 sm:gap-2.5 animate-in fade-in zoom-in-95 duration-150">
+                <span
+                  className={`px-2 py-0.5 rounded-lg font-mono font-bold text-xs sm:text-sm border shrink-0 ${
+                    pendingNextRepScore >= 75
+                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                      : pendingNextRepScore >= 50
+                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                      : 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                  }`}
+                >
+                  {pendingNextRepScore}%
+                </span>
+                <span className="text-[11px] sm:text-xs font-bold text-slate-200 whitespace-nowrap">
+                  <span className="sm:hidden">ابدأ الرسمة التالية</span>
+                  <span className="hidden sm:inline">
+                    ابدأ الرسمة {getArabicDrawingOrdinal((currentRepetition || 1) + 1)}
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  onClick={handleStartNextRepetition}
+                  className="px-2.5 sm:px-3.5 py-1 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 font-bold text-xs sm:text-sm shadow-md hover:brightness-110 active:scale-95 transition-all cursor-pointer whitespace-nowrap shrink-0 animate-pulse"
+                  title="بدء الرسمة التالية"
+                >
+                  ( ابدأ )
+                </button>
+              </div>
+            ) : stepAlert ? (
               <div
                 className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-xl text-xs font-bold animate-in fade-in zoom-in-95 duration-150 truncate ${
                   stepAlert.type === 'error'
@@ -2032,10 +2248,17 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                         setEvaluationModal(null);
                         setSubmitAnswerResult(null);
                         setShowGhostOverlay(false);
+                        setPendingNextRepScore(null);
                         setIsLessonStarted(false);
                         strokeStartedAtGreenRef.current = false;
                         stepScoresRef.current = [];
+                        repetitionScoresRef.current = [];
+                        setStrokes([]);
+                        setRedoStack([]);
+                        const canvas = canvasRef.current;
+                        if (canvas) canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
                         resetStrokeStats();
+                        if (onResetRepetition) onResetRepetition();
                       }}
                       className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer shrink-0"
                       title="إعادة التمرين"
@@ -2096,10 +2319,17 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                         setEvaluationModal(null);
                         setSubmitAnswerResult(null);
                         setShowGhostOverlay(false);
+                        setPendingNextRepScore(null);
                         setIsLessonStarted(false);
                         strokeStartedAtGreenRef.current = false;
                         stepScoresRef.current = [];
+                        repetitionScoresRef.current = [];
+                        setStrokes([]);
+                        setRedoStack([]);
+                        const canvas = canvasRef.current;
+                        if (canvas) canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
                         resetStrokeStats();
+                        if (onResetRepetition) onResetRepetition();
                       }}
                       className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer shrink-0"
                       title="إعادة من الخطوة الأولى"
@@ -2191,7 +2421,11 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
             </div>
 
             <h3 className="text-lg sm:text-xl font-bold font-ruqaa text-amber-300 mb-1">
-              {template?.hideImage ? 'بطاقة تقييم اختبار الذاكرة 🧠' : 'بطاقة تقييم كتابة الحرف'}
+              {evaluationModal.repetitionBreakdown && evaluationModal.repetitionBreakdown.length > 1
+                ? `النتيجة الكلية النهائية (${evaluationModal.repetitionBreakdown.length} تكرارات)`
+                : template?.hideImage
+                ? 'بطاقة تقييم اختبار الذاكرة 🧠'
+                : 'بطاقة تقييم كتابة الحرف'}
             </h3>
             
             {/* Final Big Score */}
@@ -2203,6 +2437,21 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                 {evaluationModal.feedback}
               </p>
             </div>
+
+            {/* Individual Repetition Scores Summary (when repeatCount > 1) */}
+            {evaluationModal.repetitionBreakdown && evaluationModal.repetitionBreakdown.length > 1 && (
+              <div className="flex flex-wrap items-center justify-center gap-1.5 mb-3 px-2 py-2 rounded-xl bg-slate-800/70 border border-slate-700/60 text-[11px]">
+                {evaluationModal.repetitionBreakdown.map(item => (
+                  <span
+                    key={item.rep}
+                    className="px-2 py-0.5 rounded-lg bg-slate-900 text-slate-200 border border-slate-700 font-semibold"
+                  >
+                    الرسمة {getArabicDrawingOrdinal(item.rep)}:{' '}
+                    <span className="font-mono text-amber-400 font-bold">{item.score}%</span>
+                  </span>
+                ))}
+              </div>
+            )}
 
             {/* Criteria Progress Bars */}
             <div className="space-y-3 my-4 text-xs text-right bg-slate-800/60 p-3.5 rounded-2xl border border-slate-700/60">
@@ -2331,10 +2580,12 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                   setEvaluationModal(null);
                   setSubmitAnswerResult(null);
                   setShowGhostOverlay(false);
+                  setPendingNextRepScore(null);
                   setIsLessonStarted(false);
                   setCurrentStepIndex(0);
                   setStepAlert(null);
                   stepScoresRef.current = [];
+                  repetitionScoresRef.current = [];
                   resetStrokeStats();
                   const canvas = canvasRef.current;
                   if (canvas) {
@@ -2342,6 +2593,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                     ctx?.clearRect(0, 0, canvas.width, canvas.height);
                   }
                   setStrokes([]);
+                  if (onResetRepetition) onResetRepetition();
                 }}
                 className="flex-1 py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer"
               >

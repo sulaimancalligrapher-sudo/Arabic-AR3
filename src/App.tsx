@@ -277,26 +277,29 @@ export default function App() {
     }
   };
 
-  // Handle goal achieved (accuracy goal passed)
+  // Handle final goal achieved (only called on final repetition; Crown strictly reserved for AR mode)
   const handleGoalAchieved = (acc: number) => {
-    const totalReps = Number(selectedTemplate?.repeatCount) || 1;
-    if (currentRepetition < totalReps) {
-      setCelebrationMessage(`أحسنت! أنهيت التكرار ${currentRepetition} من ${totalReps} 🌟 تابع للتكرار التالي!`);
-      audioService.speakArabic(`رائع! أنهيت التكرار ${currentRepetition}، واصل للمرة التالية`);
-      setTimeout(() => {
-        setCurrentRepetition(prev => prev + 1);
-        canvasRef.current?.clearCanvas();
+    if (boardStyle === 'ar_camera') {
+      if (acc >= 70) {
+        setShowCrown(true);
+        setCelebrationMessage(`👑 ما شاء الله! حققت إتقان ${acc}% بالواقع المعزز وتُوّجت بالتاج الملكي!`);
+      } else {
+        setShowCrown(false);
         setCelebrationMessage(null);
-      }, 3000);
+      }
     } else {
-      setShowCrown(true); // 👑 Crown reward granted upon mastery!
-      setCelebrationMessage(`👑 ما شاء الله! حققت إتقان ${acc}% وتوجت بتاج الخطاط الملكي! 🌟`);
-      audioService.playSuccessFanfare();
-      audioService.speakArabic('مبارك عليك! أتقنت رسم الحرف وتُوجت بجائزة التاج الملكي!');
-      setTimeout(() => {
+      setShowCrown(false);
+      if (acc >= 85) {
+        setCelebrationMessage(`🌟 إبداع رائع! أتقنت كتابة الحرف بدرجة ${acc}%`);
+      } else if (acc >= 70) {
+        setCelebrationMessage(`👏 أحسنت! أتممت التمرين بنجاح بدرجة ${acc}%`);
+      } else {
         setCelebrationMessage(null);
-      }, 8000);
+      }
     }
+    setTimeout(() => {
+      setCelebrationMessage(null);
+    }, 7000);
   };
 
   // If in Settings route, display Settings Studio View completely isolated from the whiteboard
@@ -417,9 +420,9 @@ export default function App() {
               const totalReps = Number(selectedTemplate?.repeatCount) || 1;
               if (currentRepetition < totalReps) {
                 setCurrentRepetition(prev => prev + 1);
-                canvasRef.current?.clearCanvas();
               }
             }}
+            onResetRepetition={() => setCurrentRepetition(1)}
             onAccuracyUpdate={(acc) => {
               setAccuracy(acc);
               syncHistoryState();

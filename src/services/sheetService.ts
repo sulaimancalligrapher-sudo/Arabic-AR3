@@ -34,6 +34,30 @@ export function getArabicOrdinal(num: number): string {
 }
 
 /**
+ * Return authentic feminine Arabic ordinal word for drawings/repetitions (الرسمة الأولى، الثانية، الثالثة...)
+ */
+export function getArabicDrawingOrdinal(num: number): string {
+  const ordinals: Record<number, string> = {
+    1: 'الأولى',
+    2: 'الثانية',
+    3: 'الثالثة',
+    4: 'الرابعة',
+    5: 'الخامسة',
+    6: 'السادسة',
+    7: 'السابعة',
+    8: 'الثامنة',
+    9: 'التاسعة',
+    10: 'العاشرة',
+    11: 'الحادية عشرة',
+    12: 'الثانية عشرة',
+    13: 'الثالثة عشرة',
+    14: 'الرابعة عشرة',
+    15: 'الخامسة عشرة',
+  };
+  return ordinals[num] || `رقم ${num}`;
+}
+
+/**
  * Resolves the spoken text for a calligraphy step, ensuring words like 'الخطوة الأولى'
  * instead of bare digits like '1' or 'الخطوة 1'
  */
