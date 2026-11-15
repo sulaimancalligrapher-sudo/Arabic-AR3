@@ -2516,8 +2516,18 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
 
       {/* Layer 4: Calligraphy Evaluation Scorecard Modal (بطاقة تقييم رسم الحرف) */}
       {evaluationModal && evaluationModal.isOpen && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-md animate-in fade-in duration-200">
-          <div className="relative w-full max-w-sm sm:max-w-md bg-gradient-to-b from-slate-900 via-slate-900 to-slate-950 border border-amber-500/40 rounded-3xl p-5 sm:p-6 shadow-[0_0_50px_rgba(245,158,11,0.25)] text-white text-center max-h-[92vh] overflow-y-auto">
+        <div
+          className={`absolute inset-0 z-50 flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200 ${
+            isARMode ? 'bg-transparent' : 'bg-slate-950/75 backdrop-blur-md'
+          }`}
+        >
+          <div
+            className={`relative w-full border border-amber-500/40 rounded-3xl shadow-[0_0_50px_rgba(245,158,11,0.25)] text-white text-center overflow-y-auto ${
+              isARMode
+                ? 'max-w-[295px] sm:max-w-[335px] bg-slate-900/88 p-3.5 sm:p-4 max-h-[86vh]'
+                : 'max-w-sm sm:max-w-md bg-gradient-to-b from-slate-900 via-slate-900 to-slate-950 p-5 sm:p-6 max-h-[92vh]'
+            }`}
+          >
             
             {/* Close button */}
             <button
@@ -2525,17 +2535,23 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                 setEvaluationModal(prev => prev ? { ...prev, isOpen: false } : null);
                 setIsLessonStarted(false);
               }}
-              className="absolute top-4 left-4 p-1.5 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors cursor-pointer"
+              className={`absolute p-1.5 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors cursor-pointer ${
+                isARMode ? 'top-3 left-3' : 'top-4 left-4'
+              }`}
             >
               <X className="w-4 h-4" />
             </button>
 
             {/* Badge Icon */}
-            <div className="w-14 h-14 mx-auto mb-3 rounded-2xl bg-gradient-to-tr from-amber-500 to-yellow-400 text-slate-950 flex items-center justify-center shadow-lg">
-              <Award className="w-8 h-8" />
+            <div
+              className={`mx-auto rounded-2xl bg-gradient-to-tr from-amber-500 to-yellow-400 text-slate-950 flex items-center justify-center shadow-lg ${
+                isARMode ? 'w-10 h-10 mb-2' : 'w-14 h-14 mb-3'
+              }`}
+            >
+              <Award className={isARMode ? 'w-5 h-5' : 'w-8 h-8'} />
             </div>
 
-            <h3 className="text-lg sm:text-xl font-bold font-ruqaa text-amber-300 mb-1">
+            <h3 className={`font-bold font-ruqaa text-amber-300 mb-1 ${isARMode ? 'text-base sm:text-lg' : 'text-lg sm:text-xl'}`}>
               {evaluationModal.repetitionBreakdown && evaluationModal.repetitionBreakdown.length > 1
                 ? `النتيجة الكلية النهائية (${evaluationModal.repetitionBreakdown.length} تكرارات)`
                 : template?.hideImage
@@ -2544,18 +2560,18 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
             </h3>
             
             {/* Final Big Score */}
-            <div className="my-3">
-              <span className="text-4xl sm:text-5xl font-extrabold font-mono text-white tracking-tight">
+            <div className={isARMode ? 'my-1.5' : 'my-3'}>
+              <span className={`font-extrabold font-mono text-white tracking-tight ${isARMode ? 'text-3xl sm:text-4xl' : 'text-4xl sm:text-5xl'}`}>
                 {evaluationModal.totalScore}%
               </span>
-              <p className="text-sm font-semibold text-amber-400 mt-1">
+              <p className={`font-semibold text-amber-400 mt-1 ${isARMode ? 'text-xs' : 'text-sm'}`}>
                 {evaluationModal.feedback}
               </p>
             </div>
 
             {/* Individual Repetition Scores Summary (when repeatCount > 1) */}
             {evaluationModal.repetitionBreakdown && evaluationModal.repetitionBreakdown.length > 1 && (
-              <div className="flex flex-wrap items-center justify-center gap-1.5 mb-3 px-2 py-2 rounded-xl bg-slate-800/70 border border-slate-700/60 text-[11px]">
+              <div className={`flex flex-wrap items-center justify-center gap-1.5 px-2 py-1.5 rounded-xl bg-slate-800/70 border border-slate-700/60 text-[11px] ${isARMode ? 'mb-2' : 'mb-3'}`}>
                 {evaluationModal.repetitionBreakdown.map(item => (
                   <span
                     key={item.rep}
@@ -2569,7 +2585,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
             )}
 
             {/* Criteria Progress Bars */}
-            <div className="space-y-3 my-4 text-xs text-right bg-slate-800/60 p-3.5 rounded-2xl border border-slate-700/60">
+            <div className={`text-xs text-right bg-slate-800/60 rounded-2xl border border-slate-700/60 ${isARMode ? 'space-y-2 my-2.5 p-2.5' : 'space-y-3 my-4 p-3.5'}`}>
               {/* Criterion 1 */}
               <div>
                 <div className="flex justify-between mb-1">
