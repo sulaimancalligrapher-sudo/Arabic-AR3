@@ -507,7 +507,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     return added;
   };
 
-  // Extract pixel-level letter grid using a dedicated sampling canvas (works even when hideImage is true!)
+  // Extract pixel-level letter grid using a dedicated sampling canvas (supports transparent PNGs AND opaque white-background images)
   const extractLetterGridFromImage = (
     img: HTMLImageElement,
     tWidth: number,
@@ -535,11 +535,39 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         const imgData = sCtx.getImageData(0, 0, tWidth, tHeight);
         const data = imgData.data;
 
+        // Detect if the image has an opaque light/white background instead of transparency
+        let opaqueCount = 0;
+        let brightWhiteCount = 0;
+        let sampled = 0;
+        const stepSample = cell * 3;
+        const xStart = Math.max(0, Math.floor(drawX));
+        const xEnd = Math.min(tWidth, Math.ceil(drawX + drawW));
+        const yStart = Math.max(0, Math.floor(drawY));
+        const yEnd = Math.min(tHeight, Math.ceil(drawY + drawH));
+
+        for (let sy = yStart; sy < yEnd; sy += stepSample) {
+          for (let sx = xStart; sx < xEnd; sx += stepSample) {
+            const pIdx = (sy * tWidth + sx) * 4;
+            sampled++;
+            if (data[pIdx + 3] > 200) {
+              opaqueCount++;
+              const lum = (data[pIdx] + data[pIdx + 1] + data[pIdx + 2]) / 3;
+              if (lum > 215) brightWhiteCount++;
+            }
+          }
+        }
+        const hasOpaqueWhiteBg = sampled > 0 && opaqueCount / sampled > 0.85 && brightWhiteCount / sampled > 0.35;
+
         for (let y = 0; y < tHeight; y += cell) {
           const gy = Math.floor(y / cell);
           for (let x = 0; x < tWidth; x += cell) {
             const idx = (y * tWidth + x) * 4;
-            if (data[idx + 3] > 30) {
+            const alpha = data[idx + 3];
+            if (alpha > 30) {
+              if (hasOpaqueWhiteBg) {
+                const lum = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
+                if (lum > 200) continue; // Skip white paper background; count only dark ink strokes
+              }
               const gx = Math.floor(x / cell);
               grid[gy * gw + gx] = 1;
               totalCells++;
@@ -569,6 +597,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
 
     ctx.clearRect(0, 0, tCanvas.width, tCanvas.height);
     guidePointsRef.current = [];
+    letterGridRef.current = null;
 
     if (!template) {
       activeStepPointsRef.current = null;
@@ -590,58 +619,120 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     const activeColor = isBlindMode && showGhostOverlay ? '#f59e0b' : (colorHexMap[guideColor] || '#facc15');
     const effectiveOpacity = isBlindMode && showGhostOverlay ? 0.45 : templateOpacity;
 
-    // 1. Direct Image URL (Google Drive transparent PNG or web URL)
-    if (template.imageUrl && template.imageUrl.trim()) {
-      const directUrl = formatDirectImageUrl(template.imageUrl);
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.src = directUrl;
+    const renderLoadedImage = (img: HTMLImageElement, canReadPixels: boolean) => {
+      const padding = Math.min(tCanvas.width, tCanvas.height) * 0.08;
+      const availW = tCanvas.width - padding * 2;
+      const availH = tCanvas.height - padding * 2;
+      const scale = Math.min(availW / (img.width || 500), availH / (img.height || 500));
+      const drawW = (img.width || 500) * scale;
+      const drawH = (img.height || 500) * scale;
+      const drawX = (tCanvas.width - drawW) / 2;
+      const drawY = (tCanvas.height - drawH) / 2;
+      drawBoundsRef.current = { drawX, drawY, drawW, drawH };
 
-      img.onload = () => {
-        const padding = Math.min(tCanvas.width, tCanvas.height) * 0.08;
-        const availW = tCanvas.width - padding * 2;
-        const availH = tCanvas.height - padding * 2;
-        const scale = Math.min(availW / (img.width || 500), availH / (img.height || 500));
-        const drawW = (img.width || 500) * scale;
-        const drawH = (img.height || 500) * scale;
-        const drawX = (tCanvas.width - drawW) / 2;
-        const drawY = (tCanvas.height - drawH) / 2;
-        drawBoundsRef.current = { drawX, drawY, drawW, drawH };
+      if (shouldRenderImage) {
+        ctx.save();
+        ctx.globalAlpha = effectiveOpacity;
 
-        if (shouldRenderImage) {
-          ctx.save();
-          ctx.globalAlpha = effectiveOpacity;
-
-          // Draw image onto an offscreen canvas to tint black calligraphy lines into active guide color
+        if (canReadPixels) {
           try {
             const offscreen = document.createElement('canvas');
-            offscreen.width = drawW;
-            offscreen.height = drawH;
+            offscreen.width = Math.max(1, Math.round(drawW));
+            offscreen.height = Math.max(1, Math.round(drawH));
             const offCtx = offscreen.getContext('2d');
             if (offCtx) {
-              offCtx.drawImage(img, 0, 0, drawW, drawH);
+              offCtx.drawImage(img, 0, 0, offscreen.width, offscreen.height);
+              // Check if opaque white background -> strip white pixels before tinting
+              const px = offCtx.getImageData(0, 0, offscreen.width, offscreen.height);
+              const d = px.data;
+              let cornerOpaqueWhite = 0;
+              const checkCoords = [
+                0,
+                (offscreen.width - 1) * 4,
+                ((offscreen.height - 1) * offscreen.width) * 4,
+                ((offscreen.height - 1) * offscreen.width + offscreen.width - 1) * 4
+              ];
+              checkCoords.forEach(ci => {
+                if (d[ci + 3] > 200 && (d[ci] + d[ci + 1] + d[ci + 2]) / 3 > 215) {
+                  cornerOpaqueWhite++;
+                }
+              });
+              if (cornerOpaqueWhite >= 3) {
+                for (let i = 0; i < d.length; i += 4) {
+                  if (d[i + 3] > 0 && (d[i] + d[i + 1] + d[i + 2]) / 3 > 210) {
+                    d[i + 3] = 0;
+                  }
+                }
+                offCtx.putImageData(px, 0, 0);
+              }
               offCtx.globalCompositeOperation = 'source-in';
               offCtx.fillStyle = activeColor;
-              offCtx.fillRect(0, 0, drawW, drawH);
-              ctx.drawImage(offscreen, drawX, drawY);
+              offCtx.fillRect(0, 0, offscreen.width, offscreen.height);
+              ctx.drawImage(offscreen, drawX, drawY, drawW, drawH);
             } else {
               ctx.drawImage(img, drawX, drawY, drawW, drawH);
             }
           } catch {
             ctx.drawImage(img, drawX, drawY, drawW, drawH);
           }
-
-          ctx.restore();
+        } else {
+          ctx.drawImage(img, drawX, drawY, drawW, drawH);
         }
 
-        // Render ONLY the active step marker (No arrows, green start dot & red end dot) if enabled
-        if (template.steps && template.steps.length > 0) {
-          drawActiveStepMarker(ctx, template.steps, currentStepIndex, drawX, drawY, drawW, drawH, shouldRenderDots);
-        }
+        ctx.restore();
+      }
 
-        // Extract pixel-level letter body mask in memory (even when hideImage is active)
+      if (template.steps && template.steps.length > 0) {
+        drawActiveStepMarker(ctx, template.steps, currentStepIndex, drawX, drawY, drawW, drawH, shouldRenderDots);
+      }
+
+      if (canReadPixels) {
         extractLetterGridFromImage(img, tCanvas.width, tCanvas.height, drawX, drawY, drawW, drawH, template.steps);
+      } else if (template.steps && template.steps.length > 0) {
+        const cell = 4;
+        const gw = Math.ceil(tCanvas.width / cell);
+        const gh = Math.ceil(tCanvas.height / cell);
+        const grid = new Uint8Array(gw * gh);
+        const pts: { x: number; y: number }[] = [];
+        const totalCells = rasterizeStepCorridorsIntoGrid(grid, gw, gh, cell, template.steps, drawX, drawY, drawW, drawH, pts);
+        guidePointsRef.current = pts;
+        letterGridRef.current = { grid, width: gw, height: gh, cell, totalCells };
+      }
+    };
+
+    // 1. Direct Image URL (Google Drive transparent PNG or web URL)
+    if (template.imageUrl && template.imageUrl.trim()) {
+      const directUrl = formatDirectImageUrl(template.imageUrl);
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => renderLoadedImage(img, true);
+      img.onerror = () => {
+        // Fallback: retry without crossOrigin if host blocks CORS so drawing & step-corridor grid still work
+        const fallbackImg = new Image();
+        fallbackImg.onload = () => renderLoadedImage(fallbackImg, false);
+        fallbackImg.onerror = () => {
+          // Last-resort fallback: build bounds & grid purely from lesson steps if present
+          const padding = Math.min(tCanvas.width, tCanvas.height) * 0.08;
+          const drawX = padding;
+          const drawY = padding;
+          const drawW = tCanvas.width - padding * 2;
+          const drawH = tCanvas.height - padding * 2;
+          drawBoundsRef.current = { drawX, drawY, drawW, drawH };
+          if (template.steps && template.steps.length > 0) {
+            drawActiveStepMarker(ctx, template.steps, currentStepIndex, drawX, drawY, drawW, drawH, shouldRenderDots);
+            const cell = 4;
+            const gw = Math.ceil(tCanvas.width / cell);
+            const gh = Math.ceil(tCanvas.height / cell);
+            const grid = new Uint8Array(gw * gh);
+            const pts: { x: number; y: number }[] = [];
+            const totalCells = rasterizeStepCorridorsIntoGrid(grid, gw, gh, cell, template.steps, drawX, drawY, drawW, drawH, pts);
+            guidePointsRef.current = pts;
+            letterGridRef.current = { grid, width: gw, height: gh, cell, totalCells };
+          }
+        };
+        fallbackImg.src = directUrl;
       };
+      img.src = directUrl;
       return;
     }
 
@@ -739,36 +830,60 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
   }, [classifyPoint]);
 
   // Evaluate drawing thickness coverage against the letter body (fill of letter width)
-  const calculateCoverageScore = useCallback((): number => {
-    const lg = letterGridRef.current;
+  const calculateCoverageScore = useCallback((strokesOverride?: Stroke[]): number => {
+    let lg = letterGridRef.current;
+
+    // Lazy fallback: if letterGridRef wasn't populated (e.g. image still loading or blocked CORS), rasterize from steps
+    if ((!lg || lg.totalCells === 0) && template?.steps && template.steps.length > 0 && dimensions.width > 0 && dimensions.height > 0) {
+      const cell = 4;
+      const gw = Math.ceil(dimensions.width / cell);
+      const gh = Math.ceil(dimensions.height / cell);
+      const grid = new Uint8Array(gw * gh);
+      const pts: { x: number; y: number }[] = [];
+      const bounds = drawBoundsRef.current || {
+        drawX: Math.min(dimensions.width, dimensions.height) * 0.08,
+        drawY: Math.min(dimensions.width, dimensions.height) * 0.08,
+        drawW: dimensions.width - Math.min(dimensions.width, dimensions.height) * 0.16,
+        drawH: dimensions.height - Math.min(dimensions.width, dimensions.height) * 0.16
+      };
+      const totalCells = rasterizeStepCorridorsIntoGrid(grid, gw, gh, cell, template.steps, bounds.drawX, bounds.drawY, bounds.drawW, bounds.drawH, pts);
+      if (totalCells > 0) {
+        lg = { grid, width: gw, height: gh, cell, totalCells };
+        letterGridRef.current = lg;
+        if (guidePointsRef.current.length === 0) guidePointsRef.current = pts;
+      }
+    }
+
     if (!lg || lg.totalCells === 0 || !template || template.category === 'freehand') return 0;
+
+    const targetStrokes = strokesOverride || strokes;
 
     // Must allocate matching the entire spatial grid dimensions (width * height)
     // so indexing cy * width + cx never exceeds array bounds
     const covered = new Uint8Array(lg.grid.length);
     let coveredCount = 0;
 
-    strokes.forEach(stroke => {
+    targetStrokes.forEach(stroke => {
       if (stroke.penType !== 'eraser') {
         const strokePenRadius = Math.max(3, (stroke.size || penSize) * 0.6);
-        const strokeCellRadius = Math.ceil(strokePenRadius / lg.cell);
+        const strokeCellRadius = Math.ceil(strokePenRadius / lg!.cell);
 
         stroke.points.forEach(p => {
-          const gx = Math.floor(p.x / lg.cell);
-          const gy = Math.floor(p.y / lg.cell);
+          const gx = Math.floor(p.x / lg!.cell);
+          const gy = Math.floor(p.y / lg!.cell);
 
           const minX = Math.max(0, gx - strokeCellRadius);
-          const maxX = Math.min(lg.width - 1, gx + strokeCellRadius);
+          const maxX = Math.min(lg!.width - 1, gx + strokeCellRadius);
           const minY = Math.max(0, gy - strokeCellRadius);
-          const maxY = Math.min(lg.height - 1, gy + strokeCellRadius);
+          const maxY = Math.min(lg!.height - 1, gy + strokeCellRadius);
 
           for (let cy = minY; cy <= maxY; cy++) {
-            const rowOffset: number = cy * lg.width;
+            const rowOffset: number = cy * lg!.width;
             for (let cx = minX; cx <= maxX; cx++) {
               const idx: number = rowOffset + cx;
-              if (lg.grid[idx] === 1 && covered[idx] === 0) {
-                const dx = (cx - gx) * lg.cell;
-                const dy = (cy - gy) * lg.cell;
+              if (lg!.grid[idx] === 1 && covered[idx] === 0) {
+                const dx = (cx - gx) * lg!.cell;
+                const dy = (cy - gy) * lg!.cell;
                 if (dx * dx + dy * dy <= strokePenRadius * strokePenRadius) {
                   covered[idx] = 1;
                   coveredCount++;
@@ -785,7 +900,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       onAccuracyUpdate(percent);
     }
     return percent;
-  }, [strokes, template, penSize, onAccuracyUpdate]);
+  }, [strokes, template, penSize, dimensions, onAccuracyUpdate]);
 
   // Recalculate whenever strokes change
   useEffect(() => {
@@ -1601,7 +1716,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                 : rawPathScore;
 
               const nextIdx = currentStepIndex + 1;
-              const coverageScore = calculateCoverageScore();
+              const coverageScore = calculateCoverageScore([...strokes, finishedStroke]);
 
               // Level 3 (متقدم): On final step, enforce stroke thickness coverage >= 75%
               if (difficulty === 'متقدم' && nextIdx >= template.steps.length && coverageScore < 75) {
@@ -1855,7 +1970,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                   : rawPathScore;
 
                 const nextIdx = currentStepIndex + 1;
-                const coverageScore = calculateCoverageScore();
+                const coverageScore = calculateCoverageScore([...strokes, finishedAirStroke]);
 
                 if (difficulty === 'متقدم' && nextIdx >= template.steps.length && coverageScore < 75) {
                   audioService.playErrorSound();
