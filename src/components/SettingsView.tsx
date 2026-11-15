@@ -948,12 +948,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   الدرس 1 (B:H)، الدرس 2 (I:O)، الدرس 3 (P:V)... (الفئة، رابط الصورة، عنوان الدرس، نص القراءة، التكرار، المستوى، خطوات الحرف).
                 </div>
                 <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80">
-                  <strong className="text-amber-400 block mb-1">٣. لصق الكود وحفظه:</strong>
-                  في Apps Script، امسح الكود القديم والصق هذا الكود المحدث بالكامل واحفظه (Ctrl + S).
+                  <strong className="text-amber-400 block mb-1">٣. لصق الكود وتفعيل إذن قوقل درايف (مهم جداً):</strong>
+                  في Apps Script، الصق الكود واحفظه (`Ctrl + S`)، ثم اختر من القائمة العلوية دالة <code className="text-emerald-400 font-mono">authorizePermissions</code> واضغط <strong>تشغيل (Run)</strong> مرة واحدة لمنح صلاحيات Google Sheets و Google Drive.
                 </div>
                 <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80">
-                  <strong className="text-amber-400 block mb-1">٤. النشر كتطبيق ويب (Web app):</strong>
-                  نشر جديد &gt; تطبيق ويب &gt; التنفيذ كـ: أنا (Me) &gt; الصلاحية: أي شخص (Anyone) &gt; ثم انسخ الرابط.
+                  <strong className="text-amber-400 block mb-1">٤. النشر وتحديث الإصدار على نفس الرابط:</strong>
+                  من زر <strong>نشر &gt; إدارة عمليات النشر</strong> اضغط تعديل واختر <strong>إصدار جديد (New version)</strong> (التنفيذ كـ: أنا، الوصول: أي شخص) ليبقى الرابط يعمل على كل الأجهزة.
                 </div>
               </div>
 
@@ -1186,6 +1186,64 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </button>
               </div>
 
+            </div>
+
+            {/* 4. Info Card: Three-Level Evaluation Logic */}
+            <div className="p-5 sm:p-6 bg-slate-900/90 rounded-2xl border border-amber-500/25 shadow-xl space-y-4">
+              <div className="flex items-center gap-2.5 pb-3 border-b border-slate-800">
+                <div className="w-8 h-8 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+                  <Info className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-sm sm:text-base text-amber-400">
+                    منطق التقييم في المستويات الثلاثة
+                  </h4>
+                  <p className="text-[11px] text-slate-400">
+                    تُحدد هذه القواعد تلقائياً حسب مستوى الدرس المختار عند التقييم والانتقال بين الخطوات.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5 text-xs">
+                {/* سهل */}
+                <div className="p-4 rounded-2xl bg-emerald-500/5 border border-emerald-500/25 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-sm text-emerald-400">سهل</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-bold">
+                      توجيهي مرن
+                    </span>
+                  </div>
+                  <p className="text-slate-300 leading-relaxed">
+                    يلتزم بنقطتي البداية والنهاية مع السماح بالانتقال للخطوة التالية حتى لو خرج القلم عن المسار (مع تنبيه إرشادي وتعديل الدرجة النهائية).
+                  </p>
+                </div>
+
+                {/* متوسط */}
+                <div className="p-4 rounded-2xl bg-amber-500/5 border border-amber-500/25 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-sm text-amber-400">متوسط</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30 font-bold">
+                      التزام بالمسار
+                    </span>
+                  </div>
+                  <p className="text-slate-300 leading-relaxed">
+                    يشترط نقطتي البداية والنهاية مع الالتزام المستمر بمسار الحرف دون انقطاع.
+                  </p>
+                </div>
+
+                {/* متقدم */}
+                <div className="p-4 rounded-2xl bg-rose-500/5 border border-rose-500/25 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-sm text-rose-400">متقدم</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-300 border border-rose-500/30 font-bold">
+                      إتقان كامل
+                    </span>
+                  </div>
+                  <p className="text-slate-300 leading-relaxed">
+                    يشترط البداية والنهاية + الالتزام بالمسار + تغطية سُمك الحرف بنسبة 75% على الأقل قبل إنهاء التمرين.
+                  </p>
+                </div>
+              </div>
             </div>
 
           </div>

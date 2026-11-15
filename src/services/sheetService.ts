@@ -7,7 +7,7 @@ const LOCAL_TEMPLATES_KEY = 'arabic_ar_horizontal_templates_v2';
 const LOCAL_STEPS_CACHE_KEY = 'arabic_ar_steps_backup_cache';
 
 // Default built-in Google Apps Script URL so all devices (mobile, tablet, PC) connect automatically
-export const DEFAULT_SHEET_URL = 'https://script.google.com/macros/s/AKfycbzRDyx7Tb5uLKInIWdFBa0vPxxdide_pWRFdXQ5qPdYzkUXmKxn8HPyoIjZxDUJD_TM7A/exec';
+export const DEFAULT_SHEET_URL = 'https://script.google.com/macros/s/AKfycbx3_qkyXIsl14D-FepEhPquylRAjaldHbVMngbL_a3ngAi5nbnN-hURum9kH2HHPjSlWQ/exec';
 
 /**
  * Return authentic Arabic ordinal word for steps
@@ -172,6 +172,18 @@ const ANSWER_SUB_HEADERS = [
   "الدرجة (%)",
   "تفاصيل"
 ];
+
+/**
+ * مهم جداً: قم باختيار هذه الدالة (authorizePermissions) والضغط على تشغيل (Run)
+ * مرة واحدة داخل محرر Apps Script لمنح صلاحيات Google Sheets و Google Drive معاً.
+ */
+function authorizePermissions() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const root = DriveApp.getRootFolder();
+  const folder = DriveApp.getFolderById(DRIVE_FOLDER_ID);
+  Logger.log("Sheets: " + ss.getName() + " | Root: " + root.getName() + " | Folder: " + folder.getName());
+  return "تم تفعيل صلاحيات الشيت وقوقل درايف بنجاح!";
+}
 
 function getOrCreateAnswersSheet() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -591,6 +603,7 @@ function doPost(e) {
       const totalLessons = Math.max(slotIndex, parseInt(body.totalLessonsInTopic, 10) || slotIndex);
 
       let driveImageUrl = "";
+      let driveError = "";
       if (imageBase64) {
         try {
           const folder = DriveApp.getFolderById(DRIVE_FOLDER_ID);
@@ -605,7 +618,8 @@ function doPost(e) {
           file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
           driveImageUrl = "https://lh3.googleusercontent.com/d/" + file.getId();
         } catch (driveErr) {
-          driveImageUrl = "تعذر الرفع لقوقل درايف: " + driveErr.toString();
+          driveError = driveErr.toString();
+          driveImageUrl = "تعذر الرفع لقوقل درايف: " + driveError;
         }
       }
 
@@ -675,6 +689,7 @@ function doPost(e) {
       return jsonResponse({
         status: "success",
         imageUrl: driveImageUrl,
+        driveError: driveError,
         completionStatus: completionStatusText,
         studentId: studentId,
         studentName: studentName,
@@ -714,6 +729,7 @@ class SheetService {
     if (stored && (
       stored.includes('AKfycbwjtf7BiA8k5BEQgw1n0s_VYeBNzTmL-IitZ8m_YKjbnVfd_dZHL4svN08x4jNfw3LNqA') ||
       stored.includes('AKfycbw3_rZtsYcs4OLZU242sU6Kgc6OHWc6sSQ-EmLsJT4yOUCkHVP38ootritf_vnRmG1Oug') ||
+      stored.includes('AKfycbzd9L7BL9tQu-7OkyFX3mNreodryMJO3EGcdcaYP-tnWG9b1reETX7gLEseLSmgsjGOVw') ||
       !stored.trim()
     )) {
       localStorage.setItem(SHEET_URL_KEY, DEFAULT_SHEET_URL);
@@ -1268,7 +1284,7 @@ class SheetService {
     score: number;
     details: string;
     totalLessonsInTopic?: number;
-  }): Promise<{ success: boolean; imageUrl?: string; completionStatus?: string; error?: string }> {
+  }): Promise<{ success: boolean; imageUrl?: string; driveError?: string; completionStatus?: string; error?: string }> {
     const url = this.getStoredSheetUrl();
     if (!url) {
       return { success: false, error: 'رابط Google Apps Script غير مضبوط' };
@@ -1293,6 +1309,7 @@ class SheetService {
         return {
           success: true,
           imageUrl: json.imageUrl,
+          driveError: json.driveError || '',
           completionStatus: json.completionStatus
         };
       }

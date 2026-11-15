@@ -751,11 +751,13 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     calculateCoverageScore();
   }, [strokes, calculateCoverageScore]);
 
-  // Capture composite board image safely as Base64 PNG (falls back to user strokes if template image is CORS-tainted)
+  // Capture composite board image safely as Base64 PNG (never taints exportCanvas even if template image lacks CORS)
   const captureBoardBase64 = useCallback((): string => {
+    const maxExportWidth = 1200;
+    const scale = dimensions.width > maxExportWidth ? maxExportWidth / dimensions.width : 1;
     const exportCanvas = document.createElement('canvas');
-    exportCanvas.width = dimensions.width;
-    exportCanvas.height = dimensions.height;
+    exportCanvas.width = Math.max(1, Math.round(dimensions.width * scale));
+    exportCanvas.height = Math.max(1, Math.round(dimensions.height * scale));
     const ctx = exportCanvas.getContext('2d')!;
 
     if (boardStyle === 'dark') {
@@ -769,21 +771,18 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     }
     ctx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
 
-    // Draw template if visible and not blind mode
+    // Check if templateCanvasRef is origin-clean BEFORE drawing it onto exportCanvas
     if (templateCanvasRef.current && !template?.hideImage) {
       try {
-        ctx.drawImage(templateCanvasRef.current, 0, 0);
-        // Test if canvas is clean
-        exportCanvas.toDataURL('image/png');
+        templateCanvasRef.current.toDataURL('image/png');
+        ctx.drawImage(templateCanvasRef.current, 0, 0, exportCanvas.width, exportCanvas.height);
       } catch {
-        // Re-fill clean background if template image tainted the canvas
-        ctx.fillStyle = boardStyle === 'dark' ? '#0f172a' : boardStyle === 'green' ? '#064e3b' : boardStyle === 'grid' ? '#fdfbf7' : '#ffffff';
-        ctx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+        // Template image is cross-origin tainted; skip it so exportCanvas stays clean and exports user strokes
       }
     }
 
     if (canvasRef.current) {
-      ctx.drawImage(canvasRef.current, 0, 0);
+      ctx.drawImage(canvasRef.current, 0, 0, exportCanvas.width, exportCanvas.height);
     }
 
     return exportCanvas.toDataURL('image/png');
@@ -1068,13 +1067,22 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       });
 
       if (res.success) {
-        audioService.playSuccessSound();
-        setSubmitAnswerResult({
-          success: true,
-          message: `تم تسجيل الإجابة بنجاح! (${res.completionStatus || 'محفوظ'})`,
-          imageUrl: res.imageUrl,
-          completionStatus: res.completionStatus
-        });
+        if (res.driveError) {
+          audioService.playErrorSound();
+          setSubmitAnswerResult({
+            success: false,
+            message: `تم حفظ الدرجة في الورقة (${res.completionStatus || 'محفوظ'})، ولكن تعذر رفع الصورة لقوقل درايف: ${res.driveError}`,
+            completionStatus: res.completionStatus
+          });
+        } else {
+          audioService.playSuccessSound();
+          setSubmitAnswerResult({
+            success: true,
+            message: `تم تسجيل الإجابة ورفع الصورة بنجاح! (${res.completionStatus || 'محفوظ'})`,
+            imageUrl: res.imageUrl,
+            completionStatus: res.completionStatus
+          });
+        }
       } else {
         audioService.playErrorSound();
         setSubmitAnswerResult({
