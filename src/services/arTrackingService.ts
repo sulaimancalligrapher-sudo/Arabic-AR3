@@ -1,4 +1,4 @@
-import { isMobileOrTabletDevice } from '../utils/devicePerformance';
+import { isMobileOrTabletDevice, isPhoneDevice } from '../utils/devicePerformance';
 
 /**
  * Unified AR Tracking Service
@@ -82,9 +82,11 @@ class ARTrackingService {
     hasSeenOpen: boolean;
     pinchFrames: number;
     releaseFrames: number;
+    pinchAnchor?: { x: number; y: number } | null;
   }> = new Map();
   private missedHandFrames: number = 0;
   private readonly MAX_MISSED_HAND_FRAMES = 5;
+  private pendingPinchStartAnchor: { x: number; y: number } | null = null;
 
   public setMirrored(mirrored: boolean) {
     this.isMirrored = mirrored;
@@ -318,6 +320,7 @@ class ARTrackingService {
     this.latestHands = [];
     this.activeDrawingHand = null;
     this.hasInitialCursor = false;
+    this.pendingPinchStartAnchor = null;
     this.previousPinchMap.clear();
     this.handPresenceMap.clear();
     this.missedHandFrames = 0;
@@ -398,6 +401,9 @@ class ARTrackingService {
     const rawList: HandLandmark[][] = results.multiHandLandmarks || [];
     const parsedHands: SingleHandData[] = [];
 
+    const isPhone = isPhoneDevice();
+    let freshPinchAnchor: { x: number; y: number } | null = null;
+
     for (let hIdx = 0; hIdx < rawList.length; hIdx++) {
       // 1. Per-hand classification confidence filter (reject phantom hands < 72%)
       const handednessInfo = results.multiHandedness?.[hIdx];
@@ -428,42 +434,63 @@ class ARTrackingService {
       const directDist = Math.hypot(dx, dy, dz);
       const normalizedDistance = directDist / palmLength;
 
-      // 4. Open-before-pinch gate + temporal debounce to eliminate accidental auto-drawing
+      // 4. Open-before-pinch gate + temporal debounce (phone uses faster 1-frame trigger & initial pinch anchor)
       const prevPinch = this.previousPinchMap.get(hIdx) || false;
       const presence = this.handPresenceMap.get(hIdx) || {
         stableFrames: 0,
         hasSeenOpen: false,
         pinchFrames: 0,
-        releaseFrames: 0
+        releaseFrames: 0,
+        pinchAnchor: null
       };
 
       presence.stableFrames = Math.min(30, presence.stableFrames + 1);
 
-      // Require fingers visibly open at least once (>= 0.27) before any drawing can begin
-      if (normalizedDistance >= 0.27) {
+      const openThreshold = isPhone ? 0.25 : 0.27;
+      const pinchThreshold = isPhone ? 0.23 : 0.20;
+      const releaseThreshold = isPhone ? 0.29 : 0.30;
+      const minStableFrames = isPhone ? 2 : 4;
+      const requiredPinchFrames = isPhone ? 1 : 2;
+      const requiredReleaseFrames = isPhone ? 2 : 3;
+
+      // Require fingers visibly open at least once before any drawing can begin
+      if (normalizedDistance >= openThreshold) {
         presence.hasSeenOpen = true;
+        // On phone, continuously remember the last open-finger aim point right before finger bends down to pinch
+        if (isPhone && !prevPinch) {
+          presence.pinchAnchor = { x: indexTip.x, y: indexTip.y };
+        }
+      } else if (isPhone && !prevPinch && !presence.pinchAnchor) {
+        // First closing frame if no prior open anchor was captured yet
+        presence.pinchAnchor = { x: indexTip.x, y: indexTip.y };
       }
 
       let isPinching = prevPinch;
 
       if (!prevPinch) {
-        // Trying to start pinching: must be stable (>= 4 frames), opened first, and pinched cleanly (< 0.20) for 2 frames
-        if (presence.stableFrames >= 4 && presence.hasSeenOpen && normalizedDistance < 0.20) {
+        if (presence.stableFrames >= minStableFrames && presence.hasSeenOpen && normalizedDistance < pinchThreshold) {
           presence.pinchFrames++;
-          if (presence.pinchFrames >= 2) {
+          if (presence.pinchFrames >= requiredPinchFrames) {
             isPinching = true;
             presence.releaseFrames = 0;
+            if (isPhone && presence.pinchAnchor) {
+              // Snap start of stroke to initial pinch-aim point if within natural finger-bend distance
+              const anchorDelta = Math.hypot(indexTip.x - presence.pinchAnchor.x, indexTip.y - presence.pinchAnchor.y);
+              freshPinchAnchor = anchorDelta <= 0.08
+                ? { ...presence.pinchAnchor }
+                : { x: indexTip.x, y: indexTip.y };
+            }
           }
         } else {
           presence.pinchFrames = 0;
         }
       } else {
-        // Currently drawing: require >= 3 consecutive open frames (> 0.30) to finish stroke (prevents mid-stroke cuts)
-        if (normalizedDistance > 0.30) {
+        if (normalizedDistance > releaseThreshold) {
           presence.releaseFrames++;
-          if (presence.releaseFrames >= 3) {
+          if (presence.releaseFrames >= requiredReleaseFrames) {
             isPinching = false;
             presence.pinchFrames = 0;
+            presence.pinchAnchor = { x: indexTip.x, y: indexTip.y };
           }
         } else {
           presence.releaseFrames = 0;
@@ -520,20 +547,34 @@ class ARTrackingService {
     const primary = pinchingHand || (parsedHands.length > 1 && parsedHands[1].handedness === 'Right' ? parsedHands[1] : parsedHands[0]);
     this.activeDrawingHand = primary;
 
+    if (freshPinchAnchor && primary.isPinching) {
+      this.pendingPinchStartAnchor = freshPinchAnchor;
+    }
+
     const targetX = primary.cursor.x;
     const targetY = primary.cursor.y;
 
-    const dist = Math.hypot(targetX - this.smoothedCursor.x, targetY - this.smoothedCursor.y);
-    if (dist > 0.25 || !this.hasInitialCursor) {
-      // Snap cleanly on first entry or genuine hand swap
-      this.smoothedCursor.x = targetX;
-      this.smoothedCursor.y = targetY;
+    if (isPhone && this.pendingPinchStartAnchor && primary.isPinching) {
+      // Emit exact initial pinch-start anchor on frame 1 so the stroke begins where user pinched
+      this.smoothedCursor.x = this.pendingPinchStartAnchor.x;
+      this.smoothedCursor.y = this.pendingPinchStartAnchor.y;
       this.hasInitialCursor = true;
+      this.pendingPinchStartAnchor = null;
     } else {
-      // Velocity-adaptive smoothing: steady on tiny jitter, fast on sweeping strokes
-      const alpha = dist < 0.008 ? 0.35 : dist < 0.06 ? 0.65 : 0.88;
-      this.smoothedCursor.x += (targetX - this.smoothedCursor.x) * alpha;
-      this.smoothedCursor.y += (targetY - this.smoothedCursor.y) * alpha;
+      const dist = Math.hypot(targetX - this.smoothedCursor.x, targetY - this.smoothedCursor.y);
+      if (dist > 0.25 || !this.hasInitialCursor) {
+        // Snap cleanly on first entry or genuine hand swap
+        this.smoothedCursor.x = targetX;
+        this.smoothedCursor.y = targetY;
+        this.hasInitialCursor = true;
+      } else {
+        // Velocity-adaptive smoothing (lighter lag on phones while pinching so ink keeps up with finger)
+        const alpha = isPhone && primary.isPinching
+          ? (dist < 0.006 ? 0.58 : dist < 0.04 ? 0.85 : 0.96)
+          : (dist < 0.008 ? 0.35 : dist < 0.06 ? 0.65 : 0.88);
+        this.smoothedCursor.x += (targetX - this.smoothedCursor.x) * alpha;
+        this.smoothedCursor.y += (targetY - this.smoothedCursor.y) * alpha;
+      }
     }
 
     this.emitUpdate();

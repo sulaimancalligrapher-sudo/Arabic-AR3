@@ -24,3 +24,18 @@ export function isTouchLandscapeViewport(): boolean {
   if (typeof window === 'undefined') return false;
   return isMobileOrTabletDevice() && window.innerWidth > window.innerHeight;
 }
+
+/**
+ * Returns true ONLY on smartphones (excludes tablets such as iPad/Galaxy Tab and desktops).
+ */
+export function isPhoneDevice(): boolean {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  const isTabletUa = /iPad|Tablet|PlayBook|Silk/i.test(ua) || (/Android/i.test(ua) && !/Mobile/i.test(ua));
+  if (isTabletUa) return false;
+  const minScreenSide = Math.min(window.screen?.width || window.innerWidth, window.screen?.height || window.innerHeight);
+  if (/iPhone|iPod/i.test(ua) || (/Android/i.test(ua) && /Mobile/i.test(ua))) {
+    return minScreenSide < 600;
+  }
+  return isMobileOrTabletDevice() && minScreenSide < 560;
+}
