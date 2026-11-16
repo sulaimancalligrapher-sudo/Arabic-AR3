@@ -94,6 +94,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   );
   const [hasUnsavedARChanges, setHasUnsavedARChanges] = useState(false);
   const [isSyncingARCloud, setIsSyncingARCloud] = useState(false);
+  const [uploadingTierId, setUploadingTierId] = useState<string | null>(null);
   const [arSaveNotice, setArSaveNotice] = useState<{
     type: 'success' | 'warning' | 'error';
     text: string;
@@ -269,7 +270,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       const result = typeof reader.result === 'string' ? reader.result : '';
       if (!result) return;
       const img = new Image();
-      img.onload = () => {
+      img.onload = async () => {
         const maxDim = 320;
         const scale = Math.min(1, maxDim / Math.max(img.width || 1, img.height || 1));
         const w = Math.max(1, Math.round(img.width * scale));
@@ -278,16 +279,48 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         c.width = w;
         c.height = h;
         const ctx = c.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(img, 0, 0, w, h);
-          const optimizedPng = c.toDataURL('image/png');
-          handleUpdateTier(tierId, t => ({
-            ...t,
-            presetId: undefined,
-            imageUrl: optimizedPng,
-          }));
-          audioService.playChime(600, 0.12);
+        if (!ctx) return;
+        ctx.drawImage(img, 0, 0, w, h);
+        const optimizedPng = c.toDataURL('image/png');
+
+        // Display locally right away so preview updates immediately
+        handleUpdateTier(tierId, t => ({
+          ...t,
+          presetId: undefined,
+          imageUrl: optimizedPng,
+        }));
+
+        if (sheetUrl.trim()) {
+          setUploadingTierId(tierId);
+          const uploadRes = await sheetService.uploadARRewardImage(tierId, optimizedPng);
+          setUploadingTierId(null);
+
+          if (uploadRes.success && uploadRes.imageUrl) {
+            handleUpdateTier(tierId, t => ({
+              ...t,
+              presetId: undefined,
+              imageUrl: uploadRes.imageUrl!,
+            }));
+            audioService.playSuccessSound();
+            setArSaveNotice({
+              type: 'success',
+              text: '✅ تم رفع الصورة إلى مجلد Google Drive ووضع رابطها في الحقل! اضغط «حفظ ومزامنة مع الشيت» لتثبيتها لجميع الأجهزة.'
+            });
+            return;
+          }
+
+          if (uploadRes.needsScriptUpdate) {
+            audioService.playChime(580, 0.12);
+            setArSaveNotice({
+              type: 'warning',
+              needsScriptUpdate: true,
+              text: '⚠️ تم عرض الصورة محلياً؛ ولرفعها تلقائياً إلى مجلد Drive المخصص (1tbmh_Br...) حدّث كود Apps Script في تبويب «ربط Google Sheets» كـ (إصدار جديد).'
+            });
+            return;
+          }
         }
+
+        audioService.playChime(600, 0.12);
       };
       img.src = result;
     };
@@ -441,8 +474,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     sheetService.setStoredSheetUrl(sheetUrl);
 
     const result = await sheetService.fetchLessonsFromSheet();
-    setIsConnecting(false);
-
     if (result.success) {
       setConnectionStatus('success');
       if (result.lessons.length > 0) {
@@ -452,10 +483,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       } else {
         setStatusMessage('تم الاتصال بنجاح! جدول البيانات متصل ولكنه فارغ حالياً.');
       }
+
+      // Also refresh AR Rewards silently if no local edits are pending
+      if (!hasUnsavedARChanges) {
+        const arRes = await sheetService.fetchARRewardsFromSheet();
+        if (arRes.success && arRes.rewards.length > 0) {
+          const normalized = normalizeARRewardTiers(arRes.rewards);
+          setDraftARRewards(normalized);
+          onUpdateARRewards?.(normalized);
+        }
+      }
     } else {
       setConnectionStatus('error');
       setStatusMessage(result.error || 'فشل الاتصال بالشيت.');
     }
+    setIsConnecting(false);
   };
 
   // Bulk sync current in-memory lessons to sheet
@@ -1743,8 +1785,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                           )}
                           {tier.imageUrl ? (
                             <img
-                              src={tier.imageUrl}
+                              src={formatDirectImageUrl(tier.imageUrl) || tier.imageUrl}
                               alt={tier.title}
+                              referrerPolicy="no-referrer"
                               className="w-full h-auto max-h-24 object-contain drop-shadow-[0_2px_10px_rgba(251,191,36,0.5)]"
                             />
                           ) : null}
@@ -1813,25 +1856,95 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         </div>
                       </div>
 
-                      {/* Built-in Presets + Upload Custom PNG */}
-                      <div>
-                        <div className="flex items-center justify-between gap-2 mb-1.5">
+                      {/* Built-in Presets + Custom Image URL (Google Drive) + Direct Upload to Drive */}
+                      <div className="space-y-2.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
                           <label className="text-[11px] font-bold text-amber-400">
-                            اختر تصميماً جاهزاً أو ارفع صورة PNG شفافة:
+                            اختر تصميماً جاهزاً أو ضع رابط صورة / ارفعها لقوقل درايف:
                           </label>
-                          <label className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-sky-600/20 hover:bg-sky-600/30 border border-sky-500/40 text-sky-300 text-[11px] font-bold cursor-pointer">
-                            <Upload className="w-3.5 h-3.5" />
-                            <span>رفع صورة مخصصة</span>
+                          <label className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-sky-600/20 hover:bg-sky-600/30 border border-sky-500/40 text-sky-300 text-[11px] font-bold cursor-pointer ${uploadingTierId === tier.id ? 'opacity-70 pointer-events-none' : ''}`}>
+                            {uploadingTierId === tier.id ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Upload className="w-3.5 h-3.5" />
+                            )}
+                            <span>{uploadingTierId === tier.id ? 'جاري الرفع لقوقل درايف...' : 'رفع صورة لقوقل درايف'}</span>
                             <input
                               type="file"
                               accept="image/png,image/webp,image/svg+xml,image/*"
                               className="hidden"
+                              disabled={uploadingTierId === tier.id}
                               onChange={(e) => {
                                 handleUploadRewardImage(tier.id, e.target.files?.[0]);
                                 e.target.value = '';
                               }}
                             />
                           </label>
+                        </div>
+
+                        {/* Image URL Field (Accepts Google Drive share links or direct image URLs) */}
+                        <div className="p-2.5 rounded-xl bg-slate-950/85 border border-slate-800 space-y-1.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <label className="text-[11px] font-bold text-slate-300">
+                              رابط الصورة (يقبل روابط Google Drive أو رابط مباشر PNG):
+                            </label>
+                            {!tier.presetId && extractDriveFileId(tier.imageUrl) && (
+                              <span className="text-[10px] font-bold text-emerald-400 flex items-center gap-1">
+                                <CheckCircle2 className="w-3 h-3" />
+                                <span>رابط Google Drive جاهز ✓</span>
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="url"
+                              dir="ltr"
+                              value={tier.presetId ? '' : (tier.imageUrl.startsWith('data:image/') ? '' : tier.imageUrl)}
+                              onChange={(e) => {
+                                const rawVal = e.target.value;
+                                if (!rawVal.trim()) {
+                                  const fallbackPreset = AR_REWARD_PRESETS[0];
+                                  handleUpdateTier(tier.id, t => ({
+                                    ...t,
+                                    presetId: fallbackPreset.id,
+                                    imageUrl: fallbackPreset.imageUrl,
+                                  }));
+                                } else {
+                                  const converted = formatDirectImageUrl(rawVal.trim()) || rawVal.trim();
+                                  handleUpdateTier(tier.id, t => ({
+                                    ...t,
+                                    presetId: undefined,
+                                    imageUrl: converted,
+                                  }));
+                                }
+                              }}
+                              placeholder={
+                                tier.presetId
+                                  ? 'مختار من التصاميم الجاهزة بالأسفل — أو الصق هنا رابط قوقل درايف...'
+                                  : tier.imageUrl.startsWith('data:image/')
+                                  ? 'صورة مرفوعة محلياً (اضغط حفظ لرفعها، أو الصق رابط قوقل درايف هنا)'
+                                  : 'https://drive.google.com/file/d/.../view'
+                              }
+                              className="w-full px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-[11px] font-mono text-sky-300 placeholder-slate-500 focus:outline-hidden focus:border-amber-500"
+                            />
+                            {!tier.presetId && tier.imageUrl && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const fallbackPreset = AR_REWARD_PRESETS[0];
+                                  handleUpdateTier(tier.id, t => ({
+                                    ...t,
+                                    presetId: fallbackPreset.id,
+                                    imageUrl: fallbackPreset.imageUrl,
+                                  }));
+                                }}
+                                title="مسح الرابط والعودة لتصميم جاهز"
+                                className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-bold shrink-0 cursor-pointer"
+                              >
+                                مسح
+                              </button>
+                            )}
+                          </div>
                         </div>
 
                         <div className="flex flex-wrap gap-2">

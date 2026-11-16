@@ -8,7 +8,7 @@ const LOCAL_TEMPLATES_KEY = 'arabic_ar_horizontal_templates_v2';
 const LOCAL_STEPS_CACHE_KEY = 'arabic_ar_steps_backup_cache';
 
 // Default built-in Google Apps Script URL so all devices (mobile, tablet, PC) connect automatically
-export const DEFAULT_SHEET_URL = 'https://script.google.com/macros/s/AKfycbwAXtwRRqGlrpxyn6vgDfvdWSnwix3NNI1J1nC62ZVHleekKn8XHtud9gXw5K2N0KXBbA/exec';
+export const DEFAULT_SHEET_URL = 'https://script.google.com/macros/s/AKfycbyK1WwoXzpBDMGwlCsVPqZ2WFS-DXNgksDWEy0V4hOibAya8_5q5b3B1MNXXpUlvIWvpw/exec';
 
 /**
  * Return authentic Arabic ordinal word for steps
@@ -180,6 +180,7 @@ const REGISTRANTS_SHEET_NAME = "ID registrants";
 const ANSWERS_SHEET_NAME = "answers 1";
 const AR_REWARDS_SHEET_NAME = "AR Rewards";
 const DRIVE_FOLDER_ID = "1kYNXRiFvHY09BYLRbINxerXC5cpYiIOX";
+const AR_REWARDS_DRIVE_FOLDER_ID = "1tbmh_Br7_yWw5fpi9gJY8a5NZhv5glFz";
 const COLS_PER_LESSON = 7;
 const SUB_HEADERS = [
   "الفئة",
@@ -211,8 +212,37 @@ function authorizePermissions() {
     testFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
   } catch (e) {}
   testFile.setTrashed(true);
-  Logger.log("Sheets & Full Drive Write OK: " + ss.getName() + " | " + folder.getName());
-  return "تم تفعيل صلاحيات الشيت والكتابة الكاملة في قوقل درايف بنجاح!";
+
+  const arFolder = DriveApp.getFolderById(AR_REWARDS_DRIVE_FOLDER_ID);
+  const arTestFile = arFolder.createFile("ar_permission_test.txt", "ok", MimeType.PLAIN_TEXT);
+  try {
+    arTestFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  } catch (e) {}
+  arTestFile.setTrashed(true);
+
+  Logger.log("Sheets & Full Drive Write OK: " + ss.getName() + " | " + folder.getName() + " | " + arFolder.getName());
+  return "تم تفعيل صلاحيات الشيت والكتابة الكاملة في مجلدي قوقل درايف بنجاح!";
+}
+
+function saveRewardBase64ToDrive(imageBase64, filePrefix) {
+  const folder = DriveApp.getFolderById(AR_REWARDS_DRIVE_FOLDER_ID);
+  const markerIdx = imageBase64.indexOf("base64,");
+  const headerPart = markerIdx !== -1 ? imageBase64.slice(0, markerIdx) : "";
+  const cleanBase64 = markerIdx !== -1 ? imageBase64.slice(markerIdx + 7) : imageBase64;
+  const isSvg = headerPart.indexOf("svg") !== -1;
+  const isWebp = headerPart.indexOf("webp") !== -1;
+  const isJpeg = headerPart.indexOf("jpeg") !== -1 || headerPart.indexOf("jpg") !== -1;
+  const mime = isSvg ? "image/svg+xml" : isWebp ? "image/webp" : isJpeg ? "image/jpeg" : "image/png";
+  const ext = isSvg ? "svg" : isWebp ? "webp" : isJpeg ? "jpg" : "png";
+  const decoded = Utilities.base64Decode(cleanBase64);
+  const fileName = (filePrefix || "ar_reward") + "_" + Utilities.formatDate(new Date(), "GMT+3", "yyyyMMdd_HHmmss") + "." + ext;
+  const blob = Utilities.newBlob(decoded, mime, fileName);
+  const file = folder.createFile(blob);
+  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  return {
+    fileId: file.getId(),
+    imageUrl: "https://lh3.googleusercontent.com/d/" + file.getId()
+  };
 }
 
 function getOrCreateAnswersSheet() {
@@ -787,7 +817,22 @@ function doPost(e) {
       });
     }
 
-    // 7. SAVE AR HEAD REWARDS TO 'AR Rewards' SHEET (+ UPLOAD CUSTOM PNGs TO GOOGLE DRIVE)
+    // 7. UPLOAD SINGLE AR REWARD IMAGE TO DEDICATED GOOGLE DRIVE FOLDER
+    if (action === "upload_ar_reward_image") {
+      const imageBase64 = String(body.imageBase64 || "").trim();
+      const tierId = String(body.tierId || "ar_reward").trim();
+      if (!imageBase64) {
+        return jsonResponse({ status: "error", message: "لم يتم استلام بيانات الصورة" });
+      }
+      const uploaded = saveRewardBase64ToDrive(imageBase64, "ar_reward_" + tierId);
+      return jsonResponse({
+        status: "success",
+        fileId: uploaded.fileId,
+        imageUrl: uploaded.imageUrl
+      });
+    }
+
+    // 8. SAVE AR HEAD REWARDS TO 'AR Rewards' SHEET (+ UPLOAD CUSTOM PNGs TO GOOGLE DRIVE)
     if (action === "save_ar_rewards") {
       const arSheet = getOrCreateARRewardsSheet();
       const inputRewards = Array.isArray(body.rewards) ? body.rewards : [];
@@ -810,23 +855,8 @@ function doPost(e) {
           resolvedUrl = "";
         } else if (resolvedUrl.indexOf("data:image/") === 0) {
           try {
-            const folder = DriveApp.getFolderById(DRIVE_FOLDER_ID);
-            const markerIdx = resolvedUrl.indexOf("base64,");
-            if (markerIdx !== -1) {
-              const headerPart = resolvedUrl.slice(0, markerIdx);
-              const cleanBase64 = resolvedUrl.slice(markerIdx + 7);
-              const isSvg = headerPart.indexOf("svg") !== -1;
-              const isWebp = headerPart.indexOf("webp") !== -1;
-              const isJpeg = headerPart.indexOf("jpeg") !== -1 || headerPart.indexOf("jpg") !== -1;
-              const mime = isSvg ? "image/svg+xml" : isWebp ? "image/webp" : isJpeg ? "image/jpeg" : "image/png";
-              const ext = isSvg ? "svg" : isWebp ? "webp" : isJpeg ? "jpg" : "png";
-              const decoded = Utilities.base64Decode(cleanBase64);
-              const fileName = "ar_reward_" + id + "_" + Utilities.formatDate(new Date(), "GMT+3", "yyyyMMdd_HHmmss") + "." + ext;
-              const blob = Utilities.newBlob(decoded, mime, fileName);
-              const file = folder.createFile(blob);
-              file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-              resolvedUrl = "https://lh3.googleusercontent.com/d/" + file.getId();
-            }
+            const uploaded = saveRewardBase64ToDrive(resolvedUrl, "ar_reward_" + id);
+            resolvedUrl = uploaded.imageUrl;
           } catch (driveErr) {
             if (resolvedUrl.length > 45000) {
               resolvedUrl = "";
@@ -899,12 +929,12 @@ class SheetService {
   public getStoredSheetUrl(): string {
     if (typeof window === 'undefined') return DEFAULT_SHEET_URL;
     const stored = localStorage.getItem(SHEET_URL_KEY);
-    // If the browser on this or other devices still has the old 6-column script URL stored,
-    // automatically migrate it to the active 7-column URL so steps sync across all devices!
+    // Automatically migrate any previous default deployment URLs to the active URL so all devices stay in sync
     if (stored && (
       stored.includes('AKfycbwjtf7BiA8k5BEQgw1n0s_VYeBNzTmL-IitZ8m_YKjbnVfd_dZHL4svN08x4jNfw3LNqA') ||
       stored.includes('AKfycbw3_rZtsYcs4OLZU242sU6Kgc6OHWc6sSQ-EmLsJT4yOUCkHVP38ootritf_vnRmG1Oug') ||
       stored.includes('AKfycbzd9L7BL9tQu-7OkyFX3mNreodryMJO3EGcdcaYP-tnWG9b1reETX7gLEseLSmgsjGOVw') ||
+      stored.includes('AKfycbzRDyx7Tb5uLKInIWdFBa0vPxxdide_pWRFdXQ5qPdYzkUXmKxn8HPyoIjZxDUJD_TM7A') ||
       !stored.trim()
     )) {
       localStorage.setItem(SHEET_URL_KEY, DEFAULT_SHEET_URL);
@@ -1043,7 +1073,8 @@ class SheetService {
     }
 
     try {
-      const response = await fetch(url, {
+      const fetchUrl = `${url}${url.includes('?') ? '&' : '?'}_ts=${Date.now()}`;
+      const response = await fetch(fetchUrl, {
         method: 'GET',
         headers: { 'Accept': 'application/json' },
       });
@@ -1515,7 +1546,7 @@ class SheetService {
     }
 
     try {
-      const fetchUrl = `${url}${url.includes('?') ? '&' : '?'}action=get_ar_rewards`;
+      const fetchUrl = `${url}${url.includes('?') ? '&' : '?'}action=get_ar_rewards&_ts=${Date.now()}`;
       const response = await fetch(fetchUrl, {
         method: 'GET',
         headers: { 'Accept': 'application/json' },
@@ -1618,6 +1649,59 @@ class SheetService {
       return {
         success: false,
         error: err.message || 'حدث خطأ أثناء إرسال الإعدادات إلى الشيت'
+      };
+    }
+  }
+
+  /**
+   * Upload a custom AR reward PNG/image directly into Drive folder 1tbmh_Br7_yWw5fpi9gJY8a5NZhv5glFz
+   * and return its shareable Google Drive URL
+   */
+  public async uploadARRewardImage(tierId: string, imageBase64: string): Promise<{
+    success: boolean;
+    imageUrl?: string;
+    needsScriptUpdate?: boolean;
+    error?: string;
+  }> {
+    const url = this.getStoredSheetUrl();
+    if (!url) {
+      return { success: false, error: 'رابط Google Apps Script غير مضبوط' };
+    }
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+          action: 'upload_ar_reward_image',
+          tierId,
+          imageBase64
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`خطأ في استجابة الخادم: ${response.status}`);
+      }
+
+      const json = await response.json();
+      if (json.status === 'success' && json.imageUrl) {
+        return { success: true, imageUrl: String(json.imageUrl) };
+      }
+
+      const msg = String(json.message || '');
+      if (msg.includes('Unknown action')) {
+        return {
+          success: false,
+          needsScriptUpdate: true,
+          error: 'كود Apps Script المنشور لا يدعم الرفع المباشر لمجلد الجوائز بعد'
+        };
+      }
+
+      return { success: false, error: msg || 'تعذر رفع الصورة إلى قوقل درايف' };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err.message || 'خطأ أثناء رفع الصورة إلى Google Drive'
       };
     }
   }
