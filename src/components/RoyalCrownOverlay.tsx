@@ -1,6 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { FaceData } from '../services/arTrackingService';
 import { ARRewardTier } from '../services/arRewardsService';
+import { isMobileOrTabletDevice } from '../utils/devicePerformance';
 
 interface RoyalCrownOverlayProps {
   face: FaceData | null;
@@ -12,7 +13,7 @@ interface RoyalCrownOverlayProps {
   onCanvasReady?: (canvas: HTMLCanvasElement | null) => void;
 }
 
-export const RoyalCrownOverlay: React.FC<RoyalCrownOverlayProps> = ({
+export const RoyalCrownOverlay: React.FC<RoyalCrownOverlayProps> = React.memo(({
   face,
   videoWidth = 640,
   videoHeight = 480,
@@ -22,7 +23,10 @@ export const RoyalCrownOverlay: React.FC<RoyalCrownOverlayProps> = ({
   onCanvasReady,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const bannerWidthCacheRef = useRef<Record<string, number>>({});
+  const lastReadyRef = useRef<HTMLCanvasElement | null>(null);
   const [loadedRewardImg, setLoadedRewardImg] = useState<HTMLImageElement | null>(null);
+  const isLightweight = useMemo(() => isMobileOrTabletDevice(), []);
 
   // Preload custom or preset reward image cleanly (origin-safe data URLs or CORS-safe URLs)
   useEffect(() => {
@@ -81,11 +85,17 @@ export const RoyalCrownOverlay: React.FC<RoyalCrownOverlayProps> = ({
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     if (!showCrown || !face || !face.detected) {
-      onCanvasReady?.(null);
+      if (lastReadyRef.current !== null) {
+        lastReadyRef.current = null;
+        onCanvasReady?.(null);
+      }
       return;
     }
 
-    onCanvasReady?.(canvas);
+    if (lastReadyRef.current !== canvas) {
+      lastReadyRef.current = canvas;
+      onCanvasReady?.(canvas);
+    }
 
     // 1:1 Pixel mapping on video frame
     const topX = face.headTop.x * canvas.width;
@@ -111,25 +121,35 @@ export const RoyalCrownOverlay: React.FC<RoyalCrownOverlayProps> = ({
     const hw = crownWidth / 2;
     const hh = crownHeight / 2;
 
-    // 1. Subtle Golden Aura Glow behind reward graphic
-    const glowGrad = ctx.createRadialGradient(0, 0, hw * 0.12, 0, 0, hw * 1.15);
-    glowGrad.addColorStop(0, 'rgba(250, 204, 21, 0.45)');
-    glowGrad.addColorStop(0.55, 'rgba(245, 158, 11, 0.18)');
-    glowGrad.addColorStop(1, 'rgba(245, 158, 11, 0)');
-    ctx.fillStyle = glowGrad;
-    ctx.beginPath();
-    ctx.arc(0, 0, hw * 1.15, 0, Math.PI * 2);
-    ctx.fill();
+    // 1. Subtle Golden Aura Glow behind reward graphic (lightweight flat circle on mobile/tablet)
+    if (isLightweight) {
+      ctx.fillStyle = 'rgba(250, 204, 21, 0.22)';
+      ctx.beginPath();
+      ctx.arc(0, 0, hw * 0.92, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      const glowGrad = ctx.createRadialGradient(0, 0, hw * 0.12, 0, 0, hw * 1.15);
+      glowGrad.addColorStop(0, 'rgba(250, 204, 21, 0.45)');
+      glowGrad.addColorStop(0.55, 'rgba(245, 158, 11, 0.18)');
+      glowGrad.addColorStop(1, 'rgba(245, 158, 11, 0)');
+      ctx.fillStyle = glowGrad;
+      ctx.beginPath();
+      ctx.arc(0, 0, hw * 1.15, 0, Math.PI * 2);
+      ctx.fill();
+    }
 
     // 2. Render Loaded Reward Image (or fallback Royal Vector Crown)
     if (loadedRewardImg && loadedRewardImg.complete && loadedRewardImg.naturalWidth > 0) {
-      ctx.save();
-      ctx.shadowColor = 'rgba(245, 158, 11, 0.55)';
-      ctx.shadowBlur = 14;
-      ctx.drawImage(loadedRewardImg, -hw, -hh, crownWidth, crownHeight);
-      ctx.restore();
+      if (!isLightweight) {
+        ctx.save();
+        ctx.shadowColor = 'rgba(245, 158, 11, 0.55)';
+        ctx.shadowBlur = 12;
+        ctx.drawImage(loadedRewardImg, -hw, -hh, crownWidth, crownHeight);
+        ctx.restore();
+      } else {
+        ctx.drawImage(loadedRewardImg, -hw, -hh, crownWidth, crownHeight);
+      }
     } else {
-      // Fallback Crisp Vector Royal Crown
       ctx.beginPath();
       ctx.moveTo(-hw * 0.85, hh * 0.45);
       ctx.quadraticCurveTo(0, hh * 0.65, hw * 0.85, hh * 0.45);
@@ -159,28 +179,38 @@ export const RoyalCrownOverlay: React.FC<RoyalCrownOverlayProps> = ({
       crownPath.lineTo(hw * 0.85, hh * 0.45);
       crownPath.closePath();
 
-      const goldGrad = ctx.createLinearGradient(-hw, -hh, hw, hh);
-      goldGrad.addColorStop(0, '#fef08a');
-      goldGrad.addColorStop(0.25, '#f59e0b');
-      goldGrad.addColorStop(0.5, '#fef3c7');
-      goldGrad.addColorStop(0.75, '#d97706');
-      goldGrad.addColorStop(1, '#fbbf24');
+      if (isLightweight) {
+        ctx.fillStyle = '#fbbf24';
+        ctx.fill(crownPath);
+      } else {
+        const goldGrad = ctx.createLinearGradient(-hw, -hh, hw, hh);
+        goldGrad.addColorStop(0, '#fef08a');
+        goldGrad.addColorStop(0.25, '#f59e0b');
+        goldGrad.addColorStop(0.5, '#fef3c7');
+        goldGrad.addColorStop(0.75, '#d97706');
+        goldGrad.addColorStop(1, '#fbbf24');
 
-      ctx.fillStyle = goldGrad;
-      ctx.shadowColor = '#f59e0b';
-      ctx.shadowBlur = 18;
-      ctx.fill(crownPath);
+        ctx.fillStyle = goldGrad;
+        ctx.shadowColor = '#f59e0b';
+        ctx.shadowBlur = 14;
+        ctx.fill(crownPath);
+        ctx.shadowBlur = 0;
+      }
 
       ctx.lineWidth = 3.5;
       ctx.strokeStyle = '#78350f';
       ctx.stroke(crownPath);
     }
 
-    // 3. Floating Title Banner (e.g., "👑 بطل الخط العربي 🌟" or teacher's custom label)
+    // 3. Floating Title Banner
     const bannerText = activeReward ? activeReward.title.trim() : '👑 بطل الخط العربي 🌟';
     if (bannerText) {
       ctx.font = 'bold 13px "Cairo", sans-serif';
-      const textW = ctx.measureText(bannerText).width;
+      let textW = bannerWidthCacheRef.current[bannerText];
+      if (!textW) {
+        textW = ctx.measureText(bannerText).width;
+        bannerWidthCacheRef.current[bannerText] = textW;
+      }
       const bW = textW + 22;
       const bH = 26;
       const bY = -hh - bH - 8;
@@ -213,15 +243,24 @@ export const RoyalCrownOverlay: React.FC<RoyalCrownOverlayProps> = ({
     }
 
     ctx.restore();
-  }, [face, videoWidth, videoHeight, isMirrored, showCrown, activeReward, loadedRewardImg, onCanvasReady]);
+  }, [face, videoWidth, videoHeight, isMirrored, showCrown, activeReward, loadedRewardImg, onCanvasReady, isLightweight]);
 
   useEffect(() => {
     if (!showCrown || !face || !face.detected) {
-      onCanvasReady?.(null);
-    } else if (canvasRef.current) {
+      if (lastReadyRef.current !== null) {
+        lastReadyRef.current = null;
+        onCanvasReady?.(null);
+      }
+    } else if (canvasRef.current && lastReadyRef.current !== canvasRef.current) {
+      lastReadyRef.current = canvasRef.current;
       onCanvasReady?.(canvasRef.current);
     }
-    return () => onCanvasReady?.(null);
+    return () => {
+      if (lastReadyRef.current !== null) {
+        lastReadyRef.current = null;
+        onCanvasReady?.(null);
+      }
+    };
   }, [showCrown, face?.detected, onCanvasReady]);
 
   if (!showCrown || !face || !face.detected) {
@@ -231,10 +270,13 @@ export const RoyalCrownOverlay: React.FC<RoyalCrownOverlayProps> = ({
   return (
     <canvas
       ref={canvasRef}
-      className="absolute inset-0 w-full h-full object-cover pointer-events-none z-35 transition-opacity duration-200"
+      className="absolute inset-0 w-full h-full object-cover pointer-events-none z-35"
       style={{
         transform: isMirrored ? 'scaleX(-1)' : 'none',
       }}
     />
   );
-};
+});
+
+RoyalCrownOverlay.displayName = 'RoyalCrownOverlay';
+

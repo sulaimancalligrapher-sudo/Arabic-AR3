@@ -1,6 +1,9 @@
+import { isMobileOrTabletDevice } from '../utils/devicePerformance';
+
 /**
  * Unified AR Tracking Service
  * Direct camera streaming + MediaPipe Hands + MediaPipe FaceMesh
+ * Optimized for smooth mobile/tablet performance.
  */
 
 export interface HandLandmark {
@@ -48,11 +51,20 @@ class ARTrackingService {
 
   private handsInstance: any = null;
   private faceMeshInstance: any = null;
+  private handsInitPromise: Promise<void> | null = null;
+  private faceInitPromise: Promise<void> | null = null;
+  private isHandBusy: boolean = false;
+  private isFaceBusy: boolean = false;
+
+  // Lightweight offscreen canvas to downscale video frames before MediaPipe upload on mobile/tablet
+  private inferCanvas: HTMLCanvasElement | null = null;
+  private inferCtx: CanvasRenderingContext2D | null = null;
 
   private facingMode: 'user' | 'environment' = 'user';
   private isMirrored: boolean = true;
   private trackFace: boolean = true;
   private trackHands: boolean = true;
+  private maxHands: 1 | 2 = 1;
 
   private listeners: Set<ARTrackingCallback> = new Set();
   private smoothedCursor = { x: 0.5, y: 0.5 };
@@ -83,14 +95,40 @@ class ARTrackingService {
     return this.isMirrored;
   }
 
+  public setMaxHands(count: 1 | 2) {
+    if (this.maxHands === count) return;
+    this.maxHands = count;
+    if (this.handsInstance) {
+      try {
+        this.handsInstance.setOptions({ maxNumHands: count });
+      } catch {}
+    }
+  }
+
   public setTrackFace(enabled: boolean) {
+    const changed = this.trackFace !== enabled;
     this.trackFace = enabled;
-    if (!enabled) this.latestFace = null;
+    if (!enabled) {
+      if (this.latestFace !== null) {
+        this.latestFace = null;
+        this.emitUpdate();
+      }
+    } else if (changed && this.isRunning && !this.faceMeshInstance) {
+      void this.ensureFaceMeshInitialized();
+    }
   }
 
   public setTrackHands(enabled: boolean) {
+    const changed = this.trackHands !== enabled;
     this.trackHands = enabled;
-    if (!enabled) this.latestHands = [];
+    if (!enabled) {
+      if (this.latestHands.length > 0 || this.hasInitialCursor) {
+        this.resetHandTrackingState();
+        this.emitUpdate();
+      }
+    } else if (changed && this.isRunning && !this.handsInstance) {
+      void this.ensureHandsInitialized();
+    }
   }
 
   private async ensureScript(src: string): Promise<boolean> {
@@ -110,53 +148,104 @@ class ARTrackingService {
   }
 
   private isMobileDevice(): boolean {
-    if (typeof window === 'undefined') return false;
-    return (
-      /Android|iPhone|iPad|iPod|Tablet/i.test(navigator.userAgent) ||
-      (Boolean(navigator.maxTouchPoints) && navigator.maxTouchPoints > 1 && window.innerWidth <= 1024)
-    );
+    return isMobileOrTabletDevice();
+  }
+
+  private async ensureHandsInitialized(): Promise<void> {
+    if (this.handsInstance) return;
+    if (this.handsInitPromise) return this.handsInitPromise;
+
+    this.handsInitPromise = (async () => {
+      try {
+        await this.ensureScript('https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js');
+        if ((window as any).Hands && !this.handsInstance) {
+          const isMobile = this.isMobileDevice();
+          const HandsClass = (window as any).Hands;
+          this.handsInstance = new HandsClass({
+            locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+          });
+          this.handsInstance.setOptions({
+            maxNumHands: this.maxHands,
+            modelComplexity: isMobile ? 0 : 1,
+            minDetectionConfidence: 0.72,
+            minTrackingConfidence: 0.7
+          });
+          this.handsInstance.onResults(this.onHandsResults.bind(this));
+        }
+      } catch (err) {
+        console.warn('MediaPipe Hands init notice:', err);
+      } finally {
+        this.handsInitPromise = null;
+      }
+    })();
+
+    return this.handsInitPromise;
+  }
+
+  private async ensureFaceMeshInitialized(): Promise<void> {
+    if (this.faceMeshInstance) return;
+    if (this.faceInitPromise) return this.faceInitPromise;
+
+    this.faceInitPromise = (async () => {
+      try {
+        await this.ensureScript('https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js');
+        if ((window as any).FaceMesh && !this.faceMeshInstance) {
+          const FaceMeshClass = (window as any).FaceMesh;
+          this.faceMeshInstance = new FaceMeshClass({
+            locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+          });
+          this.faceMeshInstance.setOptions({
+            maxNumFaces: 1,
+            refineLandmarks: false,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+          });
+          this.faceMeshInstance.onResults(this.onFaceMeshResults.bind(this));
+        }
+      } catch (err) {
+        console.warn('MediaPipe FaceMesh init notice:', err);
+      } finally {
+        this.faceInitPromise = null;
+      }
+    })();
+
+    return this.faceInitPromise;
   }
 
   public async initMediaPipe(): Promise<void> {
-    try {
-      await Promise.all([
-        this.ensureScript('https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js'),
-        this.ensureScript('https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js'),
-        this.ensureScript('https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js'),
-      ]);
+    const tasks: Promise<void>[] = [];
+    if (this.trackHands) tasks.push(this.ensureHandsInitialized());
+    if (this.trackFace) tasks.push(this.ensureFaceMeshInitialized());
+    await Promise.all(tasks);
+  }
 
-      const isMobile = this.isMobileDevice();
-
-      if ((window as any).Hands && !this.handsInstance) {
-        const HandsClass = (window as any).Hands;
-        this.handsInstance = new HandsClass({
-          locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
-        });
-        this.handsInstance.setOptions({
-          maxNumHands: 2,
-          modelComplexity: isMobile ? 0 : 1, // modelComplexity 0 (Lite) is 3x faster and designed for mobile GPUs
-          minDetectionConfidence: 0.74, // Raised from 0.50 to eliminate phantom hands on face/clothing
-          minTrackingConfidence: 0.72
-        });
-        this.handsInstance.onResults(this.onHandsResults.bind(this));
-      }
-
-      if ((window as any).FaceMesh && !this.faceMeshInstance) {
-        const FaceMeshClass = (window as any).FaceMesh;
-        this.faceMeshInstance = new FaceMeshClass({
-          locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
-        });
-        this.faceMeshInstance.setOptions({
-          maxNumFaces: 1,
-          refineLandmarks: false,
-          minDetectionConfidence: 0.5,
-          minTrackingConfidence: 0.5
-        });
-        this.faceMeshInstance.onResults(this.onFaceMeshResults.bind(this));
-      }
-    } catch (err) {
-      console.warn('MediaPipe initialization notice:', err);
+  /**
+   * Produces a downscaled 320px-wide frame on mobile/tablet so MediaPipe WebGL uploads
+   * 4x-12x fewer pixels without reducing the displayed <video> quality.
+   */
+  private getInferenceSource(video: HTMLVideoElement, isMobile: boolean): HTMLVideoElement | HTMLCanvasElement {
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    if (!isMobile || vw <= 0 || vh <= 0 || vw <= 360) {
+      return video;
     }
+
+    const targetW = 320;
+    const targetH = Math.max(180, Math.round((vh / vw) * targetW));
+
+    if (!this.inferCanvas) {
+      this.inferCanvas = document.createElement('canvas');
+      this.inferCtx = this.inferCanvas.getContext('2d', { desynchronized: true });
+    }
+    if (this.inferCanvas.width !== targetW || this.inferCanvas.height !== targetH) {
+      this.inferCanvas.width = targetW;
+      this.inferCanvas.height = targetH;
+    }
+    if (this.inferCtx) {
+      this.inferCtx.drawImage(video, 0, 0, targetW, targetH);
+      return this.inferCanvas;
+    }
+    return video;
   }
 
   public async start(
@@ -175,6 +264,8 @@ class ARTrackingService {
 
     this.stopCameraStreamOnly();
     this.resetHandTrackingState();
+    this.isHandBusy = false;
+    this.isFaceBusy = false;
 
     try {
       let stream: MediaStream | null = null;
@@ -184,13 +275,13 @@ class ARTrackingService {
         stream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: this.facingMode,
-            // 640x480 on mobile cuts memory bandwidth and GPU load drastically, eliminating tracking lag
             width: { ideal: isMobile ? 640 : 1280 },
-            height: { ideal: isMobile ? 480 : 720 }
+            height: { ideal: isMobile ? 480 : 720 },
+            frameRate: { ideal: isMobile ? 24 : 30, max: 30 }
           },
           audio: false
         });
-      } catch (err) {
+      } catch {
         stream = await navigator.mediaDevices.getUserMedia({
           video: true,
           audio: false
@@ -205,7 +296,7 @@ class ARTrackingService {
 
       this.isRunning = true;
       this.startProcessingLoop();
-      this.initMediaPipe();
+      void this.initMediaPipe();
 
       return true;
     } catch (err) {
@@ -227,28 +318,50 @@ class ARTrackingService {
     let lastHandProcess = 0;
     let lastFaceProcess = 0;
 
-    const loop = async (timestamp: number) => {
+    const loop = (timestamp: number) => {
       if (!this.isRunning || !this.videoElement) return;
 
-      if (this.videoElement.readyState >= 2) {
+      const video = this.videoElement;
+      if (video.readyState >= 2 && video.videoWidth > 0) {
         const isMobile = this.isMobileDevice();
-        // Hands tracking interval: full frame rate
-        const handInterval = isMobile ? 25 : 30;
-        // Face tracking interval (Crown): on mobile, run at ~6-7 FPS to free GPU/CPU for finger tracing
-        const faceInterval = isMobile ? 150 : 45;
+        const handInterval = isMobile ? 45 : 33;
+        const faceInterval = isMobile ? 210 : 85;
 
-        if (this.trackHands && this.handsInstance && timestamp - lastHandProcess >= handInterval) {
+        const handsDue =
+          this.trackHands &&
+          Boolean(this.handsInstance) &&
+          !this.isHandBusy &&
+          (!isMobile || !this.isFaceBusy) &&
+          timestamp - lastHandProcess >= handInterval;
+
+        if (handsDue) {
           lastHandProcess = timestamp;
-          try {
-            await this.handsInstance.send({ image: this.videoElement });
-          } catch {}
-        }
+          this.isHandBusy = true;
+          const img = this.getInferenceSource(video, isMobile);
+          Promise.resolve(this.handsInstance.send({ image: img }))
+            .catch(() => {})
+            .finally(() => {
+              this.isHandBusy = false;
+            });
+        } else {
+          // Run face tracking on alternate frames so Hands and FaceMesh never contend on the same frame
+          const faceDue =
+            this.trackFace &&
+            Boolean(this.faceMeshInstance) &&
+            !this.isFaceBusy &&
+            (!isMobile || !this.isHandBusy) &&
+            timestamp - lastFaceProcess >= faceInterval;
 
-        if (this.trackFace && this.faceMeshInstance && timestamp - lastFaceProcess >= faceInterval) {
-          lastFaceProcess = timestamp;
-          try {
-            await this.faceMeshInstance.send({ image: this.videoElement });
-          } catch {}
+          if (faceDue) {
+            lastFaceProcess = timestamp;
+            this.isFaceBusy = true;
+            const img = this.getInferenceSource(video, isMobile);
+            Promise.resolve(this.faceMeshInstance.send({ image: img }))
+              .catch(() => {})
+              .finally(() => {
+                this.isFaceBusy = false;
+              });
+          }
         }
       }
 
@@ -359,8 +472,11 @@ class ARTrackingService {
     }
 
     if (parsedHands.length === 0) {
-      // Grace period buffer (up to 5 frames ~ 150ms) before cutting an active hand/stroke
-      if (this.latestHands.length > 0 && this.missedHandFrames < this.MAX_MISSED_HAND_FRAMES) {
+      if (this.latestHands.length === 0) {
+        return;
+      }
+      // Grace period buffer (up to 5 frames) before cutting an active hand/stroke
+      if (this.missedHandFrames < this.MAX_MISSED_HAND_FRAMES) {
         this.missedHandFrames++;
         this.emitUpdate();
         return;
@@ -407,9 +523,13 @@ class ARTrackingService {
   }
 
   private onFaceMeshResults(results: any) {
+    if (!this.trackFace) return;
+
     if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
-      this.latestFace = null;
-      this.emitUpdate();
+      if (this.latestFace !== null) {
+        this.latestFace = null;
+        this.emitUpdate();
+      }
       return;
     }
 
@@ -428,15 +548,41 @@ class ARTrackingService {
     // Natural head tilt angle in raw image
     const tiltAngle = Math.atan2(dy, dx);
 
-    this.latestFace = {
-      detected: true,
-      headTop: { x: ptTop.x, y: ptTop.y },
-      forehead: { x: ptForehead.x, y: ptForehead.y },
-      leftEar: { x: ptLeft.x, y: ptLeft.y },
-      rightEar: { x: ptRight.x, y: ptRight.y },
-      headWidth,
-      tiltAngle
-    };
+    const prev = this.latestFace;
+    if (prev && Math.hypot(ptTop.x - prev.headTop.x, ptTop.y - prev.headTop.y) < 0.16) {
+      const a = 0.72;
+      this.latestFace = {
+        detected: true,
+        headTop: {
+          x: prev.headTop.x + (ptTop.x - prev.headTop.x) * a,
+          y: prev.headTop.y + (ptTop.y - prev.headTop.y) * a
+        },
+        forehead: {
+          x: prev.forehead.x + (ptForehead.x - prev.forehead.x) * a,
+          y: prev.forehead.y + (ptForehead.y - prev.forehead.y) * a
+        },
+        leftEar: {
+          x: prev.leftEar.x + (ptLeft.x - prev.leftEar.x) * a,
+          y: prev.leftEar.y + (ptLeft.y - prev.leftEar.y) * a
+        },
+        rightEar: {
+          x: prev.rightEar.x + (ptRight.x - prev.rightEar.x) * a,
+          y: prev.rightEar.y + (ptRight.y - prev.rightEar.y) * a
+        },
+        headWidth: prev.headWidth + (headWidth - prev.headWidth) * a,
+        tiltAngle: prev.tiltAngle + (tiltAngle - prev.tiltAngle) * a
+      };
+    } else {
+      this.latestFace = {
+        detected: true,
+        headTop: { x: ptTop.x, y: ptTop.y },
+        forehead: { x: ptForehead.x, y: ptForehead.y },
+        leftEar: { x: ptLeft.x, y: ptLeft.y },
+        rightEar: { x: ptRight.x, y: ptRight.y },
+        headWidth,
+        tiltAngle
+      };
+    }
 
     this.emitUpdate();
   }

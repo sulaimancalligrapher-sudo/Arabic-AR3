@@ -50,6 +50,7 @@ export interface WhiteboardCanvasRef {
   canRedo: boolean;
   exportImage: (includeBackground?: boolean) => string;
   recalculateAccuracy: () => number;
+  updateAirCursor: (cursor: { x: number; y: number } | null, isPinching: boolean) => void;
 }
 
 interface WhiteboardCanvasProps {
@@ -65,8 +66,8 @@ interface WhiteboardCanvasProps {
   crownCanvas?: HTMLCanvasElement | null;
   isMirrored?: boolean;
   saveArCameraPhoto?: boolean;
-  virtualCursor: { x: number; y: number } | null;
-  isAirDrawing: boolean;
+  virtualCursor?: { x: number; y: number } | null;
+  isAirDrawing?: boolean;
   isAirPenLocked?: boolean;
   onToggleAirPenLock?: () => void;
   calligraphyAngle?: number;
@@ -131,8 +132,8 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
   crownCanvas = null,
   isMirrored = true,
   saveArCameraPhoto = true,
-  virtualCursor,
-  isAirDrawing,
+  virtualCursor = null,
+  isAirDrawing = false,
   isAirPenLocked = false,
   onToggleAirPenLock,
   calligraphyAngle = 120,
@@ -156,6 +157,18 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const templateCanvasRef = useRef<HTMLCanvasElement>(null);
   const diagnosticCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  // Direct DOM air-cursor positioning + imperative update ref (zero React re-renders per frame)
+  const airCursorDomRef = useRef<HTMLDivElement>(null);
+  const processAirCursorRef = useRef<(cursor: { x: number; y: number } | null, isPinching: boolean) => void>(() => {});
+  const [airCursorBadge, setAirCursorBadge] = useState<{
+    active: boolean;
+    locked: boolean;
+    drawing: boolean;
+    pointClass: 'core' | 'grazing' | 'off' | null;
+  }>({ active: false, locked: false, drawing: false, pointClass: null });
+  const lastAirCursorPosRef = useRef<{ x: number; y: number } | null>(null);
+  const lastAirPinchRef = useRef<boolean>(false);
 
   // Stroke histories for Undo / Redo
   const [strokes, setStrokes] = useState<Stroke[]>([]);
@@ -2536,56 +2549,159 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     }
   };
 
-  // Handle Air-Drawing from AR Hand Tracking
-  const effectiveIsAirDrawing = isAirDrawing && !isAirPenLocked;
+  // Handle Air-Drawing from AR Hand Tracking (imperative, zero per-frame React re-render)
+  const latestAirCtxRef = useRef({
+    isARMode,
+    isAirPenLocked,
+    dimensions,
+    penType,
+    penColor,
+    penSize,
+    calligraphyAngle,
+    redrawCanvas,
+    attachNormToStroke,
+    currentStepIndex,
+    template,
+    openEvaluationResults,
+    classifyPoint,
+    calculateCoverageScore,
+    isLessonStarted,
+    evaluationModal,
+    onOpenLibrary,
+    strokes,
+  });
+  latestAirCtxRef.current = {
+    isARMode,
+    isAirPenLocked,
+    dimensions,
+    penType,
+    penColor,
+    penSize,
+    calligraphyAngle,
+    redrawCanvas,
+    attachNormToStroke,
+    currentStepIndex,
+    template,
+    openEvaluationResults,
+    classifyPoint,
+    calculateCoverageScore,
+    isLessonStarted,
+    evaluationModal,
+    onOpenLibrary,
+    strokes,
+  };
 
-  useEffect(() => {
-    if (!isARMode || !virtualCursor) {
+  const syncAirBadge = useCallback((
+    active: boolean,
+    locked: boolean,
+    drawing: boolean,
+    pointClass: 'core' | 'grazing' | 'off' | null
+  ) => {
+    setAirCursorBadge(prev => {
+      if (
+        prev.active === active &&
+        prev.locked === locked &&
+        prev.drawing === drawing &&
+        prev.pointClass === pointClass
+      ) {
+        return prev;
+      }
+      return { active, locked, drawing, pointClass };
+    });
+  }, []);
+
+  const processAirCursorUpdate = useCallback((
+    cursor: { x: number; y: number } | null,
+    isPinching: boolean
+  ) => {
+    lastAirCursorPosRef.current = cursor;
+    lastAirPinchRef.current = isPinching;
+
+    const {
+      isARMode: arMode,
+      isAirPenLocked: locked,
+      dimensions: dims,
+      penType: pType,
+      penColor: pColor,
+      penSize: pSize,
+      calligraphyAngle: cAngle,
+      redrawCanvas: doRedraw,
+      attachNormToStroke: doNorm,
+      currentStepIndex: stepIdx,
+      template: tpl,
+      openEvaluationResults: openEval,
+      classifyPoint: doClassify,
+      calculateCoverageScore: doCoverage,
+      isLessonStarted: started,
+      evaluationModal: evalModal,
+      onOpenLibrary: openLib,
+      strokes: currentStrokes,
+    } = latestAirCtxRef.current;
+
+    const domEl = airCursorDomRef.current;
+    const effectiveDrawing = isPinching && !locked;
+
+    if (!arMode || !cursor) {
+      if (domEl) {
+        domEl.style.display = 'none';
+      }
+      syncAirBadge(false, locked, false, null);
       if (activeAirStrokeRef.current) {
-        const lostAirStroke = attachNormToStroke(activeAirStrokeRef.current);
+        const lostAirStroke = doNorm(activeAirStrokeRef.current);
         activeAirStrokeRef.current = null;
         setStrokes(prev => [...prev, lostAirStroke]);
         setRedoStack([]);
-        redrawCanvas();
+        doRedraw();
       }
       return;
+    }
+
+    // Update virtual cursor DOM position directly without React re-render
+    if (domEl) {
+      domEl.style.display = 'block';
+      domEl.style.left = `${cursor.x * 100}%`;
+      domEl.style.top = `${cursor.y * 100}%`;
     }
 
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const x = virtualCursor.x * dimensions.width;
-    const y = virtualCursor.y * dimensions.height;
-    const isChallengeMode = !!(template?.hideDots || template?.hideImage);
+    const x = cursor.x * dims.width;
+    const y = cursor.y * dims.height;
 
-    if (effectiveIsAirDrawing) {
-      if (!template) {
-        if (!activeAirStrokeRef.current) {
+    const canCheckPath =
+      effectiveDrawing &&
+      Boolean(tpl) &&
+      !tpl?.hideImage &&
+      (letterGridRef.current?.totalCells || 0) > 0 &&
+      pType !== 'eraser';
+    const livePointClass = canCheckPath ? doClassify(x, y) : null;
+    syncAirBadge(true, locked, effectiveDrawing, livePointClass);
+
+    const isChallengeMode = !!(tpl?.hideDots || tpl?.hideImage);
+
+    if (effectiveDrawing) {
+      if (!activeAirStrokeRef.current) {
+        if (!tpl) {
           audioService.playErrorSound();
           setStepAlert({
             type: 'error',
             message: '⚠️ يرجى اختيار درس أولاً للبدء في التدريب 📚',
             timestamp: Date.now()
           });
-          if (onOpenLibrary) onOpenLibrary();
+          if (openLib) openLib();
+          return;
         }
-        return;
-      }
-
-      if (evaluationModal) {
-        if (!activeAirStrokeRef.current) {
+        if (evalModal) {
           audioService.playErrorSound();
           setStepAlert({
             type: 'error',
             message: '🔒 اكتمل التقييم! انقر (إعادة التمرين) أو اختر درساً جديداً للرسم مجدداً ✍️',
             timestamp: Date.now()
           });
+          return;
         }
-        return;
-      }
-
-      if (!isLessonStarted) {
-        if (!activeAirStrokeRef.current) {
+        if (!started) {
           audioService.playErrorSound();
           setStepAlert({
             type: 'error',
@@ -2593,11 +2709,9 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
             timestamp: Date.now()
           });
           audioService.speakArabic('انقر زر ابدأ لبدء التمرين');
+          return;
         }
-        return;
-      }
 
-      if (!activeAirStrokeRef.current) {
         strokeStatsRef.current = {
           total: 1,
           corePoints: 1,
@@ -2609,10 +2723,10 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         };
 
         // Start air stroke: only validate green dot in standard guided mode (NEVER in challenge/no-dots/blind modes)
-        if (!isChallengeMode && template?.steps && template.steps.length > 0 && activeStepPointsRef.current && penType !== 'eraser') {
+        if (!isChallengeMode && tpl?.steps && tpl.steps.length > 0 && activeStepPointsRef.current && pType !== 'eraser') {
           const active = activeStepPointsRef.current;
           const startDist = Math.hypot(x - active.sx, y - active.sy);
-          const startThreshold = Math.max(50, penSize * 2.8);
+          const startThreshold = Math.max(50, pSize * 2.8);
           if (startDist <= startThreshold) {
             strokeStartedAtGreenRef.current = true;
             setStepAlert(null);
@@ -2635,13 +2749,14 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         activeAirStrokeRef.current = {
           id: `air_stroke_${Date.now()}`,
           points: [{ x, y, pressure: 1, time: Date.now() }],
-          penType,
-          color: penColor,
-          size: penSize,
-          opacity: penType === 'brush' ? 0.65 : 1,
-          nibAngle: calligraphyAngle
+          penType: pType,
+          color: pColor,
+          size: pSize,
+          opacity: pType === 'brush' ? 0.65 : 1,
+          nibAngle: cAngle
         };
       } else {
+        if (!tpl || evalModal || !started) return;
         // Continue air stroke
         const curStroke = activeAirStrokeRef.current;
         const lastPt = curStroke.points[curStroke.points.length - 1];
@@ -2649,9 +2764,9 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
           curStroke.points.push({ x, y, pressure: 1, time: Date.now() });
 
           // Track path adherence only in standard guided mode
-          if (!isChallengeMode && penType !== 'eraser' && template?.steps && template.steps.length > 0) {
+          if (!isChallengeMode && pType !== 'eraser' && tpl?.steps && tpl.steps.length > 0) {
             strokeStatsRef.current.total++;
-            const classification = classifyPoint(x, y);
+            const classification = doClassify(x, y);
 
             if (classification === 'core') {
               strokeStatsRef.current.corePoints++;
@@ -2667,7 +2782,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
               }
               if (strokeStatsRef.current.offPathConsecutive >= 8) {
                 strokeStatsRef.current.hasBrokenAway = true;
-                const difficulty = template.difficulty || 'سهل';
+                const difficulty = tpl.difficulty || 'سهل';
                 if (difficulty !== 'سهل') {
                   setStepAlert({
                     type: 'error',
@@ -2696,18 +2811,18 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         let stepMeta: Stroke['stepMeta'] | undefined;
 
         // Validate red dot finish ONLY in standard guided mode (NEVER in challenge/no-dots/blind modes)
-        if (!isChallengeMode && template?.steps && template.steps.length > 0 && activeStepPointsRef.current && penType !== 'eraser') {
+        if (!isChallengeMode && tpl?.steps && tpl.steps.length > 0 && activeStepPointsRef.current && pType !== 'eraser') {
           if (strokeStartedAtGreenRef.current) {
             const active = activeStepPointsRef.current;
             const lastPt = finishedAirStroke.points[finishedAirStroke.points.length - 1];
             const endDist = Math.hypot(lastPt.x - active.ex, lastPt.y - active.ey);
-            const endThreshold = Math.max(52, penSize * 3);
+            const endThreshold = Math.max(52, pSize * 3);
 
             if (endDist <= endThreshold) {
               const stats = strokeStatsRef.current;
               const total = Math.max(1, stats.total);
               const rawPathScore = Math.min(100, Math.max(25, Math.round(((stats.corePoints * 1.0 + stats.grazingPoints * 0.45) / total) * 100)));
-              const difficulty = template.difficulty || 'سهل';
+              const difficulty = tpl.difficulty || 'سهل';
               const brokeAway = stats.hasBrokenAway || stats.maxConsecutiveOffPath >= 8;
               const offCenter = rawPathScore < 45;
 
@@ -2720,7 +2835,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                     : 'تنبيه: يجب الرسم فوق مسار خط الحرف بدقة ✍️',
                   timestamp: Date.now()
                 });
-                if (isLessonStarted) {
+                if (started) {
                   audioService.speakArabic(brokeAway ? 'خرج القلم عن مسار الحرف! التزم بالخط دون انقطاع' : 'ارسم فوق مسار الحرف بدقة');
                 }
               } else {
@@ -2728,49 +2843,49 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                   ? Math.min(rawPathScore, 55)
                   : rawPathScore;
 
-                const nextIdx = currentStepIndex + 1;
-                const coverageScore = calculateCoverageScore([...strokes, finishedAirStroke]);
+                const nextIdx = stepIdx + 1;
+                const coverageScore = doCoverage([...currentStrokes, finishedAirStroke]);
 
-                if (difficulty === 'متقدم' && nextIdx >= template.steps.length && coverageScore < 75) {
-                  const normedAirStroke = attachNormToStroke(finishedAirStroke);
+                if (difficulty === 'متقدم' && nextIdx >= tpl.steps.length && coverageScore < 75) {
+                  const normedAirStroke = doNorm(finishedAirStroke);
                   setStrokes(prev => [...prev, normedAirStroke]);
                   setRedoStack([]);
-                  redrawCanvas();
+                  doRedraw();
                   audioService.playErrorSound();
                   setStepAlert({
                     type: 'error',
                     message: `⚠️ المستوى المتقدم يتطلب تغطية سُمك الحرف بنسبة 75% على الأقل (الحالي: ${coverageScore}%) — املأ عرض الحرف`,
                     timestamp: Date.now()
                   });
-                  if (isLessonStarted) {
+                  if (started) {
                     audioService.speakArabic('تغطية سمك الحرف غير مكتملة للمستوى المتقدم، حاول ملء عرض الحرف');
                   }
                   strokeStartedAtGreenRef.current = false;
                   return;
                 }
 
-                const prevStepScore = stepScoresRef.current[currentStepIndex]
-                  ? { ...stepScoresRef.current[currentStepIndex] }
+                const prevStepScore = stepScoresRef.current[stepIdx]
+                  ? { ...stepScoresRef.current[stepIdx] }
                   : undefined;
                 const newStepScore = {
                   startEnd: 100,
                   path: effectivePathScore,
                   brokenAway: brokeAway
                 };
-                stepScoresRef.current[currentStepIndex] = newStepScore;
+                stepScoresRef.current[stepIdx] = newStepScore;
 
                 audioService.playStepSuccessSound();
 
-                if (nextIdx < template.steps.length) {
+                if (nextIdx < tpl.steps.length) {
                   stepMeta = {
-                    prevStepIndex: currentStepIndex,
+                    prevStepIndex: stepIdx,
                     nextStepIndex: nextIdx,
                     prevStepScore,
                     nextStepScore: newStepScore,
                   };
                   setCurrentStepIndex(nextIdx);
-                  const nextStep = template.steps[nextIdx];
-                  const stepName = getArabicOrdinal(currentStepIndex + 1);
+                  const nextStep = tpl.steps[nextIdx];
+                  const stepName = getArabicOrdinal(stepIdx + 1);
                   const hasWarning = difficulty === 'سهل' && (brokeAway || offCenter);
                   setStepAlert({
                     type: 'success',
@@ -2779,7 +2894,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                       : `رائع! أتممت ${stepName} بنجاح ✓`,
                     timestamp: Date.now()
                   });
-                  if (isLessonStarted) {
+                  if (started) {
                     const nextPrompt = getStepAudioPrompt(nextStep);
                     setTimeout(() => {
                       audioService.speakArabic(nextPrompt);
@@ -2787,8 +2902,8 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                   }
                 } else {
                   stepMeta = {
-                    prevStepIndex: currentStepIndex,
-                    nextStepIndex: currentStepIndex,
+                    prevStepIndex: stepIdx,
+                    nextStepIndex: stepIdx,
                     prevStepScore,
                     nextStepScore: newStepScore,
                     completedLesson: true,
@@ -2802,7 +2917,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                     ? 'تم اجتياز النقاط بنجاح! ننصح بالالتزام بمسار الحرف أكثر في المحاولة القادمة ✍️'
                     : undefined;
 
-                  openEvaluationResults(100, avgPathScore, coverageScore, customNote);
+                  openEval(100, avgPathScore, coverageScore, customNote);
                 }
               }
             } else {
@@ -2812,7 +2927,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                 message: 'تنبيه: يجب إيصال القلم إلى النقطة الحمراء 🔴 لإكمال الخطوة',
                 timestamp: Date.now()
               });
-              if (isLessonStarted) {
+              if (started) {
                 audioService.speakArabic('واصل الرسم حتى النقطة الحمراء');
               }
             }
@@ -2820,14 +2935,35 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
           strokeStartedAtGreenRef.current = false;
         }
 
-        const baseAirCommitted = attachNormToStroke(finishedAirStroke);
+        const baseAirCommitted = doNorm(finishedAirStroke);
         const committedAirStroke: Stroke = stepMeta ? { ...baseAirCommitted, stepMeta } : baseAirCommitted;
         setStrokes(prev => [...prev, committedAirStroke]);
         setRedoStack([]);
-        redrawCanvas();
+        doRedraw();
       }
     }
-  }, [virtualCursor, effectiveIsAirDrawing, isARMode, dimensions, penType, penColor, penSize, calligraphyAngle, redrawCanvas, attachNormToStroke, currentStepIndex, template, openEvaluationResults, classifyPoint, calculateCoverageScore, isLessonStarted, evaluationModal, onOpenLibrary]);
+  }, [syncAirBadge]);
+
+  processAirCursorRef.current = processAirCursorUpdate;
+
+  // Keep discrete air cursor badge/lock synchronized when lock button or AR mode toggles
+  useEffect(() => {
+    if (!isARMode) {
+      if (airCursorDomRef.current) {
+        airCursorDomRef.current.style.display = 'none';
+      }
+      syncAirBadge(false, isAirPenLocked, false, null);
+    } else if (lastAirCursorPosRef.current) {
+      processAirCursorUpdate(lastAirCursorPosRef.current, lastAirPinchRef.current);
+    }
+  }, [isARMode, isAirPenLocked, processAirCursorUpdate, syncAirBadge]);
+
+  // Optional backward-compatible prop listener if virtualCursor prop is ever passed directly
+  useEffect(() => {
+    if (virtualCursor !== null || isAirDrawing) {
+      processAirCursorUpdate(virtualCursor, isAirDrawing);
+    }
+  }, [virtualCursor, isAirDrawing, processAirCursorUpdate]);
 
   // Unified complete board clear (matching "مسح السبورة بالكامل")
   const performFullClear = useCallback((withSound = true) => {
@@ -2977,7 +3113,10 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
 
       return exportCanvas.toDataURL('image/png');
     },
-    recalculateAccuracy: () => calculateCoverageScore()
+    recalculateAccuracy: () => calculateCoverageScore(),
+    updateAirCursor: (cursor, isPinching) => {
+      processAirCursorRef.current(cursor, isPinching);
+    }
   }), [strokes, redoStack, dimensions, boardStyle, calculateCoverageScore, template, performFullClear, isARMode, saveArCameraPhoto, videoElement, crownCanvas, isMirrored, showGhostOverlay]);
 
   // Board background classes and styles
@@ -3876,46 +4015,38 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         </div>
       )}
 
-      {/* Layer 5: Virtual Air-Cursor Overlay with Live Path-Adherence Glow */}
-      {isARMode && virtualCursor && (() => {
-        const cx = virtualCursor.x * dimensions.width;
-        const cy = virtualCursor.y * dimensions.height;
-        const canCheckPath =
-          effectiveIsAirDrawing &&
-          Boolean(template) &&
-          !template?.hideImage &&
-          (letterGridRef.current?.totalCells || 0) > 0 &&
-          penType !== 'eraser';
-        const pointClass = canCheckPath ? classifyPoint(cx, cy) : null;
+      {/* Layer 5: Virtual Air-Cursor Overlay (Positioned via direct DOM ref for zero per-frame React re-render) */}
+      {(() => {
+        const { active, locked, drawing, pointClass } = airCursorBadge;
 
         let ringClass = 'bg-white/40 border-amber-400 shadow-[0_0_12px_rgba(255,255,255,0.8)] scale-100';
         let dotClass = 'bg-amber-400';
         let badgeText = '';
         let badgeClass = '';
 
-        if (isAirPenLocked) {
+        if (locked) {
           ringClass = 'bg-slate-800/75 border-rose-400 shadow-[0_0_12px_rgba(244,63,94,0.45)] scale-95';
           dotClass = 'bg-rose-400';
           badgeText = '🔒 القلم مقفل';
           badgeClass = 'bg-rose-600 text-white';
-        } else if (effectiveIsAirDrawing) {
+        } else if (drawing) {
           if (pointClass === 'core') {
-            ringClass = 'bg-emerald-500/85 border-amber-200 shadow-[0_0_24px_rgba(16,185,129,0.95)] scale-125';
+            ringClass = 'bg-emerald-500/85 border-amber-200 shadow-[0_0_20px_rgba(16,185,129,0.9)] scale-125';
             dotClass = 'bg-white';
             badgeText = '✨ داخل الحرف';
             badgeClass = 'bg-emerald-500 text-slate-950';
           } else if (pointClass === 'grazing') {
-            ringClass = 'bg-amber-500/85 border-yellow-100 shadow-[0_0_22px_rgba(245,158,11,0.95)] scale-125';
+            ringClass = 'bg-amber-500/85 border-yellow-100 shadow-[0_0_18px_rgba(245,158,11,0.9)] scale-125';
             dotClass = 'bg-white';
             badgeText = '✍️ قريب من المسار';
             badgeClass = 'bg-amber-400 text-slate-950';
           } else if (pointClass === 'off') {
-            ringClass = 'bg-rose-600/90 border-white shadow-[0_0_24px_rgba(244,63,94,0.95)] scale-125';
+            ringClass = 'bg-rose-600/90 border-white shadow-[0_0_20px_rgba(244,63,94,0.9)] scale-125';
             dotClass = 'bg-white';
             badgeText = '⚠️ خارج المسار';
             badgeClass = 'bg-rose-600 text-white';
           } else {
-            ringClass = 'bg-amber-500/80 border-white shadow-[0_0_20px_#f59e0b] scale-125';
+            ringClass = 'bg-amber-500/80 border-white shadow-[0_0_18px_#f59e0b] scale-125';
             dotClass = 'bg-white';
             badgeText = '✍️ يرسم';
             badgeClass = 'bg-amber-500 text-slate-950';
@@ -3924,14 +4055,14 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
 
         return (
           <div
+            ref={airCursorDomRef}
             className="absolute z-30 pointer-events-none"
             style={{
-              left: `${virtualCursor.x * 100}%`,
-              top: `${virtualCursor.y * 100}%`,
+              display: isARMode && active ? 'block' : 'none',
               transform: 'translate(-50%, -50%)'
             }}
           >
-            <div className={`relative flex items-center justify-center w-8 h-8 rounded-full border-2 transition-all duration-100 ${ringClass}`}>
+            <div className={`relative flex items-center justify-center w-8 h-8 rounded-full border-2 transition-colors duration-100 ${ringClass}`}>
               <div className={`w-2.5 h-2.5 rounded-full ${dotClass}`} />
               {badgeText && (
                 <span className={`absolute -top-7 px-2 py-0.5 rounded text-[10px] font-bold whitespace-nowrap shadow-md ${badgeClass}`}>

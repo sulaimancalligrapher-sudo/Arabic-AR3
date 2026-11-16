@@ -1,6 +1,7 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { SingleHandData } from '../services/arTrackingService';
 import { HandTrackingDisplayMode } from '../types/drawing';
+import { isMobileOrTabletDevice } from '../utils/devicePerformance';
 
 export type { HandTrackingDisplayMode };
 
@@ -28,7 +29,7 @@ const HAND_CONNECTIONS: [number, number][] = [
   [17, 18], [18, 19], [19, 20]
 ];
 
-export const HandSkeletonOverlay: React.FC<HandSkeletonOverlayProps> = ({
+export const HandSkeletonOverlay: React.FC<HandSkeletonOverlayProps> = React.memo(({
   hands,
   videoWidth = 640,
   videoHeight = 480,
@@ -36,6 +37,8 @@ export const HandSkeletonOverlay: React.FC<HandSkeletonOverlayProps> = ({
   trackingMode,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const badgeWidthCacheRef = useRef<Record<string, number>>({});
+  const isLightweight = useMemo(() => isMobileOrTabletDevice(), []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -64,6 +67,7 @@ export const HandSkeletonOverlay: React.FC<HandSkeletonOverlayProps> = ({
       : hands.slice(0, 1);
 
     ctx.save();
+    ctx.shadowBlur = 0;
 
     handsToRender.forEach((hand) => {
       const landmarks = hand.landmarks;
@@ -72,6 +76,7 @@ export const HandSkeletonOverlay: React.FC<HandSkeletonOverlayProps> = ({
       const isPinching = hand.isPinching;
       const isRightHand = hand.handedness === 'Right';
       const baseNeon = isRightHand ? 'rgba(56, 189, 248, 0.9)' : 'rgba(168, 85, 247, 0.9)';
+      const haloColor = isPinching ? 'rgba(245, 158, 11, 0.35)' : (isRightHand ? 'rgba(56, 189, 248, 0.28)' : 'rgba(168, 85, 247, 0.28)');
       const activeNeon = '#f59e0b';
 
       // 1:1 Pixel mapping on video frame
@@ -88,12 +93,21 @@ export const HandSkeletonOverlay: React.FC<HandSkeletonOverlayProps> = ({
         const thumbPt = pts[4];
 
         if (indexPt) {
+          if (isLightweight) {
+            ctx.beginPath();
+            ctx.arc(indexPt.x, indexPt.y, isPinching ? 20 : 15, 0, Math.PI * 2);
+            ctx.fillStyle = haloColor;
+            ctx.fill();
+          } else {
+            ctx.shadowColor = isPinching ? '#f59e0b' : baseNeon;
+            ctx.shadowBlur = isPinching ? 16 : 10;
+          }
+
           ctx.beginPath();
           ctx.arc(indexPt.x, indexPt.y, isPinching ? 10 : 8, 0, Math.PI * 2);
           ctx.fillStyle = isPinching ? '#ffffff' : (isRightHand ? '#f59e0b' : '#c084fc');
-          ctx.shadowColor = isPinching ? '#f59e0b' : baseNeon;
-          ctx.shadowBlur = isPinching ? 20 : 12;
           ctx.fill();
+          ctx.shadowBlur = 0;
           ctx.strokeStyle = '#0f172a';
           ctx.lineWidth = 2.5;
           ctx.stroke();
@@ -111,9 +125,12 @@ export const HandSkeletonOverlay: React.FC<HandSkeletonOverlayProps> = ({
             ctx.lineTo(thumbPt.x, thumbPt.y);
             ctx.strokeStyle = '#f59e0b';
             ctx.lineWidth = 3.5;
-            ctx.shadowColor = '#f59e0b';
-            ctx.shadowBlur = 14;
+            if (!isLightweight) {
+              ctx.shadowColor = '#f59e0b';
+              ctx.shadowBlur = 12;
+            }
             ctx.stroke();
+            ctx.shadowBlur = 0;
           }
         }
         return; // continue to next hand
@@ -123,30 +140,50 @@ export const HandSkeletonOverlay: React.FC<HandSkeletonOverlayProps> = ({
       // MODE 2 & 3: FULL SKELETON (يد واحدة أو يدين)
       // ==========================================
 
-      // 1. Draw glowing bones
-      HAND_CONNECTIONS.forEach(([i, j]) => {
-        const p1 = pts[i];
-        const p2 = pts[j];
-        if (!p1 || !p2) return;
-
+      // 1. Draw bones (fast batched stroke on mobile/tablet, glow on desktop)
+      ctx.lineCap = 'round';
+      if (isLightweight) {
         ctx.beginPath();
-        ctx.moveTo(p1.x, p1.y);
-        ctx.lineTo(p2.x, p2.y);
-
-        if (isPinching) {
-          ctx.strokeStyle = activeNeon;
-          ctx.lineWidth = 4;
-          ctx.shadowColor = '#f59e0b';
-          ctx.shadowBlur = 14;
-        } else {
-          ctx.strokeStyle = baseNeon;
-          ctx.lineWidth = 3;
-          ctx.shadowColor = baseNeon;
-          ctx.shadowBlur = 8;
-        }
-        ctx.lineCap = 'round';
+        HAND_CONNECTIONS.forEach(([i, j]) => {
+          const p1 = pts[i];
+          const p2 = pts[j];
+          if (p1 && p2) {
+            ctx.moveTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
+          }
+        });
+        ctx.strokeStyle = haloColor;
+        ctx.lineWidth = isPinching ? 8 : 6;
         ctx.stroke();
-      });
+
+        ctx.strokeStyle = isPinching ? activeNeon : baseNeon;
+        ctx.lineWidth = isPinching ? 3.5 : 2.8;
+        ctx.stroke();
+      } else {
+        HAND_CONNECTIONS.forEach(([i, j]) => {
+          const p1 = pts[i];
+          const p2 = pts[j];
+          if (!p1 || !p2) return;
+
+          ctx.beginPath();
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(p2.x, p2.y);
+
+          if (isPinching) {
+            ctx.strokeStyle = activeNeon;
+            ctx.lineWidth = 4;
+            ctx.shadowColor = '#f59e0b';
+            ctx.shadowBlur = 12;
+          } else {
+            ctx.strokeStyle = baseNeon;
+            ctx.lineWidth = 3;
+            ctx.shadowColor = baseNeon;
+            ctx.shadowBlur = 6;
+          }
+          ctx.stroke();
+        });
+        ctx.shadowBlur = 0;
+      }
 
       // 2. Pinch Energy Bridge
       const thumb = pts[4];
@@ -158,10 +195,13 @@ export const HandSkeletonOverlay: React.FC<HandSkeletonOverlayProps> = ({
 
         if (isPinching) {
           ctx.strokeStyle = '#ffffff';
-          ctx.lineWidth = 4.5;
-          ctx.shadowColor = '#f59e0b';
-          ctx.shadowBlur = 16;
+          ctx.lineWidth = 4;
+          if (!isLightweight) {
+            ctx.shadowColor = '#f59e0b';
+            ctx.shadowBlur = 14;
+          }
           ctx.stroke();
+          ctx.shadowBlur = 0;
 
           const midX = (thumb.x + index.x) / 2;
           const midY = (thumb.y + index.y) / 2;
@@ -176,23 +216,24 @@ export const HandSkeletonOverlay: React.FC<HandSkeletonOverlayProps> = ({
           ctx.setLineDash([4, 4]);
           ctx.strokeStyle = 'rgba(250, 204, 21, 0.6)';
           ctx.lineWidth = 1.5;
-          ctx.shadowBlur = 0;
           ctx.stroke();
           ctx.setLineDash([]);
         }
       }
 
-      // 3. Draw 21 joint nodes
+      // 3. Draw 21 joint nodes (zero shadowBlur on mobile/tablet)
       pts.forEach((pt, idx) => {
         ctx.beginPath();
 
         if (idx === 8) {
-          // Index Tip
           ctx.arc(pt.x, pt.y, isPinching ? 8 : 6.5, 0, Math.PI * 2);
           ctx.fillStyle = isPinching ? '#ffffff' : (isRightHand ? '#f59e0b' : '#c084fc');
-          ctx.shadowColor = isPinching ? '#f59e0b' : baseNeon;
-          ctx.shadowBlur = 14;
+          if (!isLightweight) {
+            ctx.shadowColor = isPinching ? '#f59e0b' : baseNeon;
+            ctx.shadowBlur = 10;
+          }
           ctx.fill();
+          ctx.shadowBlur = 0;
           ctx.strokeStyle = '#0f172a';
           ctx.lineWidth = 2;
           ctx.stroke();
@@ -203,38 +244,34 @@ export const HandSkeletonOverlay: React.FC<HandSkeletonOverlayProps> = ({
           ctx.lineWidth = 2;
           ctx.stroke();
         } else if (idx === 4) {
-          // Thumb Tip
           ctx.arc(pt.x, pt.y, isPinching ? 7 : 5.5, 0, Math.PI * 2);
           ctx.fillStyle = isPinching ? '#ffffff' : '#f59e0b';
-          ctx.shadowColor = '#f59e0b';
-          ctx.shadowBlur = 10;
           ctx.fill();
           ctx.strokeStyle = '#0f172a';
           ctx.lineWidth = 1.5;
           ctx.stroke();
         } else if (idx === 0) {
-          // Wrist
           ctx.arc(pt.x, pt.y, 6.5, 0, Math.PI * 2);
           ctx.fillStyle = isRightHand ? '#38bdf8' : '#a855f7';
-          ctx.shadowColor = isRightHand ? '#38bdf8' : '#a855f7';
-          ctx.shadowBlur = 8;
           ctx.fill();
         } else {
           ctx.arc(pt.x, pt.y, 4.5, 0, Math.PI * 2);
           ctx.fillStyle = isPinching ? '#fef08a' : '#e0f2fe';
-          ctx.shadowColor = isPinching ? '#f59e0b' : baseNeon;
-          ctx.shadowBlur = 4;
           ctx.fill();
         }
       });
 
-      // 4. Handedness Badge at Wrist
+      // 4. Handedness Badge at Wrist (cached measurement)
       const wrist = pts[0];
       if (wrist) {
         const label = isRightHand ? 'اليد اليمنى ✋' : 'اليد اليسرى ✋';
         ctx.font = 'bold 12px "Cairo", sans-serif';
-        const textMetrics = ctx.measureText(label);
-        const bgW = textMetrics.width + 16;
+        let textW = badgeWidthCacheRef.current[label];
+        if (!textW) {
+          textW = ctx.measureText(label).width;
+          badgeWidthCacheRef.current[label] = textW;
+        }
+        const bgW = textW + 16;
         const bgH = 22;
         const bgX = wrist.x - bgW / 2;
         const bgY = Math.min(canvas.height - 25, wrist.y + 16);
@@ -250,9 +287,7 @@ export const HandSkeletonOverlay: React.FC<HandSkeletonOverlayProps> = ({
         ctx.fillStyle = isRightHand ? '#38bdf8' : '#c084fc';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.shadowBlur = 0;
 
-        // If canvas is mirrored via CSS, flip text locally so it reads normally
         if (isMirrored) {
           ctx.save();
           ctx.translate(wrist.x, bgY + bgH / 2);
@@ -266,7 +301,7 @@ export const HandSkeletonOverlay: React.FC<HandSkeletonOverlayProps> = ({
     });
 
     ctx.restore();
-  }, [hands, videoWidth, videoHeight, isMirrored, trackingMode]);
+  }, [hands, videoWidth, videoHeight, isMirrored, trackingMode, isLightweight]);
 
   if (trackingMode === 'off' || !hands || hands.length === 0) {
     return null;
@@ -275,10 +310,13 @@ export const HandSkeletonOverlay: React.FC<HandSkeletonOverlayProps> = ({
   return (
     <canvas
       ref={canvasRef}
-      className="absolute inset-0 w-full h-full object-cover pointer-events-none z-25 transition-opacity duration-150"
+      className="absolute inset-0 w-full h-full object-cover pointer-events-none z-25"
       style={{
         transform: isMirrored ? 'scaleX(-1)' : 'none',
       }}
     />
   );
-};
+});
+
+HandSkeletonOverlay.displayName = 'HandSkeletonOverlay';
+

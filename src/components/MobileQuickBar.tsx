@@ -57,11 +57,12 @@ export const MobileQuickBar: React.FC<MobileQuickBarProps> = ({
   const [isColorDrawerOpen, setIsColorDrawerOpen] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
 
-  // Cycle tracking modes: finger_only -> one_hand -> two_hands -> finger_only
+  // Cycle tracking modes: finger_only -> one_hand -> two_hands -> off -> finger_only
   const cycleTrackingMode = () => {
     if (!onSelectTrackingMode) return;
     if (trackingMode === 'finger_only') onSelectTrackingMode('one_hand');
     else if (trackingMode === 'one_hand') onSelectTrackingMode('two_hands');
+    else if (trackingMode === 'two_hands') onSelectTrackingMode('off');
     else onSelectTrackingMode('finger_only');
   };
 
@@ -129,9 +130,11 @@ export const MobileQuickBar: React.FC<MobileQuickBarProps> = ({
               <>
                 <button
                   onClick={cycleTrackingMode}
-                  title="تبديل وضع التتبع: إصبع / يد / يدين"
+                  title="تبديل وضع التتبع: إصبع / يد / يدين / لمس سريع"
                   className={`p-1.5 px-2 rounded-xl active:scale-95 transition-all text-[11px] font-bold flex items-center gap-1 cursor-pointer ${
-                    trackingMode === 'finger_only'
+                    trackingMode === 'off'
+                      ? 'bg-amber-500 text-slate-950'
+                      : trackingMode === 'finger_only'
                       ? 'bg-emerald-600 text-white'
                       : trackingMode === 'one_hand'
                       ? 'bg-blue-600 text-white'
@@ -140,7 +143,7 @@ export const MobileQuickBar: React.FC<MobileQuickBarProps> = ({
                 >
                   <Hand className="w-3.5 h-3.5" />
                   <span>
-                    {trackingMode === 'finger_only' ? 'إصبع' : trackingMode === 'one_hand' ? 'يد' : 'يدين'}
+                    {trackingMode === 'off' ? 'لمس ⚡' : trackingMode === 'finger_only' ? 'إصبع' : trackingMode === 'one_hand' ? 'يد' : 'يدين'}
                   </span>
                 </button>
 

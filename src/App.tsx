@@ -9,6 +9,7 @@ import { LoginModal } from './components/LoginModal';
 import { SettingsView } from './components/SettingsView';
 import { sheetService, getArabicOrdinal, getStepAudioPrompt, RegistrantUser } from './services/sheetService';
 import { audioService } from './services/audioService';
+import { isMobileOrTabletDevice } from './utils/devicePerformance';
 import {
   ARRewardTier,
   AR_INTRO_ID,
@@ -133,11 +134,9 @@ export default function App() {
   const [guideColor, setGuideColor] = useState<GuideColor>('yellow');
   const [accuracy, setAccuracy] = useState<number>(0);
 
-  // AR & Virtual Cursor States
+  // AR Video & Crown Refs (virtual cursor updates bypass App React state for 60fps smoothness)
   const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
   const [crownCanvas, setCrownCanvas] = useState<HTMLCanvasElement | null>(null);
-  const [virtualCursor, setVirtualCursor] = useState<{ x: number; y: number } | null>(null);
-  const [isAirDrawing, setIsAirDrawing] = useState<boolean>(false);
   const [isAirPenLocked, setIsAirPenLocked] = useState<boolean>(false);
   const [saveArCameraPhoto, setSaveArCameraPhoto] = useState<boolean>(() => {
     try {
@@ -155,8 +154,10 @@ export default function App() {
     } catch {}
   }, []);
 
-  // AR Tracking & Camera Options (controlled from outside the whiteboard with the tools)
-  const [trackingMode, setTrackingMode] = useState<HandTrackingDisplayMode>('one_hand');
+  // AR Tracking & Camera Options (default to lightweight finger_only on mobile/tablet)
+  const [trackingMode, setTrackingMode] = useState<HandTrackingDisplayMode>(() =>
+    isMobileOrTabletDevice() ? 'finger_only' : 'one_hand'
+  );
   const [arRewards, setArRewards] = useState<ARRewardTier[]>(() => getStoredARRewards());
   const [arIntroReward, setArIntroReward] = useState<ARRewardTier>(() => getStoredARIntroReward());
   const [showCrown, setShowCrown] = useState<boolean>(false); // Dynamically shows entrance image on AR start, then switches to score reward
@@ -289,10 +290,9 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [syncHistoryState]);
 
-  // Handle AR Cursor from Camera Overlay
+  // Handle AR Cursor from Camera Overlay directly via Canvas Ref (zero App re-renders per frame)
   const handleCursorUpdate = useCallback((cursor: { x: number; y: number } | null, isPinching: boolean) => {
-    setVirtualCursor(cursor);
-    setIsAirDrawing(isPinching);
+    canvasRef.current?.updateAirCursor(cursor, isPinching);
   }, []);
 
   const handleToggleAirPenLock = useCallback(() => {
@@ -424,7 +424,9 @@ export default function App() {
   // Tracking Mode selection handler with spoken confirmation
   const handleSelectTrackingMode = (mode: HandTrackingDisplayMode) => {
     setTrackingMode(mode);
-    if (mode === 'finger_only') {
+    if (mode === 'off') {
+      audioService.speakArabic('تم إيقاف تتبع اليد للرسم باللمس السريع');
+    } else if (mode === 'finger_only') {
       audioService.speakArabic('تتبع إصبع السبابة');
     } else if (mode === 'one_hand') {
       audioService.speakArabic('تتبع هيكل اليد');
@@ -639,8 +641,6 @@ export default function App() {
             crownCanvas={crownCanvas}
             isMirrored={isMirrored}
             saveArCameraPhoto={saveArCameraPhoto}
-            virtualCursor={virtualCursor}
-            isAirDrawing={isAirDrawing}
             isAirPenLocked={isAirPenLocked}
             onToggleAirPenLock={handleToggleAirPenLock}
             currentRepetition={currentRepetition}

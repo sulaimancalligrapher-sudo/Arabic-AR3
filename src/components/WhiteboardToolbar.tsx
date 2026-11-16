@@ -84,7 +84,7 @@ interface WhiteboardToolbarProps {
 
 type ActivePopover = 'drawing_tools' | 'ar_settings' | null;
 
-export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
+export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = React.memo(({
   boardStyle,
   onSelectBoardStyle,
   penType,
@@ -286,7 +286,7 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
               <SlidersHorizontal className="w-5 h-5" />
               {/* Little indicator of active tracking mode */}
               <span className="absolute -top-1 -right-1 text-[11px] leading-none">
-                {trackingMode === 'finger_only' ? '☝️' : trackingMode === 'two_hands' ? '🖐️🖐️' : '🖐️'}
+                {trackingMode === 'off' ? '⚡' : trackingMode === 'finger_only' ? '☝️' : trackingMode === 'two_hands' ? '🖐️🖐️' : '🖐️'}
               </span>
             </button>
           )}
@@ -983,6 +983,25 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
                   {trackingMode === 'two_hands' && <Check className="w-4 h-4 shrink-0" />}
                 </button>
 
+                {/* 4. وضع اللمس السريع (إيقاف تتبع اليد لتسريع الجوال والتابلت) */}
+                <button
+                  onClick={() => onSelectTrackingMode('off')}
+                  className={`w-full p-2.5 rounded-xl border text-xs font-bold flex items-center justify-between transition-all cursor-pointer ${
+                    trackingMode === 'off'
+                      ? 'bg-amber-500 text-slate-950 border-amber-300 shadow-md'
+                      : 'bg-slate-800 hover:bg-slate-750 text-slate-200 border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">⚡</span>
+                    <div className="text-right">
+                      <div>إيقاف تتبع اليد (رسم باللمس فقط)</div>
+                      <div className="text-[10px] opacity-80 font-normal">أسرع أداء على الجوال والتابلت مع بقاء التاج</div>
+                    </div>
+                  </div>
+                  {trackingMode === 'off' && <Check className="w-4 h-4 shrink-0" />}
+                </button>
+
               </div>
             </div>
 
@@ -1078,14 +1097,18 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
             {arDetectionStatus && (
               <div className="p-2.5 bg-slate-950/80 rounded-xl border border-slate-800 flex items-center gap-2 text-[11px] text-slate-300">
                 <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${
-                  arDetectionStatus.handsCount > 0
+                  trackingMode === 'off'
+                    ? 'bg-amber-400'
+                    : arDetectionStatus.handsCount > 0
                     ? arDetectionStatus.isPinching
                       ? 'bg-amber-400 animate-ping'
                       : 'bg-emerald-400 animate-pulse'
                     : 'bg-slate-500'
                 }`} />
                 <span className="truncate">
-                  {arDetectionStatus.handsCount > 0
+                  {trackingMode === 'off'
+                    ? '⚡ الرسم باللمس السريع (تتبع اليد متوقف)'
+                    : arDetectionStatus.handsCount > 0
                     ? arDetectionStatus.isPinching
                       ? '✍️ يرسم الآن في الهواء'
                       : trackingMode === 'finger_only'
@@ -1105,4 +1128,6 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
 
     </header>
   );
-};
+});
+
+WhiteboardToolbar.displayName = 'WhiteboardToolbar';

@@ -20,7 +20,7 @@ interface ARCameraOverlayProps {
   onDetectionUpdate?: (status: { handsCount: number; isPinching: boolean; faceDetected: boolean; fps: number }) => void;
 }
 
-export const ARCameraOverlay: React.FC<ARCameraOverlayProps> = ({
+export const ARCameraOverlay: React.FC<ARCameraOverlayProps> = React.memo(({
   isARMode,
   trackingMode,
   showCrown,
@@ -53,10 +53,21 @@ export const ARCameraOverlay: React.FC<ARCameraOverlayProps> = ({
   dimsRef.current = dimensions;
   const isMirroredRef = useRef(isMirrored);
   isMirroredRef.current = isMirrored;
+  const trackingModeRef = useRef(trackingMode);
+  trackingModeRef.current = trackingMode;
+  const showCrownRef = useRef(showCrown);
+  showCrownRef.current = showCrown;
   const cursorCallbackRef = useRef(onCursorUpdate);
   cursorCallbackRef.current = onCursorUpdate;
   const detectionCallbackRef = useRef(onDetectionUpdate);
   detectionCallbackRef.current = onDetectionUpdate;
+  const lastDetectionEmitRef = useRef<{
+    time: number;
+    handsCount: number;
+    isPinching: boolean;
+    faceDetected: boolean;
+  }>({ time: 0, handsCount: -1, isPinching: false, faceDetected: false });
+  const hadOverlayRenderRef = useRef(false);
 
   // Track container dimensions with ResizeObserver
   useEffect(() => {
@@ -83,6 +94,10 @@ export const ARCameraOverlay: React.FC<ARCameraOverlayProps> = ({
 
   useEffect(() => {
     arTrackingService.setTrackHands(trackingMode !== 'off');
+    arTrackingService.setMaxHands(trackingMode === 'two_hands' ? 2 : 1);
+    if (trackingMode === 'off') {
+      cursorCallbackRef.current(null, false);
+    }
   }, [trackingMode]);
 
   useEffect(() => {
@@ -94,6 +109,7 @@ export const ARCameraOverlay: React.FC<ARCameraOverlayProps> = ({
     if (!isARMode) {
       arTrackingService.stop();
       cursorCallbackRef.current(null, false);
+      hadOverlayRenderRef.current = false;
       setArState({
         hands: [],
         face: null,
@@ -123,16 +139,44 @@ export const ARCameraOverlay: React.FC<ARCameraOverlayProps> = ({
         (state: ARTrackingState) => {
           if (!isCurrent) return;
 
-          setArState(state);
+          const hasHands = trackingModeRef.current !== 'off' && state.hands.length > 0;
+          const hasFace = showCrownRef.current && Boolean(state.face?.detected);
+          const hasOverlayNow = hasHands || hasFace;
 
-          // Notify detection status (for toolbar status indicators)
+          if (hasOverlayNow || hadOverlayRenderRef.current) {
+            hadOverlayRenderRef.current = hasOverlayNow;
+            setArState(state);
+          }
+
+          // Throttle toolbar status badge updates so UI doesn't re-render 30x/sec
           if (detectionCallbackRef.current) {
-            detectionCallbackRef.current({
-              handsCount: state.hands.length,
-              isPinching: state.isPinching,
-              faceDetected: !!state.face?.detected,
-              fps: state.fps
-            });
+            const now = performance.now();
+            const handsCount = state.hands.length;
+            const faceDetected = !!state.face?.detected;
+            const last = lastDetectionEmitRef.current;
+            const discreteChanged =
+              handsCount !== last.handsCount ||
+              state.isPinching !== last.isPinching ||
+              faceDetected !== last.faceDetected;
+
+            if (discreteChanged || now - last.time >= 600) {
+              lastDetectionEmitRef.current = {
+                time: now,
+                handsCount,
+                isPinching: state.isPinching,
+                faceDetected,
+              };
+              detectionCallbackRef.current({
+                handsCount,
+                isPinching: state.isPinching,
+                faceDetected,
+                fps: state.fps
+              });
+            }
+          }
+
+          if (trackingModeRef.current === 'off') {
+            return;
           }
 
           // Exact pixel-perfect projection from video element space to screen container
@@ -149,9 +193,9 @@ export const ARCameraOverlay: React.FC<ARCameraOverlayProps> = ({
           }
 
           // Get active drawing hand (prefer pinching hand, then right hand, then first detected)
-          const activeHand = state.hands.find(h => h.isPinching) || 
+          const activeHand = state.hands.find(h => h.isPinching) ||
             (state.hands.length > 1 && state.hands[1].handedness === 'Right' ? state.hands[1] : state.hands[0]);
-          
+
           if (!activeHand || !activeHand.landmarks || !activeHand.landmarks[8]) {
             cursorCallbackRef.current(null, false);
             return;
@@ -250,4 +294,7 @@ export const ARCameraOverlay: React.FC<ARCameraOverlayProps> = ({
       )}
     </div>
   );
-};
+});
+
+ARCameraOverlay.displayName = 'ARCameraOverlay';
+
