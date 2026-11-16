@@ -34,8 +34,11 @@ export const RoyalCrownOverlay: React.FC<RoyalCrownOverlayProps> = ({
     let cancelled = false;
     const loadImg = (useCors: boolean) => {
       const img = new Image();
-      if (useCors && !activeReward.imageUrl.startsWith('data:')) {
-        img.crossOrigin = 'anonymous';
+      if (!activeReward.imageUrl.startsWith('data:')) {
+        img.referrerPolicy = 'no-referrer';
+        if (useCors) {
+          img.crossOrigin = 'anonymous';
+        }
       }
       img.onload = () => {
         if (!cancelled) {

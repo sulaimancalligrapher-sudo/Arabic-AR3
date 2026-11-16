@@ -11,11 +11,13 @@ import { sheetService, getArabicOrdinal, getStepAudioPrompt, RegistrantUser } fr
 import { audioService } from './services/audioService';
 import {
   ARRewardTier,
+  AR_INTRO_ID,
   getStoredARRewards,
   saveStoredARRewards,
+  getStoredARIntroReward,
+  saveStoredARIntroReward,
   findARRewardForScore,
-  decodeARRewardsShareParam,
-  normalizeARRewardTiers
+  decodeARRewardsShareBundle
 } from './services/arRewardsService';
 import {
   Camera,
@@ -67,10 +69,16 @@ export default function App() {
       const params = new URLSearchParams(window.location.search);
       const arToken = params.get('ar');
       if (arToken) {
-        const decoded = decodeARRewardsShareParam(arToken);
-        if (decoded && decoded.length > 0) {
-          setArRewards(decoded);
-          saveStoredARRewards(decoded);
+        const decoded = decodeARRewardsShareBundle(arToken);
+        if (decoded) {
+          if (decoded.tiers.length > 0) {
+            setArRewards(decoded.tiers);
+            saveStoredARRewards(decoded.tiers);
+          }
+          if (decoded.intro) {
+            setArIntroReward(decoded.intro);
+            saveStoredARIntroReward(decoded.intro);
+          }
           appliedFromUrl = true;
         }
       }
@@ -86,10 +94,15 @@ export default function App() {
 
       if (!appliedFromUrl) {
         sheetService.fetchARRewardsFromSheet().then((res) => {
-          if (res.success && res.rewards.length > 0) {
-            const normalized = normalizeARRewardTiers(res.rewards);
-            setArRewards(normalized);
-            saveStoredARRewards(normalized);
+          if (res.success) {
+            if (res.rewards.length > 0) {
+              setArRewards(res.rewards);
+              saveStoredARRewards(res.rewards);
+            }
+            if (res.introReward) {
+              setArIntroReward(res.introReward);
+              saveStoredARIntroReward(res.introReward);
+            }
           }
         }).catch(() => {});
       }
@@ -133,8 +146,9 @@ export default function App() {
 
   // AR Tracking & Camera Options (controlled from outside the whiteboard with the tools)
   const [trackingMode, setTrackingMode] = useState<HandTrackingDisplayMode>('one_hand');
-  const [showCrown, setShowCrown] = useState<boolean>(false); // Head reward appears dynamically upon mastery!
   const [arRewards, setArRewards] = useState<ARRewardTier[]>(() => getStoredARRewards());
+  const [arIntroReward, setArIntroReward] = useState<ARRewardTier>(() => getStoredARIntroReward());
+  const [showCrown, setShowCrown] = useState<boolean>(false); // Dynamically shows entrance image on AR start, then switches to score reward
   const [lastArScore, setLastArScore] = useState<number | null>(null);
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
   const [isMirrored, setIsMirrored] = useState<boolean>(true);
@@ -292,7 +306,43 @@ export default function App() {
     return saveStoredARRewards(updated);
   }, []);
 
+  const handleUpdateARIntroReward = useCallback((updated: ARRewardTier): boolean => {
+    setArIntroReward(updated);
+    return saveStoredARIntroReward(updated);
+  }, []);
+
+  // Automatically enable entrance image & refresh Sheet rewards whenever entering AR mode
+  useEffect(() => {
+    if (boardStyle === 'ar_camera') {
+      if (lastArScore === null) {
+        setShowCrown(arIntroReward.enabled);
+      }
+      sheetService.fetchARRewardsFromSheet().then((res) => {
+        if (res.success) {
+          if (res.rewards.length > 0) {
+            setArRewards(res.rewards);
+            saveStoredARRewards(res.rewards);
+          }
+          if (res.introReward) {
+            setArIntroReward(res.introReward);
+            saveStoredARIntroReward(res.introReward);
+            if (lastArScore === null) {
+              setShowCrown(res.introReward.enabled);
+            }
+          }
+        }
+      }).catch(() => {});
+    }
+  }, [boardStyle]);
+
   const handlePreviewARReward = useCallback((tier: ARRewardTier) => {
+    if (tier.id === AR_INTRO_ID) {
+      setLastArScore(null);
+      setShowCrown(true);
+      setBoardStyle('ar_camera');
+      window.location.hash = '#/';
+      return;
+    }
     const low = Math.min(tier.minScore, tier.maxScore);
     const high = Math.max(tier.minScore, tier.maxScore);
     setLastArScore(Math.round((low + high) / 2));
@@ -301,18 +351,22 @@ export default function App() {
     window.location.hash = '#/';
   }, []);
 
-  const activeReward = showCrown ? findARRewardForScore(lastArScore, arRewards) : null;
+  const activeReward = showCrown
+    ? (lastArScore !== null
+        ? findARRewardForScore(lastArScore, arRewards)
+        : (arIntroReward.enabled ? arIntroReward : findARRewardForScore(null, arRewards)))
+    : null;
   const activeRewardTitle = (activeReward || findARRewardForScore(null, arRewards))?.title;
 
   const handleClearSideEffects = useCallback(() => {
     setAccuracy(0);
     setCelebrationMessage(null);
-    setShowCrown(false);
     setLastArScore(null);
+    setShowCrown(boardStyle === 'ar_camera' && arIntroReward.enabled);
     setCurrentRepetition(1);
     syncHistoryState();
     setTimeout(syncHistoryState, 0);
-  }, [syncHistoryState]);
+  }, [syncHistoryState, boardStyle, arIntroReward.enabled]);
 
   const handleClear = () => {
     canvasRef.current?.clearCanvas();
@@ -369,8 +423,8 @@ export default function App() {
     const next = !showCrown;
     if (next) {
       setLastArScore(null);
-      const previewReward = findARRewardForScore(null, arRewards);
-      audioService.speakArabic(previewReward ? `تم تفعيل ${previewReward.title}` : 'تم تثبيت التاج الملكي');
+      const target = arIntroReward.enabled ? arIntroReward : findARRewardForScore(null, arRewards);
+      audioService.speakArabic(target ? `تم تفعيل ${target.title}` : 'تم تثبيت صورة الرأس');
     }
     setShowCrown(next);
   };
@@ -409,16 +463,15 @@ export default function App() {
     }
   };
 
-  // Handle final goal achieved (only called on final repetition; AR reward strictly reserved for AR mode)
+  // Handle final goal achieved (switches off entrance image and shows score-matched AR reward if any)
   const handleGoalAchieved = (acc: number) => {
     if (boardStyle === 'ar_camera') {
       const matched = findARRewardForScore(acc, arRewards);
+      setLastArScore(acc);
       if (matched) {
-        setLastArScore(acc);
         setShowCrown(true);
         setCelebrationMessage(`${matched.title} — درجة الإتقان ${acc}%!`);
       } else {
-        setLastArScore(null);
         setShowCrown(false);
         setCelebrationMessage(null);
       }
@@ -463,6 +516,8 @@ export default function App() {
         onToggleSaveArCameraPhoto={handleToggleSaveArCameraPhoto}
         arRewards={arRewards}
         onUpdateARRewards={handleUpdateARRewards}
+        arIntroReward={arIntroReward}
+        onUpdateARIntroReward={handleUpdateARIntroReward}
         onPreviewARReward={handlePreviewARReward}
       />
     );
@@ -478,7 +533,11 @@ export default function App() {
           onSelectBoardStyle={(style) => {
             setBoardStyle(style);
             if (style === 'ar_camera') {
+              setLastArScore(null);
+              setShowCrown(arIntroReward.enabled);
               audioService.speakArabic('تم تفعيل وضع الواقع المعزز AR');
+            } else {
+              setShowCrown(false);
             }
           }}
           penType={penType}
@@ -703,8 +762,8 @@ export default function App() {
           setSelectedTemplate(tpl);
           setCurrentRepetition(1);
           setCelebrationMessage(null);
-          setShowCrown(false);
           setLastArScore(null);
+          setShowCrown(boardStyle === 'ar_camera' && arIntroReward.enabled);
           canvasRef.current?.clearCanvas();
           syncHistoryState();
         }}

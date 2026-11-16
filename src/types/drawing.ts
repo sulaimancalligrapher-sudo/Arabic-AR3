@@ -59,6 +59,8 @@ export interface Stroke {
   size: number;
   opacity: number;
   nibAngle?: number; // In degrees, typically 45° for Arabic calligraphy
+  normPoints?: { x: number; y: number; pressure?: number }[];
+  baseBox?: { x: number; y: number; w: number; h: number; size: number; isFreehand?: boolean };
   stepMeta?: {
     prevStepIndex: number;
     nextStepIndex: number;

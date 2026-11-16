@@ -43,8 +43,11 @@ import { GUIDE_COLORS } from '../data/drawingTemplates';
 import {
   ARRewardTier,
   AR_REWARD_PRESETS,
+  AR_INTRO_ID,
   getDefaultARRewards,
+  getDefaultARIntroReward,
   normalizeARRewardTiers,
+  normalizeSingleARReward,
   encodeARRewardsShareParam
 } from '../services/arRewardsService';
 
@@ -62,6 +65,8 @@ interface SettingsViewProps {
   onToggleSaveArCameraPhoto?: (val: boolean) => void;
   arRewards?: ARRewardTier[];
   onUpdateARRewards?: (tiers: ARRewardTier[]) => boolean | void;
+  arIntroReward?: ARRewardTier;
+  onUpdateARIntroReward?: (intro: ARRewardTier) => boolean | void;
   onPreviewARReward?: (tier: ARRewardTier) => void;
 }
 
@@ -79,6 +84,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onToggleSaveArCameraPhoto,
   arRewards = [],
   onUpdateARRewards,
+  arIntroReward,
+  onUpdateARIntroReward,
   onPreviewARReward,
 }) => {
   // Tabs: 'lessons' | 'table' | 'sheet' | 'board' | 'ar_rewards' | 'registrants'
@@ -91,6 +98,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   const [draftARRewards, setDraftARRewards] = useState<ARRewardTier[]>(() =>
     arRewards.length > 0 ? arRewards : getDefaultARRewards()
+  );
+  const [draftARIntro, setDraftARIntro] = useState<ARRewardTier>(() =>
+    arIntroReward ? normalizeSingleARReward({ ...arIntroReward, id: AR_INTRO_ID }, 0, AR_REWARD_PRESETS[4] || AR_REWARD_PRESETS[0]) : getDefaultARIntroReward()
   );
   const [hasUnsavedARChanges, setHasUnsavedARChanges] = useState(false);
   const [isSyncingARCloud, setIsSyncingARCloud] = useState(false);
@@ -107,15 +117,33 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
   }, [arRewards, hasUnsavedARChanges]);
 
+  useEffect(() => {
+    if (!hasUnsavedARChanges && arIntroReward) {
+      setDraftARIntro(normalizeSingleARReward({ ...arIntroReward, id: AR_INTRO_ID }, 0, AR_REWARD_PRESETS[4] || AR_REWARD_PRESETS[0]));
+    }
+  }, [arIntroReward, hasUnsavedARChanges]);
+
   const normalizeTiers = (tiers: ARRewardTier[]): ARRewardTier[] =>
     normalizeARRewardTiers(tiers);
 
-  const handleSaveARRewards = async (tiersToSave?: ARRewardTier[]): Promise<boolean> => {
+  const handleSaveARRewards = async (
+    tiersToSave?: ARRewardTier[],
+    introToSave?: ARRewardTier
+  ): Promise<boolean> => {
     const normalized = normalizeTiers(tiersToSave || draftARRewards);
+    const normalizedIntro = normalizeSingleARReward(
+      { ...(introToSave || draftARIntro), id: AR_INTRO_ID, minScore: 0, maxScore: 0 },
+      0,
+      AR_REWARD_PRESETS[4] || AR_REWARD_PRESETS[0]
+    );
+
     setDraftARRewards(normalized);
+    setDraftARIntro(normalizedIntro);
     if (!onUpdateARRewards) return false;
+
     const saved = onUpdateARRewards(normalized);
-    if (saved === false) {
+    const savedIntro = onUpdateARIntroReward ? onUpdateARIntroReward(normalizedIntro) : true;
+    if (saved === false || savedIntro === false) {
       audioService.playErrorSound();
       setArSaveNotice({
         type: 'error',
@@ -126,10 +154,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
     setHasUnsavedARChanges(false);
 
-    // Sync to Google Sheets ('AR Rewards' sheet) so all devices receive edits automatically
+    // Sync to Google Sheets ('AR Rewards' sheet) so all devices & browsers receive edits automatically
     if (sheetUrl.trim()) {
       setIsSyncingARCloud(true);
-      const cloudRes = await sheetService.saveARRewardsToSheet(normalized);
+      const cloudRes = await sheetService.saveARRewardsToSheet(normalized, normalizedIntro);
       setIsSyncingARCloud(false);
 
       if (cloudRes.success) {
@@ -138,10 +166,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           setDraftARRewards(syncedTiers);
           onUpdateARRewards(syncedTiers);
         }
+        if (cloudRes.introReward) {
+          setDraftARIntro(cloudRes.introReward);
+          onUpdateARIntroReward?.(cloudRes.introReward);
+        }
         audioService.playSuccessSound();
         setArSaveNotice({
           type: 'success',
-          text: '✅ تم الحفظ والمزامنة في ورقة «AR Rewards» في Google Sheets لتظهر على جميع الأجهزة تلقائياً!'
+          text: '✅ تم الحفظ والمزامنة في ورقة «AR Rewards» في Google Sheets لتظهر على جميع الأجهزة والمتصفحات!'
         });
         return true;
       }
@@ -182,20 +214,26 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     const res = await sheetService.fetchARRewardsFromSheet();
     setIsSyncingARCloud(false);
 
-    if (res.success && res.rewards.length > 0) {
-      const normalized = normalizeARRewardTiers(res.rewards);
-      setDraftARRewards(normalized);
-      onUpdateARRewards?.(normalized);
+    if (res.success && (res.rewards.length > 0 || res.introReward)) {
+      if (res.rewards.length > 0) {
+        const normalized = normalizeARRewardTiers(res.rewards);
+        setDraftARRewards(normalized);
+        onUpdateARRewards?.(normalized);
+      }
+      if (res.introReward) {
+        setDraftARIntro(res.introReward);
+        onUpdateARIntroReward?.(res.introReward);
+      }
       setHasUnsavedARChanges(false);
       audioService.playSuccessSound();
       setArSaveNotice({
         type: 'success',
-        text: `✅ تم جلب ${normalized.length} مستويات من ورقة «AR Rewards» في الشيت وتطبيقها!`
+        text: `✅ تم جلب إعدادات صورة البداية ومستويات المكافآت من ورقة «AR Rewards» وتطبيقها!`
       });
     } else if (res.success && res.rewards.length === 0) {
       setArSaveNotice({
         type: 'warning',
-        text: 'ورقة «AR Rewards» موجودة ولكنها فارغة حالياً — اضغط «حفظ الإعدادات» لرفع مستوياتك إليها.'
+        text: 'ورقة «AR Rewards» موجودة ولكنها فارغة حالياً — اضغط «حفظ ومزامنة مع الشيت» لرفع إعداداتك إليها.'
       });
     } else if (res.needsScriptUpdate) {
       setArSaveNotice({
@@ -213,7 +251,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   const handleCopyARShareLink = async () => {
     const normalized = normalizeTiers(draftARRewards);
-    const { token, skippedLocalImages } = encodeARRewardsShareParam(normalized);
+    const normalizedIntro = normalizeSingleARReward(
+      { ...draftARIntro, id: AR_INTRO_ID, minScore: 0, maxScore: 0 },
+      0,
+      AR_REWARD_PRESETS[4] || AR_REWARD_PRESETS[0]
+    );
+    const { token, skippedLocalImages } = encodeARRewardsShareParam(normalized, normalizedIntro);
     const shareUrl = `${window.location.origin}${window.location.pathname}?ar=${token}${window.location.hash || '#/'}`;
     try {
       await navigator.clipboard.writeText(shareUrl);
@@ -222,7 +265,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         type: skippedLocalImages ? 'warning' : 'success',
         text: skippedLocalImages
           ? '🔗 تم نسخ رابط الإعدادات! (ملاحظة: الصور المرفوعة من الجهاز تحتاج حفظها في الشيت أو رابط خارجي لتظهر بالرابط).'
-          : '🔗 تم نسخ رابط التطبيق مع تعديلاتك! أي جهاز يفتح هذا الرابط سيطبّق التعديلات فوراً.'
+          : '🔗 تم نسخ رابط التطبيق مع تعديلاتك! أي جهاز أو متصفح يفتح هذا الرابط سيطبّق التعديلات فوراً.'
       });
     } catch {
       setArSaveNotice({
@@ -233,7 +276,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   const handleUpdateTier = (tierId: string, updater: (t: ARRewardTier) => ARRewardTier) => {
-    setDraftARRewards(prev => prev.map(t => (t.id === tierId ? updater(t) : t)));
+    if (tierId === AR_INTRO_ID) {
+      setDraftARIntro(prev => updater(prev));
+    } else {
+      setDraftARRewards(prev => prev.map(t => (t.id === tierId ? updater(t) : t)));
+    }
     setHasUnsavedARChanges(true);
     setArSaveNotice(null);
   };
@@ -484,13 +531,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         setStatusMessage('تم الاتصال بنجاح! جدول البيانات متصل ولكنه فارغ حالياً.');
       }
 
-      // Also refresh AR Rewards silently if no local edits are pending
+      // Also refresh AR Rewards + entrance reward silently if no local edits are pending
       if (!hasUnsavedARChanges) {
         const arRes = await sheetService.fetchARRewardsFromSheet();
-        if (arRes.success && arRes.rewards.length > 0) {
-          const normalized = normalizeARRewardTiers(arRes.rewards);
-          setDraftARRewards(normalized);
-          onUpdateARRewards?.(normalized);
+        if (arRes.success && (arRes.rewards.length > 0 || arRes.introReward)) {
+          if (arRes.rewards.length > 0) {
+            const normalized = normalizeARRewardTiers(arRes.rewards);
+            setDraftARRewards(normalized);
+            onUpdateARRewards?.(normalized);
+          }
+          if (arRes.introReward) {
+            setDraftARIntro(arRes.introReward);
+            onUpdateARIntroReward?.(arRes.introReward);
+          }
         }
       }
     } else {
@@ -1644,8 +1697,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   disabled={isSyncingARCloud}
                   onClick={() => {
                     const defaults = getDefaultARRewards();
+                    const defaultIntro = getDefaultARIntroReward();
                     setDraftARRewards(defaults);
-                    void handleSaveARRewards(defaults);
+                    setDraftARIntro(defaultIntro);
+                    void handleSaveARRewards(defaults, defaultIntro);
                   }}
                   className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs font-bold cursor-pointer"
                 >
@@ -1692,6 +1747,288 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 )}
               </div>
             )}
+
+            {/* Dedicated Entrance Head Image Card (Before Results / Independent of Score) */}
+            <div
+              className={`p-5 rounded-2xl border transition-all shadow-lg ${
+                draftARIntro.enabled
+                  ? 'bg-gradient-to-br from-slate-900 via-slate-900 to-sky-950/30 border-sky-500/40'
+                  : 'bg-slate-900/50 border-slate-800 opacity-75'
+              }`}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-3 pb-4 mb-4 border-b border-slate-800">
+                <div className="flex items-center gap-2.5">
+                  <span className="px-2.5 py-1 rounded-xl bg-sky-500/15 border border-sky-500/40 text-sky-300 font-bold text-xs">
+                    بداية الدخول
+                  </span>
+                  <div>
+                    <div className="font-bold text-sm text-white">صورة بداية الدخول في الواقع المعزز (قبل ظهور الدرجات)</div>
+                    <div className="text-[11px] text-slate-400">
+                      تظهر تلقائياً عند دخول الطالب للواقع المعزز، وتختفي عند ظهور النتيجة لتُعرض صورة الدرجة بدلاً منها.
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {onPreviewARReward && (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const ok = await handleSaveARRewards(normalizeTiers(draftARRewards), draftARIntro);
+                        if (ok) {
+                          onPreviewARReward({ ...draftARIntro, id: AR_INTRO_ID, enabled: true });
+                        }
+                      }}
+                      className="px-3 py-1.5 rounded-xl text-xs font-bold bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/40 text-sky-300 flex items-center gap-1.5 cursor-pointer transition-all"
+                    >
+                      <Camera className="w-3.5 h-3.5" />
+                      <span>معاينة البداية في AR ✨</span>
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => handleUpdateTier(AR_INTRO_ID, t => ({ ...t, enabled: !t.enabled }))}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold border cursor-pointer transition-all ${
+                      draftARIntro.enabled
+                        ? 'bg-emerald-600/20 border-emerald-500/40 text-emerald-300'
+                        : 'bg-slate-800 border-slate-700 text-slate-400'
+                    }`}
+                  >
+                    {draftARIntro.enabled ? 'مفعّلة عند الدخول ✓' : 'معطّلة'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-center">
+                {/* Mini Head Placement Preview */}
+                <div className="lg:col-span-4 flex flex-col items-center justify-center p-4 rounded-2xl bg-slate-950 border border-slate-800 relative h-56 overflow-hidden">
+                  <span className="absolute top-2 right-2.5 text-[10px] font-bold text-sky-300 bg-slate-900/90 px-2 py-0.5 rounded border border-sky-500/30">
+                    معاينة بداية الدخول
+                  </span>
+
+                  <div className="relative mt-14 flex flex-col items-center">
+                    <div
+                      className="absolute flex flex-col items-center pointer-events-none transition-all duration-150"
+                      style={{
+                        width: `${Math.round(76 * draftARIntro.scaleRatio)}px`,
+                        top: `${Math.round(draftARIntro.offsetYRatio * 52 - 36)}px`,
+                      }}
+                    >
+                      {draftARIntro.title.trim() && (
+                        <span className="mb-1 px-2 py-0.5 rounded-md bg-slate-900/95 border border-sky-400 text-sky-200 font-bold text-[10px] whitespace-nowrap shadow">
+                          {draftARIntro.title}
+                        </span>
+                      )}
+                      {draftARIntro.imageUrl ? (
+                        <img
+                          src={formatDirectImageUrl(draftARIntro.imageUrl) || draftARIntro.imageUrl}
+                          alt={draftARIntro.title}
+                          referrerPolicy="no-referrer"
+                          className="w-full h-auto max-h-24 object-contain drop-shadow-[0_2px_10px_rgba(56,189,248,0.45)]"
+                        />
+                      ) : null}
+                    </div>
+
+                    <div className="w-[76px] h-[90px] rounded-full bg-gradient-to-b from-slate-700 to-slate-800 border-2 border-slate-600 flex flex-col items-center justify-center shadow-inner">
+                      <div className="flex gap-3 mb-2">
+                        <span className="w-2 h-2 rounded-full bg-slate-400" />
+                        <span className="w-2 h-2 rounded-full bg-slate-400" />
+                      </div>
+                      <div className="w-6 h-2.5 border-b-2 border-slate-400 rounded-b-full" />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Controls */}
+                <div className="lg:col-span-8 space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
+                    <div className="sm:col-span-12">
+                      <label className="block text-[11px] font-bold text-sky-300 mb-1">
+                        العنوان الترحيبي الظاهر فوق الرأس قبل النتيجة (أو اتركه فارغاً للصورة فقط):
+                      </label>
+                      <input
+                        type="text"
+                        value={draftARIntro.title}
+                        onChange={(e) => handleUpdateTier(AR_INTRO_ID, t => ({ ...t, title: e.target.value }))}
+                        placeholder="مثلاً: 🌟 مستعد للكتابة بالواقع المعزز ✨"
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs font-bold text-white focus:outline-hidden focus:border-sky-400"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Built-in Presets + Custom URL (Drive) + Upload to Drive */}
+                  <div className="space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <label className="text-[11px] font-bold text-sky-300">
+                        صورة بداية الدخول (تصميم جاهز أو رابط قوقل درايف أو رفع من الجهاز):
+                      </label>
+                      <label className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-sky-600/20 hover:bg-sky-600/30 border border-sky-500/40 text-sky-300 text-[11px] font-bold cursor-pointer ${uploadingTierId === AR_INTRO_ID ? 'opacity-70 pointer-events-none' : ''}`}>
+                        {uploadingTierId === AR_INTRO_ID ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Upload className="w-3.5 h-3.5" />
+                        )}
+                        <span>{uploadingTierId === AR_INTRO_ID ? 'جاري الرفع لقوقل درايف...' : 'رفع صورة لقوقل درايف'}</span>
+                        <input
+                          type="file"
+                          accept="image/png,image/webp,image/svg+xml,image/*"
+                          className="hidden"
+                          disabled={uploadingTierId === AR_INTRO_ID}
+                          onChange={(e) => {
+                            handleUploadRewardImage(AR_INTRO_ID, e.target.files?.[0]);
+                            e.target.value = '';
+                          }}
+                        />
+                      </label>
+                    </div>
+
+                    <div className="p-2.5 rounded-xl bg-slate-950/85 border border-slate-800 space-y-1.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <label className="text-[11px] font-bold text-slate-300">
+                          رابط الصورة (يقبل روابط Google Drive أو رابط مباشر PNG):
+                        </label>
+                        {!draftARIntro.presetId && extractDriveFileId(draftARIntro.imageUrl) && (
+                          <span className="text-[10px] font-bold text-emerald-400 flex items-center gap-1">
+                            <CheckCircle2 className="w-3 h-3" />
+                            <span>رابط Google Drive جاهز ✓</span>
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="url"
+                          dir="ltr"
+                          value={draftARIntro.presetId ? '' : (draftARIntro.imageUrl.startsWith('data:image/') ? '' : draftARIntro.imageUrl)}
+                          onChange={(e) => {
+                            const rawVal = e.target.value;
+                            if (!rawVal.trim()) {
+                              const fallbackPreset = AR_REWARD_PRESETS[4] || AR_REWARD_PRESETS[0];
+                              handleUpdateTier(AR_INTRO_ID, t => ({
+                                ...t,
+                                presetId: fallbackPreset.id,
+                                imageUrl: fallbackPreset.imageUrl,
+                              }));
+                            } else {
+                              const converted = formatDirectImageUrl(rawVal.trim()) || rawVal.trim();
+                              handleUpdateTier(AR_INTRO_ID, t => ({
+                                ...t,
+                                presetId: undefined,
+                                imageUrl: converted,
+                              }));
+                            }
+                          }}
+                          placeholder={
+                            draftARIntro.presetId
+                              ? 'مختار من التصاميم الجاهزة — أو الصق هنا رابط قوقل درايف...'
+                              : draftARIntro.imageUrl.startsWith('data:image/')
+                              ? 'صورة مرفوعة محلياً — أو الصق رابط قوقل درايف هنا'
+                              : 'https://drive.google.com/file/d/.../view'
+                          }
+                          className="w-full px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-[11px] font-mono text-sky-300 placeholder-slate-500 focus:outline-hidden focus:border-sky-400"
+                        />
+                        {!draftARIntro.presetId && draftARIntro.imageUrl && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const fallbackPreset = AR_REWARD_PRESETS[4] || AR_REWARD_PRESETS[0];
+                              handleUpdateTier(AR_INTRO_ID, t => ({
+                                ...t,
+                                presetId: fallbackPreset.id,
+                                imageUrl: fallbackPreset.imageUrl,
+                              }));
+                            }}
+                            className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-bold shrink-0 cursor-pointer"
+                          >
+                            مسح
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      {AR_REWARD_PRESETS.map(preset => {
+                        const selected = draftARIntro.presetId === preset.id;
+                        return (
+                          <button
+                            key={preset.id}
+                            type="button"
+                            onClick={() =>
+                              handleUpdateTier(AR_INTRO_ID, t => ({
+                                ...t,
+                                presetId: preset.id,
+                                imageUrl: preset.imageUrl,
+                                scaleRatio: preset.defaultScaleRatio,
+                                offsetYRatio: preset.defaultOffsetYRatio,
+                              }))
+                            }
+                            className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-bold flex items-center gap-2 cursor-pointer transition-all ${
+                              selected
+                                ? 'bg-sky-500/20 border-sky-400 text-sky-200 ring-1 ring-sky-400/50'
+                                : 'bg-slate-950 border-slate-800 text-slate-300 hover:bg-slate-800'
+                            }`}
+                          >
+                            <img src={preset.imageUrl} alt={preset.name} className="w-6 h-5 object-contain" />
+                            <span>{preset.name}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Scale & Offset Sliders */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                    <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800 space-y-1.5">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="font-bold text-slate-300">حجم الصورة نسبةً للرأس:</span>
+                        <span className="font-mono font-bold text-amber-400">
+                          {Math.round(draftARIntro.scaleRatio * 100)}%
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0.7}
+                        max={2.2}
+                        step={0.05}
+                        value={draftARIntro.scaleRatio}
+                        onChange={(e) =>
+                          handleUpdateTier(AR_INTRO_ID, t => ({ ...t, scaleRatio: Number(e.target.value) }))
+                        }
+                        className="w-full accent-amber-500 cursor-pointer"
+                      />
+                    </div>
+
+                    <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800 space-y-1.5">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="font-bold text-slate-300">الإزاحة أعلى / أسفل الرأس:</span>
+                        <span className="font-mono font-bold text-sky-400">
+                          {draftARIntro.offsetYRatio > 0 ? `+${draftARIntro.offsetYRatio.toFixed(2)}` : draftARIntro.offsetYRatio.toFixed(2)}
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min={-0.95}
+                        max={0.45}
+                        step={0.05}
+                        value={draftARIntro.offsetYRatio}
+                        onChange={(e) =>
+                          handleUpdateTier(AR_INTRO_ID, t => ({ ...t, offsetYRatio: Number(e.target.value) }))
+                        }
+                        className="w-full accent-sky-400 cursor-pointer"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Tiers Editor Cards Header */}
+            <div className="flex items-center justify-between pt-2">
+              <h4 className="text-xs sm:text-sm font-bold text-amber-300 flex items-center gap-2">
+                <Crown className="w-4 h-4" />
+                <span>صور المكافآت المرتبطة بالدرجات (تظهر وتبدّل صورة البداية فور ظهور النتيجة)</span>
+              </h4>
+            </div>
 
             {/* Tiers Editor Cards */}
             <div className="space-y-5">

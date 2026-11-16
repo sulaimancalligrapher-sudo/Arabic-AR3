@@ -1,7 +1,7 @@
 import { DrawingTemplate, LessonStep, LessonDifficulty } from '../types/drawing';
 import { DRAWING_TEMPLATES } from '../data/drawingTemplates';
 import { formatDirectImageUrl } from '../utils/urlHelper';
-import { ARRewardTier, normalizeARRewardTiers } from './arRewardsService';
+import { ARRewardTier, splitARRewardsPayload } from './arRewardsService';
 
 const SHEET_URL_KEY = 'arabic_ar_sheet_url';
 const LOCAL_TEMPLATES_KEY = 'arabic_ar_horizontal_templates_v2';
@@ -1076,7 +1076,9 @@ class SheetService {
       const fetchUrl = `${url}${url.includes('?') ? '&' : '?'}_ts=${Date.now()}`;
       const response = await fetch(fetchUrl, {
         method: 'GET',
-        headers: { 'Accept': 'application/json' },
+        cache: 'no-store',
+        credentials: 'omit',
+        redirect: 'follow',
       });
 
       if (!response.ok) {
@@ -1165,6 +1167,9 @@ class SheetService {
     try {
       const response = await fetch(url, {
         method: 'POST',
+        cache: 'no-store',
+        credentials: 'omit',
+        redirect: 'follow',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({
           action: 'upsert',
@@ -1203,6 +1208,9 @@ class SheetService {
     try {
       const response = await fetch(url, {
         method: 'POST',
+        cache: 'no-store',
+        credentials: 'omit',
+        redirect: 'follow',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({ action: 'delete', topic, title, imageUrl })
       });
@@ -1226,6 +1234,9 @@ class SheetService {
     try {
       const response = await fetch(url, {
         method: 'POST',
+        cache: 'no-store',
+        credentials: 'omit',
+        redirect: 'follow',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({
           action: 'sync_all',
@@ -1342,10 +1353,12 @@ class SheetService {
     }
 
     try {
-      const fetchUrl = `${url}${url.includes('?') ? '&' : '?'}action=get_registrants`;
+      const fetchUrl = `${url}${url.includes('?') ? '&' : '?'}action=get_registrants&_ts=${Date.now()}`;
       const response = await fetch(fetchUrl, {
         method: 'GET',
-        headers: { 'Accept': 'application/json' }
+        cache: 'no-store',
+        credentials: 'omit',
+        redirect: 'follow',
       });
 
       if (!response.ok) {
@@ -1454,6 +1467,9 @@ class SheetService {
     try {
       const response = await fetch(url, {
         method: 'POST',
+        cache: 'no-store',
+        credentials: 'omit',
+        redirect: 'follow',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({
           action: 'add_registrant',
@@ -1499,6 +1515,9 @@ class SheetService {
     try {
       const response = await fetch(url, {
         method: 'POST',
+        cache: 'no-store',
+        credentials: 'omit',
+        redirect: 'follow',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({
           action: 'submit_answer',
@@ -1537,19 +1556,22 @@ class SheetService {
   public async fetchARRewardsFromSheet(): Promise<{
     success: boolean;
     rewards: ARRewardTier[];
+    introReward?: ARRewardTier | null;
     needsScriptUpdate?: boolean;
     error?: string;
   }> {
     const url = this.getStoredSheetUrl();
     if (!url) {
-      return { success: false, rewards: [] };
+      return { success: false, rewards: [], introReward: null };
     }
 
     try {
       const fetchUrl = `${url}${url.includes('?') ? '&' : '?'}action=get_ar_rewards&_ts=${Date.now()}`;
       const response = await fetch(fetchUrl, {
         method: 'GET',
-        headers: { 'Accept': 'application/json' },
+        cache: 'no-store',
+        credentials: 'omit',
+        redirect: 'follow',
       });
 
       if (!response.ok) {
@@ -1558,8 +1580,11 @@ class SheetService {
 
       const json = await response.json();
       if (json.status === 'success' && Array.isArray(json.rewards)) {
-        const normalized = json.rewards.length > 0 ? normalizeARRewardTiers(json.rewards) : [];
-        return { success: true, rewards: normalized };
+        if (json.rewards.length === 0) {
+          return { success: true, rewards: [], introReward: null };
+        }
+        const { intro, tiers } = splitARRewardsPayload(json.rewards);
+        return { success: true, rewards: tiers, introReward: intro };
       }
 
       // Old Apps Script deployments fall through to returning lessons list without json.rewards
@@ -1567,6 +1592,7 @@ class SheetService {
         return {
           success: false,
           rewards: [],
+          introReward: null,
           needsScriptUpdate: true,
           error: 'يتطلب تحديث كود Apps Script لدعم ورقة AR Rewards'
         };
@@ -1575,12 +1601,14 @@ class SheetService {
       return {
         success: false,
         rewards: [],
+        introReward: null,
         error: json.message || 'تعذر قراءة مكافآت الواقع المعزز من الشيت'
       };
     } catch (err: any) {
       return {
         success: false,
         rewards: [],
+        introReward: null,
         error: err.message || 'تعذر الاتصال بـ Google Sheets'
       };
     }
@@ -1589,9 +1617,13 @@ class SheetService {
   /**
    * Save AR Head Rewards configuration to 'AR Rewards' sheet in Google Sheets
    */
-  public async saveARRewardsToSheet(tiers: ARRewardTier[]): Promise<{
+  public async saveARRewardsToSheet(
+    tiers: ARRewardTier[],
+    introReward?: ARRewardTier | null
+  ): Promise<{
     success: boolean;
     rewards?: ARRewardTier[];
+    introReward?: ARRewardTier | null;
     needsScriptUpdate?: boolean;
     error?: string;
   }> {
@@ -1600,13 +1632,20 @@ class SheetService {
       return { success: false, error: 'رابط Google Apps Script غير مضبوط' };
     }
 
+    const allToSend = introReward
+      ? [{ ...introReward, id: '__ar_intro__', minScore: 0, maxScore: 0 }, ...tiers.filter(t => t.id !== '__ar_intro__')]
+      : tiers;
+
     try {
       const response = await fetch(url, {
         method: 'POST',
+        cache: 'no-store',
+        credentials: 'omit',
+        redirect: 'follow',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({
           action: 'save_ar_rewards',
-          rewards: tiers.map(t => ({
+          rewards: allToSend.map(t => ({
             id: t.id,
             title: t.title,
             minScore: t.minScore,
@@ -1626,10 +1665,11 @@ class SheetService {
 
       const json = await response.json();
       if (json.status === 'success') {
-        const normalized = Array.isArray(json.rewards)
-          ? normalizeARRewardTiers(json.rewards)
-          : tiers;
-        return { success: true, rewards: normalized };
+        if (Array.isArray(json.rewards)) {
+          const { intro, tiers: normalizedTiers } = splitARRewardsPayload(json.rewards);
+          return { success: true, rewards: normalizedTiers, introReward: intro };
+        }
+        return { success: true, rewards: tiers, introReward: introReward || null };
       }
 
       const msg = String(json.message || '');
@@ -1671,6 +1711,9 @@ class SheetService {
     try {
       const response = await fetch(url, {
         method: 'POST',
+        cache: 'no-store',
+        credentials: 'omit',
+        redirect: 'follow',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({
           action: 'upload_ar_reward_image',

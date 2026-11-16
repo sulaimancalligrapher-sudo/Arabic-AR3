@@ -22,6 +22,8 @@ export interface ARRewardPreset {
 }
 
 const AR_REWARDS_STORAGE_KEY = 'arabic_calligraphy_ar_rewards_v1';
+const AR_INTRO_STORAGE_KEY = 'arabic_calligraphy_ar_intro_v1';
+export const AR_INTRO_ID = '__ar_intro__';
 
 const svgToDataUrl = (svg: string): string =>
   `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg.trim())}`;
@@ -187,64 +189,111 @@ export const getDefaultARRewards = (): ARRewardTier[] => [
   },
 ];
 
+export const getDefaultARIntroReward = (): ARRewardTier => {
+  const preset = AR_REWARD_PRESETS[4] || AR_REWARD_PRESETS[0];
+  return {
+    id: AR_INTRO_ID,
+    title: '🌟 مستعد للكتابة بالواقع المعزز ✨',
+    minScore: 0,
+    maxScore: 0,
+    presetId: preset.id,
+    imageUrl: preset.imageUrl,
+    scaleRatio: preset.defaultScaleRatio,
+    offsetYRatio: preset.defaultOffsetYRatio,
+    enabled: true,
+  };
+};
+
+export const normalizeSingleARReward = (
+  item: any,
+  idx = 0,
+  fallbackPreset: ARRewardPreset = AR_REWARD_PRESETS[0]
+): ARRewardTier => {
+  const presetId = typeof item?.presetId === 'string' && item.presetId.trim()
+    ? item.presetId.trim()
+    : undefined;
+  const matchedPreset = presetId ? AR_REWARD_PRESETS.find(p => p.id === presetId) : undefined;
+  const rawUrl = typeof item?.imageUrl === 'string' ? item.imageUrl.trim() : '';
+
+  let resolvedImageUrl = '';
+  if (matchedPreset && (!rawUrl || rawUrl.startsWith('preset:'))) {
+    resolvedImageUrl = matchedPreset.imageUrl;
+  } else if (rawUrl.startsWith('data:image/')) {
+    resolvedImageUrl = rawUrl;
+  } else if (rawUrl) {
+    resolvedImageUrl = formatDirectImageUrl(rawUrl) || rawUrl;
+  } else {
+    resolvedImageUrl = fallbackPreset.imageUrl;
+  }
+
+  const rawMin = Number(item?.minScore);
+  const rawMax = Number(item?.maxScore);
+  const a = Number.isFinite(rawMin) ? Math.max(0, Math.min(100, Math.round(rawMin))) : 0;
+  const b = Number.isFinite(rawMax) ? Math.max(0, Math.min(100, Math.round(rawMax))) : 100;
+
+  const rawScale = Number(item?.scaleRatio);
+  const scaleRatio = Number.isFinite(rawScale)
+    ? Math.max(0.7, Math.min(2.2, Number(rawScale.toFixed(2))))
+    : (matchedPreset?.defaultScaleRatio ?? fallbackPreset.defaultScaleRatio);
+
+  const rawOffset = Number(item?.offsetYRatio);
+  const offsetYRatio = Number.isFinite(rawOffset)
+    ? Math.max(-0.95, Math.min(0.45, Number(rawOffset.toFixed(2))))
+    : (matchedPreset?.defaultOffsetYRatio ?? fallbackPreset.defaultOffsetYRatio);
+
+  const enabledVal = item?.enabled;
+  const enabled =
+    typeof enabledVal === 'boolean'
+      ? enabledVal
+      : !['false', '0', 'لا', 'معطل'].includes(String(enabledVal ?? 'true').trim().toLowerCase());
+
+  const itemId = String(item?.id || `tier_${idx}_${Date.now()}`);
+  const isIntro = itemId === AR_INTRO_ID;
+
+  return {
+    id: itemId,
+    title: item?.title !== undefined
+      ? String(item.title)
+      : (matchedPreset?.defaultTitle ?? fallbackPreset.defaultTitle),
+    minScore: isIntro ? 0 : Math.min(a, b),
+    maxScore: isIntro ? 0 : Math.max(a, b),
+    presetId: matchedPreset ? matchedPreset.id : undefined,
+    imageUrl: resolvedImageUrl,
+    scaleRatio,
+    offsetYRatio,
+    enabled,
+  };
+};
+
 export const normalizeARRewardTiers = (rawList: any[]): ARRewardTier[] => {
   if (!Array.isArray(rawList)) return getDefaultARRewards();
 
   const normalized = rawList
-    .filter(item => item && typeof item === 'object')
-    .map((item, idx) => {
-      const presetId = typeof item.presetId === 'string' && item.presetId.trim()
-        ? item.presetId.trim()
-        : undefined;
-      const matchedPreset = presetId ? AR_REWARD_PRESETS.find(p => p.id === presetId) : undefined;
-      const rawUrl = typeof item.imageUrl === 'string' ? item.imageUrl.trim() : '';
-
-      let resolvedImageUrl = '';
-      if (matchedPreset && (!rawUrl || rawUrl.startsWith('preset:'))) {
-        resolvedImageUrl = matchedPreset.imageUrl;
-      } else if (rawUrl.startsWith('data:image/')) {
-        resolvedImageUrl = rawUrl;
-      } else if (rawUrl) {
-        resolvedImageUrl = formatDirectImageUrl(rawUrl) || rawUrl;
-      } else {
-        resolvedImageUrl = AR_REWARD_PRESETS[0].imageUrl;
-      }
-
-      const rawMin = Number(item.minScore);
-      const rawMax = Number(item.maxScore);
-      const a = Number.isFinite(rawMin) ? Math.max(0, Math.min(100, Math.round(rawMin))) : 0;
-      const b = Number.isFinite(rawMax) ? Math.max(0, Math.min(100, Math.round(rawMax))) : 100;
-
-      const rawScale = Number(item.scaleRatio);
-      const scaleRatio = Number.isFinite(rawScale)
-        ? Math.max(0.7, Math.min(2.2, Number(rawScale.toFixed(2))))
-        : (matchedPreset?.defaultScaleRatio ?? 1.35);
-
-      const rawOffset = Number(item.offsetYRatio);
-      const offsetYRatio = Number.isFinite(rawOffset)
-        ? Math.max(-0.95, Math.min(0.45, Number(rawOffset.toFixed(2))))
-        : (matchedPreset?.defaultOffsetYRatio ?? -0.45);
-
-      const enabledVal = item.enabled;
-      const enabled =
-        typeof enabledVal === 'boolean'
-          ? enabledVal
-          : !['false', '0', 'لا', 'معطل'].includes(String(enabledVal ?? 'true').trim().toLowerCase());
-
-      return {
-        id: String(item.id || `tier_${idx}_${Date.now()}`),
-        title: String(item.title ?? matchedPreset?.defaultTitle ?? '👑 بطل الخط العربي'),
-        minScore: Math.min(a, b),
-        maxScore: Math.max(a, b),
-        presetId: matchedPreset ? matchedPreset.id : undefined,
-        imageUrl: resolvedImageUrl,
-        scaleRatio,
-        offsetYRatio,
-        enabled,
-      };
-    });
+    .filter(item => item && typeof item === 'object' && String(item.id || '') !== AR_INTRO_ID)
+    .map((item, idx) => normalizeSingleARReward(item, idx, AR_REWARD_PRESETS[0]));
 
   return normalized.length > 0 ? normalized : getDefaultARRewards();
+};
+
+export const splitARRewardsPayload = (
+  rawList: any[]
+): { intro: ARRewardTier | null; tiers: ARRewardTier[] } => {
+  if (!Array.isArray(rawList)) {
+    return { intro: null, tiers: getDefaultARRewards() };
+  }
+
+  const validItems = rawList.filter(item => item && typeof item === 'object');
+  const rawIntro = validItems.find(item => String(item.id || '').trim() === AR_INTRO_ID);
+  const intro = rawIntro
+    ? normalizeSingleARReward(rawIntro, 0, AR_REWARD_PRESETS[4] || AR_REWARD_PRESETS[0])
+    : null;
+
+  const rawTiers = validItems.filter(item => String(item.id || '').trim() !== AR_INTRO_ID);
+  const tiers = rawTiers.length > 0
+    ? rawTiers.map((item, idx) => normalizeSingleARReward(item, idx, AR_REWARD_PRESETS[0]))
+    : getDefaultARRewards();
+
+  return { intro, tiers };
 };
 
 export const getStoredARRewards = (): ARRewardTier[] => {
@@ -262,10 +311,35 @@ export const getStoredARRewards = (): ARRewardTier[] => {
 
 export const saveStoredARRewards = (tiers: ARRewardTier[]): boolean => {
   try {
-    localStorage.setItem(AR_REWARDS_STORAGE_KEY, JSON.stringify(tiers));
+    const clean = tiers.filter(t => t.id !== AR_INTRO_ID);
+    localStorage.setItem(AR_REWARDS_STORAGE_KEY, JSON.stringify(clean));
     return true;
   } catch (err) {
     console.warn('Could not save AR rewards to localStorage:', err);
+    return false;
+  }
+};
+
+export const getStoredARIntroReward = (): ARRewardTier => {
+  try {
+    const raw = localStorage.getItem(AR_INTRO_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        return normalizeSingleARReward({ ...parsed, id: AR_INTRO_ID }, 0, AR_REWARD_PRESETS[4] || AR_REWARD_PRESETS[0]);
+      }
+    }
+  } catch {}
+  return getDefaultARIntroReward();
+};
+
+export const saveStoredARIntroReward = (intro: ARRewardTier): boolean => {
+  try {
+    const normalized = normalizeSingleARReward({ ...intro, id: AR_INTRO_ID }, 0, AR_REWARD_PRESETS[4] || AR_REWARD_PRESETS[0]);
+    localStorage.setItem(AR_INTRO_STORAGE_KEY, JSON.stringify(normalized));
+    return true;
+  } catch (err) {
+    console.warn('Could not save AR intro reward to localStorage:', err);
     return false;
   }
 };
@@ -274,7 +348,7 @@ export const findARRewardForScore = (
   score: number | null,
   tiers: ARRewardTier[]
 ): ARRewardTier | null => {
-  const enabledTiers = tiers.filter(t => t.enabled);
+  const enabledTiers = tiers.filter(t => t.enabled && t.id !== AR_INTRO_ID);
   if (enabledTiers.length === 0) return null;
 
   if (score === null || score === undefined) {
@@ -295,10 +369,12 @@ export const findARRewardForScore = (
 
 // Compact UTF-8 safe URL share encoding/decoding for instant cross-device sharing
 export const encodeARRewardsShareParam = (
-  tiers: ARRewardTier[]
+  tiers: ARRewardTier[],
+  intro?: ARRewardTier | null
 ): { token: string; skippedLocalImages: boolean } => {
   let skippedLocalImages = false;
-  const compact = tiers.map(t => {
+  const allItems = intro ? [{ ...intro, id: AR_INTRO_ID }, ...tiers.filter(t => t.id !== AR_INTRO_ID)] : tiers;
+  const compact = allItems.map(t => {
     let img = '';
     if (!t.presetId && t.imageUrl) {
       if (t.imageUrl.startsWith('http://') || t.imageUrl.startsWith('https://')) {
@@ -330,7 +406,9 @@ export const encodeARRewardsShareParam = (
   return { token: base64, skippedLocalImages };
 };
 
-export const decodeARRewardsShareParam = (token: string): ARRewardTier[] | null => {
+export const decodeARRewardsShareBundle = (
+  token: string
+): { tiers: ARRewardTier[]; intro: ARRewardTier | null } | null => {
   try {
     if (!token || !token.trim()) return null;
     let b64 = token.trim().replace(/-/g, '+').replace(/_/g, '/');
@@ -355,8 +433,13 @@ export const decodeARRewardsShareParam = (token: string): ARRewardTier[] | null 
       offsetYRatio: c.y,
       enabled: c.e !== 0,
     }));
-    return normalizeARRewardTiers(expanded);
+    return splitARRewardsPayload(expanded);
   } catch {
     return null;
   }
+};
+
+export const decodeARRewardsShareParam = (token: string): ARRewardTier[] | null => {
+  const bundle = decodeARRewardsShareBundle(token);
+  return bundle ? bundle.tiers : null;
 };

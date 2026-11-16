@@ -274,11 +274,19 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     totalCells: number;
   } | null>(null);
   const drawBoundsRef = useRef<{ drawX: number; drawY: number; drawW: number; drawH: number } | null>(null);
+  const templateNaturalSizeRef = useRef<{ w: number; h: number }>({ w: 500, h: 500 });
+  const drawGuideReqIdRef = useRef<number>(0);
+  const [guideRenderVersion, setGuideRenderVersion] = useState(0);
   const stepScoresRef = useRef<{ startEnd: number; path: number; brokenAway: boolean }[]>([]);
   const hasAchievedGoalRef = useRef(false);
 
   // Canvas dimensions
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
+  const prevViewportSizeRef = useRef<{ width: number; height: number; isMobileLandscape: boolean }>({
+    width: 800,
+    height: 600,
+    isMobileLandscape
+  });
 
   // Update canvas size on container resize (including portrait <-> landscape orientation changes)
   useEffect(() => {
@@ -332,7 +340,140 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     });
   }, [templateTransform]);
 
-  // Sync canvas width/height attributes with display dimensions and step index
+  // Helper to compute exact template box for any viewport dimensions
+  const computeTemplateBox = useCallback((
+    canvasW: number,
+    canvasH: number,
+    natW: number,
+    natH: number,
+    mobileLandscape: boolean,
+    transform: TemplateTransform
+  ) => {
+    const topReserved = mobileLandscape ? 36 : 0;
+    const padRatio = mobileLandscape ? 0.04 : 0.08;
+    const padding = Math.min(canvasW, canvasH) * padRatio;
+    const availW = canvasW - padding * 2;
+    const availH = Math.max(80, canvasH - topReserved - padding * 2);
+    const baseScale = Math.min(availW / (natW || 500), availH / (natH || 500));
+    const drawW = (natW || 500) * baseScale * transform.scale;
+    const drawH = (natH || 500) * baseScale * transform.scale;
+    const drawX = (canvasW - drawW) / 2 + transform.offsetX * canvasW;
+    const drawY = topReserved + ((canvasH - topReserved) - drawH) / 2 + transform.offsetY * canvasH;
+    return { drawX, drawY, drawW, drawH };
+  }, []);
+
+  // Attach relative normalized coordinates once when a stroke finishes (zero overhead during live drawing)
+  const attachNormToStroke = useCallback((stroke: Stroke): Stroke => {
+    const b = drawBoundsRef.current;
+    if (b && b.drawW > 0 && b.drawH > 0) {
+      return {
+        ...stroke,
+        baseBox: { x: b.drawX, y: b.drawY, w: b.drawW, h: b.drawH, size: stroke.size, isFreehand: false },
+        normPoints: stroke.points.map(p => ({
+          x: (p.x - b.drawX) / b.drawW,
+          y: (p.y - b.drawY) / b.drawH,
+          pressure: p.pressure,
+        })),
+      };
+    }
+
+    const minDim = Math.max(100, Math.min(dimensions.width, dimensions.height));
+    const cx = dimensions.width / 2;
+    const cy = dimensions.height / 2;
+    return {
+      ...stroke,
+      baseBox: { x: cx, y: cy, w: minDim, h: minDim, size: stroke.size, isFreehand: true },
+      normPoints: stroke.points.map(p => ({
+        x: (p.x - cx) / minDim,
+        y: (p.y - cy) / minDim,
+        pressure: p.pressure,
+      })),
+    };
+  }, [dimensions.width, dimensions.height]);
+
+  // Remap committed strokes smoothly whenever viewport dimensions change (e.g. phone rotation Portrait <-> Landscape)
+  useEffect(() => {
+    const prev = prevViewportSizeRef.current;
+    const changed =
+      prev.width !== dimensions.width ||
+      prev.height !== dimensions.height ||
+      prev.isMobileLandscape !== isMobileLandscape;
+    prevViewportSizeRef.current = {
+      width: dimensions.width,
+      height: dimensions.height,
+      isMobileLandscape
+    };
+
+    if (!changed || dimensions.width <= 0 || dimensions.height <= 0) return;
+
+    const nat = templateNaturalSizeRef.current;
+    const targetBox = computeTemplateBox(
+      dimensions.width,
+      dimensions.height,
+      nat.w,
+      nat.h,
+      isMobileLandscape,
+      templateTransform
+    );
+
+    const remapList = (list: Stroke[]): Stroke[] => {
+      if (list.length === 0) return list;
+
+      // Compute uniform safe scale for freehand strokes so circles never stretch and edge ink stays visible
+      const baseFreeScale = Math.max(100, Math.min(dimensions.width, dimensions.height));
+      let safeFreeScale = baseFreeScale;
+      const topSafeMargin = isMobileLandscape ? 46 : 16;
+      const halfSafeW = Math.max(40, dimensions.width / 2 - 14);
+      const halfSafeH = Math.max(40, (dimensions.height - topSafeMargin) / 2);
+      const freeCenterY = topSafeMargin + (dimensions.height - topSafeMargin) / 2;
+
+      let hasFreehand = false;
+      list.forEach(s => {
+        if (s.baseBox?.isFreehand && s.normPoints) {
+          hasFreehand = true;
+          s.normPoints.forEach(np => {
+            if (Math.abs(np.x) > 0.001) {
+              safeFreeScale = Math.min(safeFreeScale, halfSafeW / Math.abs(np.x));
+            }
+            if (Math.abs(np.y) > 0.001) {
+              safeFreeScale = Math.min(safeFreeScale, halfSafeH / Math.abs(np.y));
+            }
+          });
+        }
+      });
+      safeFreeScale = Math.max(40, safeFreeScale);
+
+      return list.map(s => {
+        if (!s.normPoints || !s.baseBox || s.normPoints.length === 0) return s;
+
+        if (!s.baseBox.isFreehand) {
+          const newPoints = s.normPoints.map(np => ({
+            x: targetBox.drawX + np.x * targetBox.drawW,
+            y: targetBox.drawY + np.y * targetBox.drawH,
+            pressure: np.pressure,
+          }));
+          const ratio = targetBox.drawW / Math.max(1, s.baseBox.w);
+          const newSize = Math.max(2, Number((s.baseBox.size * ratio).toFixed(2)));
+          return { ...s, points: newPoints, size: newSize };
+        }
+
+        if (!hasFreehand) return s;
+        const newPoints = s.normPoints.map(np => ({
+          x: dimensions.width / 2 + np.x * safeFreeScale,
+          y: freeCenterY + np.y * safeFreeScale,
+          pressure: np.pressure,
+        }));
+        const ratio = safeFreeScale / Math.max(1, s.baseBox.w);
+        const newSize = Math.max(2, Number((s.baseBox.size * ratio).toFixed(2)));
+        return { ...s, points: newPoints, size: newSize };
+      });
+    };
+
+    setStrokes(prevStrokes => (prevStrokes.length > 0 ? remapList(prevStrokes) : prevStrokes));
+    setRedoStack(prevRedo => (prevRedo.length > 0 ? remapList(prevRedo) : prevRedo));
+  }, [dimensions, isMobileLandscape, computeTemplateBox, templateTransform]);
+
+  // Sync canvas width/height attributes with display dimensions and step index (single source of truth for drawTemplateGuide)
   useEffect(() => {
     const canvas = canvasRef.current;
     const tCanvas = templateCanvasRef.current;
@@ -349,7 +490,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       redrawCanvas();
       drawTemplateGuide();
     }
-  }, [dimensions, template, guideColor, templateOpacity, currentStepIndex, showGhostOverlay, templateTransform, isMobileLandscape]);
+  }, [dimensions, template, currentRepetition, guideColor, templateOpacity, currentStepIndex, showGhostOverlay, templateTransform, isMobileLandscape]);
 
   // Clear repetition cumulative history & apply transform lock behavior when template changes
   useEffect(() => {
@@ -402,8 +543,6 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     } else {
       setIsLessonStarted(false);
     }
-
-    drawTemplateGuide();
   }, [template, currentRepetition, resetStrokeStats]);
 
   // Auto-dismiss transient step alerts
@@ -743,6 +882,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
 
   // Draw Template Guide Layer (Supports both Google Drive image links and SVG data)
   const drawTemplateGuide = () => {
+    const reqId = ++drawGuideReqIdRef.current;
     const tCanvas = templateCanvasRef.current;
     if (!tCanvas) return;
     const ctx = tCanvas.getContext('2d');
@@ -755,6 +895,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     if (!template) {
       activeStepPointsRef.current = null;
       drawBoundsRef.current = null;
+      templateNaturalSizeRef.current = { w: 500, h: 500 };
       return;
     }
 
@@ -772,22 +913,17 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     const activeColor = isBlindMode && showGhostOverlay ? '#f59e0b' : (colorHexMap[guideColor] || '#facc15');
     const effectiveOpacity = isBlindMode && showGhostOverlay ? 0.45 : templateOpacity;
 
-    const computeTransformedBox = (natW: number, natH: number) => {
-      const topReserved = isMobileLandscape ? 36 : 0;
-      const padRatio = isMobileLandscape ? 0.04 : 0.08;
-      const padding = Math.min(tCanvas.width, tCanvas.height) * padRatio;
-      const availW = tCanvas.width - padding * 2;
-      const availH = Math.max(80, tCanvas.height - topReserved - padding * 2);
-      const baseScale = Math.min(availW / (natW || 500), availH / (natH || 500));
-      const drawW = (natW || 500) * baseScale * templateTransform.scale;
-      const drawH = (natH || 500) * baseScale * templateTransform.scale;
-      const drawX = (tCanvas.width - drawW) / 2 + templateTransform.offsetX * tCanvas.width;
-      const drawY = topReserved + ((tCanvas.height - topReserved) - drawH) / 2 + templateTransform.offsetY * tCanvas.height;
-      return { drawX, drawY, drawW, drawH };
-    };
+    const computeTransformedBox = (natW: number, natH: number) =>
+      computeTemplateBox(tCanvas.width, tCanvas.height, natW, natH, isMobileLandscape, templateTransform);
 
     const renderLoadedImage = (img: HTMLImageElement, canReadPixels: boolean) => {
-      const { drawX, drawY, drawW, drawH } = computeTransformedBox(img.width || 500, img.height || 500);
+      if (reqId !== drawGuideReqIdRef.current) return;
+      ctx.clearRect(0, 0, tCanvas.width, tCanvas.height);
+
+      const natW = img.width || 500;
+      const natH = img.height || 500;
+      templateNaturalSizeRef.current = { w: natW, h: natH };
+      const { drawX, drawY, drawW, drawH } = computeTransformedBox(natW, natH);
       drawBoundsRef.current = { drawX, drawY, drawW, drawH };
 
       if (shouldRenderImage) {
@@ -916,20 +1052,27 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         guidePointsRef.current = pts;
         letterGridRef.current = { grid, width: gw, height: gh, cell, totalCells };
       }
+      setGuideRenderVersion(v => v + 1);
     };
 
     // 1. Direct Image URL (Google Drive transparent PNG or web URL)
     if (template.imageUrl && template.imageUrl.trim()) {
       const directUrl = formatDirectImageUrl(template.imageUrl);
       const img = new Image();
+      img.referrerPolicy = 'no-referrer';
       img.crossOrigin = 'anonymous';
       img.onload = () => renderLoadedImage(img, true);
       img.onerror = () => {
+        if (reqId !== drawGuideReqIdRef.current) return;
         // Fallback: retry without crossOrigin if host blocks CORS so drawing & step-corridor grid still work
         const fallbackImg = new Image();
+        fallbackImg.referrerPolicy = 'no-referrer';
         fallbackImg.onload = () => renderLoadedImage(fallbackImg, false);
         fallbackImg.onerror = () => {
+          if (reqId !== drawGuideReqIdRef.current) return;
+          ctx.clearRect(0, 0, tCanvas.width, tCanvas.height);
           // Last-resort fallback: build bounds & grid purely from lesson steps if present
+          templateNaturalSizeRef.current = { w: 500, h: 500 };
           const { drawX, drawY, drawW, drawH } = computeTransformedBox(500, 500);
           drawBoundsRef.current = { drawX, drawY, drawW, drawH };
           if (template.steps && template.steps.length > 0) {
@@ -943,6 +1086,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
             guidePointsRef.current = pts;
             letterGridRef.current = { grid, width: gw, height: gh, cell, totalCells };
           }
+          setGuideRenderVersion(v => v + 1);
         };
         fallbackImg.src = directUrl;
       };
@@ -961,7 +1105,13 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(coloredSvg);
 
       img.onload = () => {
-        const { drawX, drawY, drawW, drawH } = computeTransformedBox(img.width || 500, img.height || 500);
+        if (reqId !== drawGuideReqIdRef.current) return;
+        ctx.clearRect(0, 0, tCanvas.width, tCanvas.height);
+
+        const natW = img.width || 500;
+        const natH = img.height || 500;
+        templateNaturalSizeRef.current = { w: natW, h: natH };
+        const { drawX, drawY, drawW, drawH } = computeTransformedBox(natW, natH);
         drawBoundsRef.current = { drawX, drawY, drawW, drawH };
 
         if (shouldRenderImage) {
@@ -979,6 +1129,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         }
 
         extractLetterGridFromImage(img, tCanvas.width, tCanvas.height, drawX, drawY, drawW, drawH, template.steps);
+        setGuideRenderVersion(v => v + 1);
       };
     }
   };
@@ -1112,10 +1263,10 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     return percent;
   }, [strokes, template, penSize, dimensions, onAccuracyUpdate]);
 
-  // Recalculate whenever strokes change
+  // Recalculate whenever strokes or template guide rasterization change
   useEffect(() => {
     calculateCoverageScore();
-  }, [strokes, calculateCoverageScore]);
+  }, [strokes, guideRenderVersion, calculateCoverageScore]);
 
   // Render Visual Diagnostic Overlay (Green = On-Path, Red = Off-Path, Yellow = Uncovered Thickness)
   useEffect(() => {
@@ -1209,7 +1360,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       });
       ctx.restore();
     }
-  }, [evaluationModal, showDiagnosticColors, template, strokes, penSize, dimensions, classifyPoint]);
+  }, [evaluationModal, showDiagnosticColors, template, strokes, penSize, dimensions, guideRenderVersion, classifyPoint]);
 
   // Helper to draw a crisp 5-point vector star on Canvas for Drive PNG stamping
   const drawCanvasStar = (
@@ -1308,6 +1459,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
 
       if (crownCanvas && crownCanvas.width > 0 && crownCanvas.height > 0) {
         try {
+          crownCanvas.toDataURL('image/png');
           drawCoverMedia(crownCanvas, crownCanvas.width, crownCanvas.height);
         } catch {}
       }
@@ -2288,7 +2440,8 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
 
               // Level 3 (متقدم): On final step, enforce stroke thickness coverage >= 75%
               if (difficulty === 'متقدم' && nextIdx >= template.steps.length && coverageScore < 75) {
-                setStrokes(prev => [...prev, finishedStroke]);
+                const normedStroke = attachNormToStroke(finishedStroke);
+                setStrokes(prev => [...prev, normedStroke]);
                 setRedoStack([]);
                 redrawCanvas();
                 audioService.playErrorSound();
@@ -2375,7 +2528,8 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         strokeStartedAtGreenRef.current = false;
       }
 
-      const committedStroke: Stroke = stepMeta ? { ...finishedStroke, stepMeta } : finishedStroke;
+      const baseCommitted = attachNormToStroke(finishedStroke);
+      const committedStroke: Stroke = stepMeta ? { ...baseCommitted, stepMeta } : baseCommitted;
       setStrokes(prev => [...prev, committedStroke]);
       setRedoStack([]);
       redrawCanvas();
@@ -2388,7 +2542,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
   useEffect(() => {
     if (!isARMode || !virtualCursor) {
       if (activeAirStrokeRef.current) {
-        const lostAirStroke = activeAirStrokeRef.current;
+        const lostAirStroke = attachNormToStroke(activeAirStrokeRef.current);
         activeAirStrokeRef.current = null;
         setStrokes(prev => [...prev, lostAirStroke]);
         setRedoStack([]);
@@ -2578,7 +2732,8 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                 const coverageScore = calculateCoverageScore([...strokes, finishedAirStroke]);
 
                 if (difficulty === 'متقدم' && nextIdx >= template.steps.length && coverageScore < 75) {
-                  setStrokes(prev => [...prev, finishedAirStroke]);
+                  const normedAirStroke = attachNormToStroke(finishedAirStroke);
+                  setStrokes(prev => [...prev, normedAirStroke]);
                   setRedoStack([]);
                   redrawCanvas();
                   audioService.playErrorSound();
@@ -2665,13 +2820,14 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
           strokeStartedAtGreenRef.current = false;
         }
 
-        const committedAirStroke: Stroke = stepMeta ? { ...finishedAirStroke, stepMeta } : finishedAirStroke;
+        const baseAirCommitted = attachNormToStroke(finishedAirStroke);
+        const committedAirStroke: Stroke = stepMeta ? { ...baseAirCommitted, stepMeta } : baseAirCommitted;
         setStrokes(prev => [...prev, committedAirStroke]);
         setRedoStack([]);
         redrawCanvas();
       }
     }
-  }, [virtualCursor, effectiveIsAirDrawing, isARMode, dimensions, penType, penColor, penSize, calligraphyAngle, redrawCanvas, currentStepIndex, template, openEvaluationResults, classifyPoint, calculateCoverageScore, isLessonStarted, evaluationModal, onOpenLibrary]);
+  }, [virtualCursor, effectiveIsAirDrawing, isARMode, dimensions, penType, penColor, penSize, calligraphyAngle, redrawCanvas, attachNormToStroke, currentStepIndex, template, openEvaluationResults, classifyPoint, calculateCoverageScore, isLessonStarted, evaluationModal, onOpenLibrary]);
 
   // Unified complete board clear (matching "مسح السبورة بالكامل")
   const performFullClear = useCallback((withSound = true) => {
@@ -2787,6 +2943,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
           } catch {}
           if (crownCanvas && crownCanvas.width > 0 && crownCanvas.height > 0) {
             try {
+              crownCanvas.toDataURL('image/png');
               drawCoverExport(crownCanvas, crownCanvas.width, crownCanvas.height);
             } catch {}
           }
