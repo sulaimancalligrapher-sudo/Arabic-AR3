@@ -15,3 +15,12 @@ export function isMobileOrTabletDevice(): boolean {
     (hasTouch && minScreenSide <= 1100)
   );
 }
+
+/**
+ * Returns true when running on a phone OR tablet in landscape orientation
+ * so both receive automatic edge-to-edge fullscreen and top-docked inner bar.
+ */
+export function isTouchLandscapeViewport(): boolean {
+  if (typeof window === 'undefined') return false;
+  return isMobileOrTabletDevice() && window.innerWidth > window.innerHeight;
+}

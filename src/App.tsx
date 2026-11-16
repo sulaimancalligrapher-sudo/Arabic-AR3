@@ -9,7 +9,7 @@ import { LoginModal } from './components/LoginModal';
 import { SettingsView } from './components/SettingsView';
 import { sheetService, getArabicOrdinal, getStepAudioPrompt, RegistrantUser } from './services/sheetService';
 import { audioService } from './services/audioService';
-import { isMobileOrTabletDevice } from './utils/devicePerformance';
+import { isMobileOrTabletDevice, isTouchLandscapeViewport } from './utils/devicePerformance';
 import {
   ARRewardTier,
   AR_INTRO_ID,
@@ -174,20 +174,17 @@ export default function App() {
   const [isLibraryOpen, setIsLibraryOpen] = useState(false);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [isMobileLandscape, setIsMobileLandscape] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false;
-    return window.innerHeight <= 520 && window.innerWidth > window.innerHeight;
-  });
+  const [isMobileLandscape, setIsMobileLandscape] = useState<boolean>(() => isTouchLandscapeViewport());
   const [showToolbarInLandscape, setShowToolbarInLandscape] = useState(false);
   const prevMobileLandscapeRef = useRef(isMobileLandscape);
 
   useEffect(() => {
     const checkLandscape = () => {
-      const landscape = window.innerHeight <= 520 && window.innerWidth > window.innerHeight;
+      const landscape = isTouchLandscapeViewport();
       setIsMobileLandscape(landscape);
 
       if (landscape && !prevMobileLandscapeRef.current) {
-        // Automatically collapse outer toolbar into full edge-to-edge canvas on phone rotation
+        // Automatically collapse outer toolbar into full edge-to-edge canvas on phone/tablet rotation
         setShowToolbarInLandscape(false);
         // Attempt OS browser fullscreen immediately where browser permits, cleanly ignoring gesture restrictions
         if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
