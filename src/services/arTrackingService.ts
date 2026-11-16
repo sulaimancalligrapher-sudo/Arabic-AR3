@@ -51,10 +51,9 @@ class ARTrackingService {
 
   private handsInstance: any = null;
   private faceMeshInstance: any = null;
-  private handsInitPromise: Promise<void> | null = null;
-  private faceInitPromise: Promise<void> | null = null;
-  private isHandBusy: boolean = false;
-  private isFaceBusy: boolean = false;
+  private modelInitPromise: Promise<void> = Promise.resolve();
+  private isModelBusy: boolean = false;
+  private busySince: number = 0;
 
   // Lightweight offscreen canvas to downscale video frames before MediaPipe upload on mobile/tablet
   private inferCanvas: HTMLCanvasElement | null = null;
@@ -133,7 +132,21 @@ class ARTrackingService {
 
   private async ensureScript(src: string): Promise<boolean> {
     if (typeof window === 'undefined') return false;
-    if (document.querySelector(`script[src="${src}"]`)) return true;
+    const existing = document.querySelector(`script[src="${src}"]`) as HTMLScriptElement | null;
+    if (existing) {
+      // Wait briefly if script tag exists and is still loading
+      if (
+        (src.includes('hands') && !(window as any).Hands) ||
+        (src.includes('face_mesh') && !(window as any).FaceMesh)
+      ) {
+        return new Promise((resolve) => {
+          existing.addEventListener('load', () => resolve(true), { once: true });
+          existing.addEventListener('error', () => resolve(false), { once: true });
+          setTimeout(() => resolve(true), 2500);
+        });
+      }
+      return true;
+    }
     return new Promise((resolve) => {
       const script = document.createElement('script');
       script.src = src;
@@ -151,87 +164,83 @@ class ARTrackingService {
     return isMobileOrTabletDevice();
   }
 
-  private async ensureHandsInitialized(): Promise<void> {
-    if (this.handsInstance) return;
-    if (this.handsInitPromise) return this.handsInitPromise;
-
-    this.handsInitPromise = (async () => {
+  private ensureHandsInitialized(): Promise<void> {
+    if (this.handsInstance) return Promise.resolve();
+    this.modelInitPromise = this.modelInitPromise.then(async () => {
+      if (this.handsInstance) return;
       try {
         await this.ensureScript('https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js');
         if ((window as any).Hands && !this.handsInstance) {
           const isMobile = this.isMobileDevice();
           const HandsClass = (window as any).Hands;
-          this.handsInstance = new HandsClass({
+          const instance = new HandsClass({
             locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
           });
-          this.handsInstance.setOptions({
+          instance.setOptions({
             maxNumHands: this.maxHands,
             modelComplexity: isMobile ? 0 : 1,
-            minDetectionConfidence: 0.72,
-            minTrackingConfidence: 0.7
+            minDetectionConfidence: 0.7,
+            minTrackingConfidence: 0.68
           });
-          this.handsInstance.onResults(this.onHandsResults.bind(this));
+          instance.onResults(this.onHandsResults.bind(this));
+          this.handsInstance = instance;
         }
       } catch (err) {
         console.warn('MediaPipe Hands init notice:', err);
-      } finally {
-        this.handsInitPromise = null;
       }
-    })();
-
-    return this.handsInitPromise;
+    });
+    return this.modelInitPromise;
   }
 
-  private async ensureFaceMeshInitialized(): Promise<void> {
-    if (this.faceMeshInstance) return;
-    if (this.faceInitPromise) return this.faceInitPromise;
-
-    this.faceInitPromise = (async () => {
+  private ensureFaceMeshInitialized(): Promise<void> {
+    if (this.faceMeshInstance) return Promise.resolve();
+    this.modelInitPromise = this.modelInitPromise.then(async () => {
+      if (this.faceMeshInstance) return;
       try {
         await this.ensureScript('https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js');
         if ((window as any).FaceMesh && !this.faceMeshInstance) {
           const FaceMeshClass = (window as any).FaceMesh;
-          this.faceMeshInstance = new FaceMeshClass({
+          const instance = new FaceMeshClass({
             locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
           });
-          this.faceMeshInstance.setOptions({
+          instance.setOptions({
             maxNumFaces: 1,
             refineLandmarks: false,
             minDetectionConfidence: 0.5,
             minTrackingConfidence: 0.5
           });
-          this.faceMeshInstance.onResults(this.onFaceMeshResults.bind(this));
+          instance.onResults(this.onFaceMeshResults.bind(this));
+          this.faceMeshInstance = instance;
         }
       } catch (err) {
         console.warn('MediaPipe FaceMesh init notice:', err);
-      } finally {
-        this.faceInitPromise = null;
       }
-    })();
-
-    return this.faceInitPromise;
+    });
+    return this.modelInitPromise;
   }
 
   public async initMediaPipe(): Promise<void> {
-    const tasks: Promise<void>[] = [];
-    if (this.trackHands) tasks.push(this.ensureHandsInitialized());
-    if (this.trackFace) tasks.push(this.ensureFaceMeshInitialized());
-    await Promise.all(tasks);
+    if (this.trackHands) {
+      await this.ensureHandsInitialized();
+    }
+    if (this.trackFace) {
+      await this.ensureFaceMeshInitialized();
+    }
   }
 
   /**
-   * Produces a downscaled 320px-wide frame on mobile/tablet so MediaPipe WebGL uploads
-   * 4x-12x fewer pixels without reducing the displayed <video> quality.
+   * Produces a downscaled 416px-wide frame on mobile/tablet so MediaPipe WebGL uploads
+   * significantly fewer pixels while keeping faces crisp enough at normal desk distance.
    */
   private getInferenceSource(video: HTMLVideoElement, isMobile: boolean): HTMLVideoElement | HTMLCanvasElement {
     const vw = video.videoWidth;
     const vh = video.videoHeight;
-    if (!isMobile || vw <= 0 || vh <= 0 || vw <= 360) {
+    if (!isMobile || vw <= 0 || vh <= 0 || vw <= 440) {
       return video;
     }
 
-    const targetW = 320;
-    const targetH = Math.max(180, Math.round((vh / vw) * targetW));
+    const targetW = 416;
+    const targetH = Math.max(234, Math.round((vh / vw) * targetW));
 
     if (!this.inferCanvas) {
       this.inferCanvas = document.createElement('canvas');
@@ -264,8 +273,8 @@ class ARTrackingService {
 
     this.stopCameraStreamOnly();
     this.resetHandTrackingState();
-    this.isHandBusy = false;
-    this.isFaceBusy = false;
+    this.isModelBusy = false;
+    this.busySince = 0;
 
     try {
       let stream: MediaStream | null = null;
@@ -317,51 +326,59 @@ class ARTrackingService {
   private startProcessingLoop() {
     let lastHandProcess = 0;
     let lastFaceProcess = 0;
+    let lastTurn: 'hands' | 'face' = 'face';
 
     const loop = (timestamp: number) => {
       if (!this.isRunning || !this.videoElement) return;
 
+      // Safety watchdog: release lock if a model call ever stalled > 4.5s
+      if (this.isModelBusy && timestamp - this.busySince > 4500) {
+        this.isModelBusy = false;
+      }
+
       const video = this.videoElement;
-      if (video.readyState >= 2 && video.videoWidth > 0) {
+      if (!this.isModelBusy && video.readyState >= 2 && video.videoWidth > 0) {
         const isMobile = this.isMobileDevice();
-        const handInterval = isMobile ? 45 : 33;
-        const faceInterval = isMobile ? 210 : 85;
+        const handInterval = isMobile ? 45 : 30;
+        const faceInterval = isMobile ? 200 : 85;
 
         const handsDue =
           this.trackHands &&
           Boolean(this.handsInstance) &&
-          !this.isHandBusy &&
-          (!isMobile || !this.isFaceBusy) &&
           timestamp - lastHandProcess >= handInterval;
 
-        if (handsDue) {
+        const faceDue =
+          this.trackFace &&
+          Boolean(this.faceMeshInstance) &&
+          timestamp - lastFaceProcess >= faceInterval;
+
+        // Fair turn-taking: run at most ONE model per frame so Hands and FaceMesh never collide
+        // and guarantee FaceMesh gets its periodic turn even when Hands is busy on mobile.
+        const runFaceNow =
+          faceDue && (!handsDue || lastTurn === 'hands' || lastFaceProcess === 0);
+
+        if (runFaceNow) {
+          lastFaceProcess = timestamp;
+          lastTurn = 'face';
+          this.isModelBusy = true;
+          this.busySince = timestamp;
+          const img = this.getInferenceSource(video, isMobile);
+          Promise.resolve(this.faceMeshInstance.send({ image: img }))
+            .catch(() => {})
+            .finally(() => {
+              this.isModelBusy = false;
+            });
+        } else if (handsDue) {
           lastHandProcess = timestamp;
-          this.isHandBusy = true;
+          lastTurn = 'hands';
+          this.isModelBusy = true;
+          this.busySince = timestamp;
           const img = this.getInferenceSource(video, isMobile);
           Promise.resolve(this.handsInstance.send({ image: img }))
             .catch(() => {})
             .finally(() => {
-              this.isHandBusy = false;
+              this.isModelBusy = false;
             });
-        } else {
-          // Run face tracking on alternate frames so Hands and FaceMesh never contend on the same frame
-          const faceDue =
-            this.trackFace &&
-            Boolean(this.faceMeshInstance) &&
-            !this.isFaceBusy &&
-            (!isMobile || !this.isHandBusy) &&
-            timestamp - lastFaceProcess >= faceInterval;
-
-          if (faceDue) {
-            lastFaceProcess = timestamp;
-            this.isFaceBusy = true;
-            const img = this.getInferenceSource(video, isMobile);
-            Promise.resolve(this.faceMeshInstance.send({ image: img }))
-              .catch(() => {})
-              .finally(() => {
-                this.isFaceBusy = false;
-              });
-          }
         }
       }
 

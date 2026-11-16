@@ -4059,6 +4059,8 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
             className="absolute z-30 pointer-events-none"
             style={{
               display: isARMode && active ? 'block' : 'none',
+              left: lastAirCursorPosRef.current ? `${lastAirCursorPosRef.current.x * 100}%` : '50%',
+              top: lastAirCursorPosRef.current ? `${lastAirCursorPosRef.current.y * 100}%` : '50%',
               transform: 'translate(-50%, -50%)'
             }}
           >
