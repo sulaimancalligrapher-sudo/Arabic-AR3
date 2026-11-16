@@ -257,15 +257,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       AR_REWARD_PRESETS[4] || AR_REWARD_PRESETS[0]
     );
     const { token, skippedLocalImages } = encodeARRewardsShareParam(normalized, normalizedIntro);
-    const shareUrl = `${window.location.origin}${window.location.pathname}?ar=${token}${window.location.hash || '#/'}`;
+    const shareUrl = `${window.location.origin}${window.location.pathname}?ar=${token}#/`;
     try {
       await navigator.clipboard.writeText(shareUrl);
       audioService.playSuccessSound();
       setArSaveNotice({
         type: skippedLocalImages ? 'warning' : 'success',
         text: skippedLocalImages
-          ? '🔗 تم نسخ رابط الإعدادات! (ملاحظة: الصور المرفوعة من الجهاز تحتاج حفظها في الشيت أو رابط خارجي لتظهر بالرابط).'
-          : '🔗 تم نسخ رابط التطبيق مع تعديلاتك! أي جهاز أو متصفح يفتح هذا الرابط سيطبّق التعديلات فوراً.'
+          ? '🔗 تم نسخ رابط المشاركة المباشر للسبورة! (ملاحظة: الصور المرفوعة من الجهاز تحتاج حفظها في الشيت أو رابط خارجي لتظهر بالرابط).'
+          : '🔗 تم نسخ رابط المشاركة المباشر! سيفتح مباشرة على السبورة الرئيسية ويطبّق تعديلاتك فوراً في أي متصفح.'
       });
     } catch {
       setArSaveNotice({

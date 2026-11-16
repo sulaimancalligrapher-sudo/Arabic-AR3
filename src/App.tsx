@@ -32,10 +32,16 @@ import {
 
 export default function App() {
   const canvasRef = useRef<WhiteboardCanvasRef>(null);
+  const appliedARFromShareUrlRef = useRef(false);
 
   // Dynamic Routing ('whiteboard' or 'settings')
   const [currentRoute, setCurrentRoute] = useState<'whiteboard' | 'settings'>(() => {
     if (typeof window !== 'undefined') {
+      try {
+        if (new URLSearchParams(window.location.search).has('ar')) {
+          return 'whiteboard';
+        }
+      } catch {}
       return window.location.hash === '#/settings' || window.location.hash === '#settings'
         ? 'settings'
         : 'whiteboard';
@@ -70,7 +76,7 @@ export default function App() {
       const arToken = params.get('ar');
       if (arToken) {
         const decoded = decodeARRewardsShareBundle(arToken);
-        if (decoded) {
+        if (decoded && (decoded.tiers.length > 0 || decoded.intro)) {
           if (decoded.tiers.length > 0) {
             setArRewards(decoded.tiers);
             saveStoredARRewards(decoded.tiers);
@@ -80,6 +86,11 @@ export default function App() {
             saveStoredARIntroReward(decoded.intro);
           }
           appliedFromUrl = true;
+          appliedARFromShareUrlRef.current = true;
+          setCurrentRoute('whiteboard');
+          try {
+            window.history.replaceState(null, '', `${window.location.pathname}#/`);
+          } catch {}
         }
       }
     } catch {}
@@ -302,11 +313,13 @@ export default function App() {
   };
 
   const handleUpdateARRewards = useCallback((updated: ARRewardTier[]): boolean => {
+    appliedARFromShareUrlRef.current = false;
     setArRewards(updated);
     return saveStoredARRewards(updated);
   }, []);
 
   const handleUpdateARIntroReward = useCallback((updated: ARRewardTier): boolean => {
+    appliedARFromShareUrlRef.current = false;
     setArIntroReward(updated);
     return saveStoredARIntroReward(updated);
   }, []);
@@ -317,21 +330,23 @@ export default function App() {
       if (lastArScore === null) {
         setShowCrown(arIntroReward.enabled);
       }
-      sheetService.fetchARRewardsFromSheet().then((res) => {
-        if (res.success) {
-          if (res.rewards.length > 0) {
-            setArRewards(res.rewards);
-            saveStoredARRewards(res.rewards);
-          }
-          if (res.introReward) {
-            setArIntroReward(res.introReward);
-            saveStoredARIntroReward(res.introReward);
-            if (lastArScore === null) {
-              setShowCrown(res.introReward.enabled);
+      if (!appliedARFromShareUrlRef.current) {
+        sheetService.fetchARRewardsFromSheet().then((res) => {
+          if (res.success) {
+            if (res.rewards.length > 0) {
+              setArRewards(res.rewards);
+              saveStoredARRewards(res.rewards);
+            }
+            if (res.introReward) {
+              setArIntroReward(res.introReward);
+              saveStoredARIntroReward(res.introReward);
+              if (lastArScore === null) {
+                setShowCrown(res.introReward.enabled);
+              }
             }
           }
-        }
-      }).catch(() => {});
+        }).catch(() => {});
+      }
     }
   }, [boardStyle]);
 
