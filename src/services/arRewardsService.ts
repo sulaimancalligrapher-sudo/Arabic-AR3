@@ -198,10 +198,14 @@ export const getStoredARRewards = (): ARRewardTier[] => {
   return getDefaultARRewards();
 };
 
-export const saveStoredARRewards = (tiers: ARRewardTier[]): void => {
+export const saveStoredARRewards = (tiers: ARRewardTier[]): boolean => {
   try {
     localStorage.setItem(AR_REWARDS_STORAGE_KEY, JSON.stringify(tiers));
-  } catch {}
+    return true;
+  } catch (err) {
+    console.warn('Could not save AR rewards to localStorage:', err);
+    return false;
+  }
 };
 
 export const findARRewardForScore = (
@@ -212,13 +216,17 @@ export const findARRewardForScore = (
   if (enabledTiers.length === 0) return null;
 
   if (score === null || score === undefined) {
-    // Manual crown toggle preview: return highest minScore tier
-    return [...enabledTiers].sort((a, b) => b.maxScore - a.maxScore)[0] || null;
+    // Manual crown toggle preview: return highest maxScore tier
+    return [...enabledTiers].sort((a, b) => Math.max(b.minScore, b.maxScore) - Math.max(a.minScore, a.maxScore))[0] || null;
   }
 
   const rounded = Math.round(score);
   const matching = enabledTiers
-    .filter(t => rounded >= t.minScore && rounded <= t.maxScore)
-    .sort((a, b) => b.minScore - a.minScore);
+    .filter(t => {
+      const low = Math.min(t.minScore, t.maxScore);
+      const high = Math.max(t.minScore, t.maxScore);
+      return rounded >= low && rounded <= high;
+    })
+    .sort((a, b) => Math.min(b.minScore, b.maxScore) - Math.min(a.minScore, a.maxScore));
   return matching[0] || null;
 };

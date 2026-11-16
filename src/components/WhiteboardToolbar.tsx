@@ -78,6 +78,8 @@ interface WhiteboardToolbarProps {
   };
   isAirPenLocked?: boolean;
   onToggleAirPenLock?: () => void;
+  activeRewardTitle?: string;
+  isMobileLandscape?: boolean;
 }
 
 type ActivePopover = 'drawing_tools' | 'ar_settings' | null;
@@ -122,6 +124,8 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
   arDetectionStatus,
   isAirPenLocked = false,
   onToggleAirPenLock,
+  activeRewardTitle,
+  isMobileLandscape = false,
 }) => {
   const [activePopover, setActivePopover] = useState<ActivePopover>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
@@ -180,9 +184,11 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
       className="relative w-full bg-slate-900/95 backdrop-blur-md border-b border-slate-800 text-slate-100 z-50 select-none shadow-md"
     >
       {/* ======================================================== */}
-      {/* DESKTOP TOOLBAR (الشاشات الكبيرة: صف الأيقونات المباشر)   */}
+      {/* DESKTOP & LANDSCAPE TOOLBAR (الشاشات الكبيرة والأفقية)   */}
       {/* ======================================================== */}
-      <div className="hidden sm:flex max-w-7xl mx-auto px-2 sm:px-4 py-2 items-center justify-between gap-1.5 sm:gap-3 overflow-x-auto scrollbar-none">
+      <div className={`hidden sm:flex max-w-7xl mx-auto px-2 sm:px-4 items-center justify-between gap-1.5 sm:gap-3 overflow-x-auto scrollbar-none ${
+        isMobileLandscape ? 'py-1' : 'py-2'
+      }`}>
         
         {/* Right Section: Brand & Lesson Folder & Tool Windows (RTL layout) */}
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
@@ -190,9 +196,9 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
           {/* Brand Logo Icon */}
           <div
             title="السبورة التفاعلية للخط العربي والواقع المعزز"
-            className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-500 to-amber-700 flex items-center justify-center text-slate-950 font-bold shadow-md shadow-amber-500/20 shrink-0 cursor-default"
+            className={`${isMobileLandscape ? 'w-7 h-7' : 'w-9 h-9'} rounded-xl bg-gradient-to-br from-amber-500 to-amber-700 flex items-center justify-center text-slate-950 font-bold shadow-md shadow-amber-500/20 shrink-0 cursor-default`}
           >
-            <span className="font-ruqaa text-xl font-black">ض</span>
+            <span className={`font-ruqaa ${isMobileLandscape ? 'text-base' : 'text-xl'} font-black`}>ض</span>
           </div>
 
           {/* 1. Lesson / Template Library Icon (Icon only, no text) */}
@@ -980,27 +986,29 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
               </div>
             </div>
 
-            {/* Royal Crown Feature (جائزة التاج الملكي عند إتقان الرسم) */}
+            {/* Royal Crown Feature (مكافأة الرأس في الواقع المعزز) */}
             <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800 flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0 border border-amber-500/30">
                   <Crown className="w-4 h-4" />
                 </div>
                 <div>
-                  <div className="text-xs font-bold text-amber-300">جائزة التاج الملكي 👑</div>
-                  <div className="text-[10px] text-slate-400">يتوج رأس الطالب كجائزة ومكافأة عند إتقان الرسم بنجاح</div>
+                  <div className="text-xs font-bold text-amber-300">
+                    {activeRewardTitle || 'مكافأة التاج الملكي 👑'}
+                  </div>
+                  <div className="text-[10px] text-slate-400">يتوج رأس الطالب بالمكافأة المحددة عند إتقان الرسم بنجاح</div>
                 </div>
               </div>
 
               <button
                 onClick={onToggleCrown}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer shrink-0 ${
                   showCrown
                     ? 'bg-amber-500 text-slate-950 shadow-sm'
                     : 'bg-slate-800 text-slate-400 hover:text-white'
                 }`}
               >
-                {showCrown ? 'معاينة التاج 👑' : 'تفعيل المعاينة'}
+                {showCrown ? 'معاينة المكافأة 👑' : 'تفعيل المعاينة'}
               </button>
             </div>
 

@@ -53,7 +53,8 @@ interface SettingsViewProps {
   saveArCameraPhoto?: boolean;
   onToggleSaveArCameraPhoto?: (val: boolean) => void;
   arRewards?: ARRewardTier[];
-  onUpdateARRewards?: (tiers: ARRewardTier[]) => void;
+  onUpdateARRewards?: (tiers: ARRewardTier[]) => boolean | void;
+  onPreviewARReward?: (tier: ARRewardTier) => void;
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
@@ -70,6 +71,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onToggleSaveArCameraPhoto,
   arRewards = [],
   onUpdateARRewards,
+  onPreviewARReward,
 }) => {
   // Tabs: 'lessons' | 'table' | 'sheet' | 'board' | 'ar_rewards' | 'registrants'
   const [activeTab, setActiveTab] = useState<'lessons' | 'table' | 'sheet' | 'board' | 'ar_rewards' | 'registrants'>('lessons');
@@ -79,13 +81,59 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [isAddingReg, setIsAddingReg] = useState(false);
   const [regStatusMsg, setRegStatusMsg] = useState<string | null>(null);
 
+  const [draftARRewards, setDraftARRewards] = useState<ARRewardTier[]>(() =>
+    arRewards.length > 0 ? arRewards : getDefaultARRewards()
+  );
+  const [hasUnsavedARChanges, setHasUnsavedARChanges] = useState(false);
+  const [arSaveNotice, setArSaveNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  useEffect(() => {
+    if (!hasUnsavedARChanges && arRewards.length > 0) {
+      setDraftARRewards(arRewards);
+    }
+  }, [arRewards, hasUnsavedARChanges]);
+
+  const normalizeTiers = (tiers: ARRewardTier[]): ARRewardTier[] =>
+    tiers.map(t => {
+      const a = Math.max(0, Math.min(100, Math.round(Number(t.minScore) || 0)));
+      const b = Math.max(0, Math.min(100, Math.round(Number(t.maxScore) || 0)));
+      return {
+        ...t,
+        minScore: Math.min(a, b),
+        maxScore: Math.max(a, b),
+      };
+    });
+
+  const handleSaveARRewards = (tiersToSave?: ARRewardTier[]): boolean => {
+    const normalized = normalizeTiers(tiersToSave || draftARRewards);
+    setDraftARRewards(normalized);
+    if (!onUpdateARRewards) return false;
+    const saved = onUpdateARRewards(normalized);
+    if (saved === false) {
+      audioService.playErrorSound();
+      setArSaveNotice({
+        type: 'error',
+        text: '⚠️ تعذر الحفظ في ذاكرة المتصفح! قد يكون حجم الصورة المرفوعة كبيراً جداً.'
+      });
+      return false;
+    }
+    setHasUnsavedARChanges(false);
+    audioService.playSuccessSound();
+    setArSaveNotice({
+      type: 'success',
+      text: '✅ تم حفظ وتطبيق إعدادات مكافآت الواقع المعزز بنجاح!'
+    });
+    setTimeout(() => setArSaveNotice(null), 5000);
+    return true;
+  };
+
   const handleUpdateTier = (tierId: string, updater: (t: ARRewardTier) => ARRewardTier) => {
-    if (!onUpdateARRewards) return;
-    onUpdateARRewards(arRewards.map(t => (t.id === tierId ? updater(t) : t)));
+    setDraftARRewards(prev => prev.map(t => (t.id === tierId ? updater(t) : t)));
+    setHasUnsavedARChanges(true);
+    setArSaveNotice(null);
   };
 
   const handleAddRewardTier = () => {
-    if (!onUpdateARRewards) return;
     const preset = AR_REWARD_PRESETS[3] || AR_REWARD_PRESETS[0];
     const newTier: ARRewardTier = {
       id: `tier_${Date.now()}`,
@@ -98,24 +146,27 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       offsetYRatio: preset.defaultOffsetYRatio,
       enabled: true,
     };
-    onUpdateARRewards([...arRewards, newTier]);
-    audioService.playSuccessSound();
+    setDraftARRewards(prev => [...prev, newTier]);
+    setHasUnsavedARChanges(true);
+    setArSaveNotice(null);
+    audioService.playChime(520, 0.1);
   };
 
   const handleDeleteRewardTier = (tierId: string) => {
-    if (!onUpdateARRewards) return;
-    onUpdateARRewards(arRewards.filter(t => t.id !== tierId));
+    setDraftARRewards(prev => prev.filter(t => t.id !== tierId));
+    setHasUnsavedARChanges(true);
+    setArSaveNotice(null);
   };
 
   const handleUploadRewardImage = (tierId: string, file: File | undefined) => {
-    if (!file || !onUpdateARRewards) return;
+    if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
       const result = typeof reader.result === 'string' ? reader.result : '';
       if (!result) return;
       const img = new Image();
       img.onload = () => {
-        const maxDim = 420;
+        const maxDim = 320;
         const scale = Math.min(1, maxDim / Math.max(img.width || 1, img.height || 1));
         const w = Math.max(1, Math.round(img.width * scale));
         const h = Math.max(1, Math.round(img.height * scale));
@@ -131,7 +182,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             presetId: undefined,
             imageUrl: optimizedPng,
           }));
-          audioService.playSuccessSound();
+          audioService.playChime(600, 0.12);
         }
       };
       img.src = result;
@@ -494,12 +545,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         </div>
 
-        {/* Back to Whiteboard */}
+        {/* Back to Whiteboard (auto-saves any pending AR reward edits before leaving) */}
         <button
-          onClick={onBackToWhiteboard}
+          onClick={() => {
+            if (hasUnsavedARChanges) {
+              handleSaveARRewards();
+            }
+            onBackToWhiteboard();
+          }}
           className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs sm:text-sm shadow-md transition-all active:scale-95 cursor-pointer"
         >
-          <span>العودة إلى السبورة</span>
+          <span>{hasUnsavedARChanges ? 'حفظ والعودة إلى السبورة' : 'العودة إلى السبورة'}</span>
           <ArrowRight className="w-4 h-4 rotate-180" />
         </button>
       </header>
@@ -1382,14 +1438,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         {activeTab === 'ar_rewards' && (
           <div className="space-y-6">
             {/* Header Card */}
-            <div className="p-5 sm:p-6 bg-slate-900/90 rounded-2xl border border-slate-800 shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="p-5 sm:p-6 bg-slate-900/90 rounded-2xl border border-slate-800 shadow-xl flex flex-col lg:flex-row lg:items-center justify-between gap-4">
               <div className="flex items-start gap-3">
                 <div className="w-11 h-11 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
                   <Crown className="w-6 h-6" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-sm sm:text-base text-slate-100">
-                    إعدادات جوائز وصور الرأس في الواقع المعزز (AR)
+                  <h3 className="font-bold text-sm sm:text-base text-slate-100 flex flex-wrap items-center gap-2">
+                    <span>إعدادات جوائز وصور الرأس في الواقع المعزز (AR)</span>
+                    {hasUnsavedARChanges && (
+                      <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                        تغييرات بانتظار الحفظ
+                      </span>
+                    )}
                   </h3>
                   <p className="text-xs text-slate-400 mt-0.5 leading-relaxed">
                     خصّص صور الإكسسوارات (تاج، عمامة، إكليل، قبعة، أو صورة PNG شفافة من جهازك) التي تظهر فوق رأس الطالب حسب درجته وتُحفظ مع صورته.
@@ -1397,12 +1458,25 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => handleSaveARRewards()}
+                  className={`flex items-center gap-1.5 px-4 py-2 rounded-xl font-bold text-xs shadow-md transition-all active:scale-95 cursor-pointer ${
+                    hasUnsavedARChanges
+                      ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 ring-2 ring-emerald-300/60 animate-pulse'
+                      : 'bg-emerald-600/25 hover:bg-emerald-600/35 text-emerald-300 border border-emerald-500/40'
+                  }`}
+                >
+                  <Save className="w-4 h-4" />
+                  <span>حفظ الإعدادات</span>
+                </button>
                 <button
                   type="button"
                   onClick={() => {
-                    onUpdateARRewards && onUpdateARRewards(getDefaultARRewards());
-                    audioService.playChime(520, 0.12);
+                    const defaults = getDefaultARRewards();
+                    setDraftARRewards(defaults);
+                    handleSaveARRewards(defaults);
                   }}
                   className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs font-bold cursor-pointer"
                 >
@@ -1420,9 +1494,26 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
             </div>
 
+            {arSaveNotice && (
+              <div
+                className={`p-3.5 rounded-2xl border text-xs sm:text-sm font-bold flex items-center gap-2 shadow-lg animate-in fade-in duration-150 ${
+                  arSaveNotice.type === 'success'
+                    ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+                    : 'bg-rose-500/15 border-rose-500/40 text-rose-300'
+                }`}
+              >
+                {arSaveNotice.type === 'success' ? (
+                  <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+                )}
+                <span>{arSaveNotice.text}</span>
+              </div>
+            )}
+
             {/* Tiers Editor Cards */}
             <div className="space-y-5">
-              {arRewards.map((tier, idx) => (
+              {draftARRewards.map((tier, idx) => (
                 <div
                   key={tier.id}
                   className={`p-5 rounded-2xl border transition-all shadow-lg ${
@@ -1443,7 +1534,25 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       </span>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {onPreviewARReward && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const normalizedList = normalizeTiers(draftARRewards);
+                            const ok = handleSaveARRewards(normalizedList);
+                            if (ok) {
+                              const targetTier = normalizedList.find(t => t.id === tier.id) || tier;
+                              onPreviewARReward({ ...targetTier, enabled: true });
+                            }
+                          }}
+                          className="px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 flex items-center gap-1.5 cursor-pointer transition-all"
+                        >
+                          <Camera className="w-3.5 h-3.5" />
+                          <span>معاينة في AR 👑</span>
+                        </button>
+                      )}
+
                       <button
                         type="button"
                         onClick={() => handleUpdateTier(tier.id, t => ({ ...t, enabled: !t.enabled }))}
@@ -1456,7 +1565,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         {tier.enabled ? 'مفعّل ✓' : 'معطّل'}
                       </button>
 
-                      {arRewards.length > 1 && (
+                      {draftARRewards.length > 1 && (
                         <button
                           type="button"
                           onClick={() => handleDeleteRewardTier(tier.id)}
@@ -1661,6 +1770,37 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </div>
                 </div>
               ))}
+            </div>
+
+            {/* Bottom Save Action Footer */}
+            <div className="p-4 bg-slate-900/95 rounded-2xl border border-slate-800 shadow-xl flex flex-wrap items-center justify-between gap-3">
+              <div className="text-xs text-slate-400">
+                {hasUnsavedARChanges
+                  ? 'لديك تعديلات غير محفوظة — اضغط «حفظ الإعدادات» لتطبيقها في الواقع المعزز.'
+                  : 'جميع إعدادات مستويات المكافآت محفوظة وجاهزة للتطبيق في الواقع المعزز.'}
+              </div>
+              <div className="flex flex-wrap items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => handleSaveARRewards()}
+                  className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs sm:text-sm shadow-md transition-all active:scale-95 cursor-pointer"
+                >
+                  <Save className="w-4 h-4" />
+                  <span>حفظ الإعدادات</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (handleSaveARRewards()) {
+                      onBackToWhiteboard();
+                    }
+                  }}
+                  className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs sm:text-sm shadow-md transition-all active:scale-95 cursor-pointer"
+                >
+                  <ArrowRight className="w-4 h-4 rotate-180" />
+                  <span>حفظ والعودة للسبورة</span>
+                </button>
+              </div>
             </div>
           </div>
         )}

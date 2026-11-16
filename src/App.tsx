@@ -118,6 +118,23 @@ export default function App() {
   const [isLibraryOpen, setIsLibraryOpen] = useState(false);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isMobileLandscape, setIsMobileLandscape] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.innerHeight <= 520 && window.innerWidth > window.innerHeight;
+  });
+
+  useEffect(() => {
+    const checkLandscape = () => {
+      setIsMobileLandscape(window.innerHeight <= 520 && window.innerWidth > window.innerHeight);
+    };
+    checkLandscape();
+    window.addEventListener('resize', checkLandscape);
+    window.addEventListener('orientationchange', checkLandscape);
+    return () => {
+      window.removeEventListener('resize', checkLandscape);
+      window.removeEventListener('orientationchange', checkLandscape);
+    };
+  }, []);
   const [historyCanUndo, setHistoryCanUndo] = useState(false);
   const [historyCanRedo, setHistoryCanRedo] = useState(false);
   const [celebrationMessage, setCelebrationMessage] = useState<string | null>(null);
@@ -217,12 +234,22 @@ export default function App() {
     setTimeout(syncHistoryState, 0);
   };
 
-  const handleUpdateARRewards = useCallback((updated: ARRewardTier[]) => {
+  const handleUpdateARRewards = useCallback((updated: ARRewardTier[]): boolean => {
     setArRewards(updated);
-    saveStoredARRewards(updated);
+    return saveStoredARRewards(updated);
+  }, []);
+
+  const handlePreviewARReward = useCallback((tier: ARRewardTier) => {
+    const low = Math.min(tier.minScore, tier.maxScore);
+    const high = Math.max(tier.minScore, tier.maxScore);
+    setLastArScore(Math.round((low + high) / 2));
+    setShowCrown(true);
+    setBoardStyle('ar_camera');
+    window.location.hash = '#/';
   }, []);
 
   const activeReward = showCrown ? findARRewardForScore(lastArScore, arRewards) : null;
+  const activeRewardTitle = (activeReward || findARRewardForScore(null, arRewards))?.title;
 
   const handleClearSideEffects = useCallback(() => {
     setAccuracy(0);
@@ -373,6 +400,7 @@ export default function App() {
         onToggleSaveArCameraPhoto={handleToggleSaveArCameraPhoto}
         arRewards={arRewards}
         onUpdateARRewards={handleUpdateARRewards}
+        onPreviewARReward={handlePreviewARReward}
       />
     );
   }
@@ -428,13 +456,19 @@ export default function App() {
         arDetectionStatus={arDetectionStatus}
         isAirPenLocked={isAirPenLocked}
         onToggleAirPenLock={handleToggleAirPenLock}
+        activeRewardTitle={activeRewardTitle}
+        isMobileLandscape={isMobileLandscape}
       />
 
       {/* Main Workspace / Stage */}
-      <main className="relative flex-1 min-h-0 w-full p-1.5 sm:p-3 overflow-hidden flex flex-col items-center justify-center">
+      <main className={`relative flex-1 min-h-0 w-full overflow-hidden flex flex-col items-center justify-center ${
+        isMobileLandscape ? 'p-1' : 'p-1.5 sm:p-3'
+      }`}>
         
         {/* Workspace Canvas Container */}
-        <div className="relative w-full h-full min-h-0 max-w-6xl rounded-2xl overflow-hidden shadow-2xl flex items-center justify-center">
+        <div className={`relative w-full h-full min-h-0 max-w-6xl overflow-hidden shadow-2xl flex items-center justify-center ${
+          isMobileLandscape ? 'rounded-xl' : 'rounded-2xl'
+        }`}>
           
           {/* Live AR Camera Feed with Full 21-Joint Skeleton & Reward Tracking */}
           <ARCameraOverlay
@@ -472,6 +506,7 @@ export default function App() {
             onToggleAirPenLock={handleToggleAirPenLock}
             currentRepetition={currentRepetition}
             isFullscreen={isFullscreen}
+            isMobileLandscape={isMobileLandscape}
             onToggleFullscreen={toggleFullscreen}
             onOpenHelp={() => setIsHelpOpen(true)}
             onOpenLibrary={() => setIsLibraryOpen(true)}

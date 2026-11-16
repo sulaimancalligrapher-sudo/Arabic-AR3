@@ -71,6 +71,7 @@ interface WhiteboardCanvasProps {
   calligraphyAngle?: number;
   currentRepetition?: number;
   isFullscreen?: boolean;
+  isMobileLandscape?: boolean;
   currentUser?: RegistrantUser | null;
   totalLessonsInTopic?: number;
   onToggleFullscreen?: () => void;
@@ -134,6 +135,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
   calligraphyAngle = 120,
   currentRepetition = 1,
   isFullscreen = false,
+  isMobileLandscape = false,
   currentUser,
   totalLessonsInTopic,
   onToggleFullscreen,
@@ -229,9 +231,9 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     repetitionBreakdown?: { rep: number; score: number }[];
   } | null>(null);
 
-  // Three-finger vertical pan for rotated mobile/tablet viewports
+  // Two-finger vertical pan for rotated mobile/tablet viewports (avoids Android 3-finger split-screen gesture)
   const [boardPanY, setBoardPanY] = useState(0);
-  const threeFingerPanRef = useRef<{ active: boolean; lastAvgY: number }>({ active: false, lastAvgY: 0 });
+  const twoFingerPanRef = useRef<{ active: boolean; lastAvgY: number }>({ active: false, lastAvgY: 0 });
 
   // Answer submission to Google Drive and 'answers 1' sheet
   const [isSubmittingAnswer, setIsSubmittingAnswer] = useState(false);
@@ -342,7 +344,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       redrawCanvas();
       drawTemplateGuide();
     }
-  }, [dimensions, template, guideColor, templateOpacity, currentStepIndex, showGhostOverlay, templateTransform]);
+  }, [dimensions, template, guideColor, templateOpacity, currentStepIndex, showGhostOverlay, templateTransform, isMobileLandscape]);
 
   // Clear repetition cumulative history & apply transform lock behavior when template changes
   useEffect(() => {
@@ -766,14 +768,16 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     const effectiveOpacity = isBlindMode && showGhostOverlay ? 0.45 : templateOpacity;
 
     const computeTransformedBox = (natW: number, natH: number) => {
-      const padding = Math.min(tCanvas.width, tCanvas.height) * 0.08;
+      const topReserved = isMobileLandscape ? 36 : 0;
+      const padRatio = isMobileLandscape ? 0.04 : 0.08;
+      const padding = Math.min(tCanvas.width, tCanvas.height) * padRatio;
       const availW = tCanvas.width - padding * 2;
-      const availH = tCanvas.height - padding * 2;
+      const availH = Math.max(80, tCanvas.height - topReserved - padding * 2);
       const baseScale = Math.min(availW / (natW || 500), availH / (natH || 500));
       const drawW = (natW || 500) * baseScale * templateTransform.scale;
       const drawH = (natH || 500) * baseScale * templateTransform.scale;
       const drawX = (tCanvas.width - drawW) / 2 + templateTransform.offsetX * tCanvas.width;
-      const drawY = (tCanvas.height - drawH) / 2 + templateTransform.offsetY * tCanvas.height;
+      const drawY = topReserved + ((tCanvas.height - topReserved) - drawH) / 2 + templateTransform.offsetY * tCanvas.height;
       return { drawX, drawY, drawW, drawH };
     };
 
@@ -1038,11 +1042,14 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       const gh = Math.ceil(dimensions.height / cell);
       const grid = new Uint8Array(gw * gh);
       const pts: { x: number; y: number }[] = [];
+      const topReserved = isMobileLandscape ? 36 : 0;
+      const padRatio = isMobileLandscape ? 0.04 : 0.08;
+      const pad = Math.min(dimensions.width, dimensions.height) * padRatio;
       const bounds = drawBoundsRef.current || {
-        drawX: Math.min(dimensions.width, dimensions.height) * 0.08,
-        drawY: Math.min(dimensions.width, dimensions.height) * 0.08,
-        drawW: dimensions.width - Math.min(dimensions.width, dimensions.height) * 0.16,
-        drawH: dimensions.height - Math.min(dimensions.width, dimensions.height) * 0.16
+        drawX: pad,
+        drawY: topReserved + pad,
+        drawW: dimensions.width - pad * 2,
+        drawH: Math.max(80, dimensions.height - topReserved - pad * 2)
       };
       const totalCells = rasterizeStepCorridorsIntoGrid(grid, gw, gh, cell, template.steps, bounds.drawX, bounds.drawY, bounds.drawW, bounds.drawH, pts);
       if (totalCells > 0) {
@@ -2053,6 +2060,9 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
   // Handle pointer down (Mouse, Finger Touch, Apple Pencil Stylus)
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     e.preventDefault();
+    if (twoFingerPanRef.current.active) {
+      return;
+    }
     if (e.pointerType === 'touch' && !e.isPrimary) {
       return;
     }
@@ -2162,7 +2172,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
   // Handle pointer move
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     e.preventDefault();
-    if (!activePointerStrokeRef.current) return;
+    if (twoFingerPanRef.current.active || !activePointerStrokeRef.current) return;
 
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -2827,28 +2837,28 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
   };
 
   const handleContainerTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
-    if (e.touches.length === 3) {
+    if (e.touches.length === 2) {
       if (activePointerStrokeRef.current) {
         activePointerStrokeRef.current = null;
         redrawCanvas();
       }
-      const avgY = (e.touches[0].clientY + e.touches[1].clientY + e.touches[2].clientY) / 3;
-      threeFingerPanRef.current = { active: true, lastAvgY: avgY };
+      const avgY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+      twoFingerPanRef.current = { active: true, lastAvgY: avgY };
     }
   };
 
   const handleContainerTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
-    if (e.touches.length === 3 && threeFingerPanRef.current.active) {
-      const avgY = (e.touches[0].clientY + e.touches[1].clientY + e.touches[2].clientY) / 3;
-      const deltaY = avgY - threeFingerPanRef.current.lastAvgY;
-      threeFingerPanRef.current.lastAvgY = avgY;
+    if (e.touches.length === 2 && twoFingerPanRef.current.active) {
+      const avgY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+      const deltaY = avgY - twoFingerPanRef.current.lastAvgY;
+      twoFingerPanRef.current.lastAvgY = avgY;
       setBoardPanY(prev => Math.max(-180, Math.min(180, Math.round(prev + deltaY))));
     }
   };
 
   const handleContainerTouchEnd = (e: React.TouchEvent<HTMLDivElement>) => {
-    if (e.touches.length < 3) {
-      threeFingerPanRef.current.active = false;
+    if (e.touches.length < 2) {
+      twoFingerPanRef.current.active = false;
     }
   };
 
@@ -2859,7 +2869,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       onTouchMove={handleContainerTouchMove}
       onTouchEnd={handleContainerTouchEnd}
       onTouchCancel={handleContainerTouchEnd}
-      className={`relative w-full h-full min-h-0 rounded-2xl overflow-hidden flex items-center justify-center border select-none transition-all duration-300 ${getBoardBgStyle()}`}
+      className={`relative w-full h-full min-h-0 ${isMobileLandscape ? 'rounded-xl' : 'rounded-2xl'} overflow-hidden flex items-center justify-center border select-none transition-all duration-300 ${getBoardBgStyle()}`}
     >
       {/* Calligraphy Guide Grid Lines Pattern */}
       {boardStyle === 'grid' && (
@@ -2948,9 +2958,15 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         </div>
       )}
 
-      {/* Layer 3: Unified Single-Row Top Bar (الشريط الموحد المدمج على صف واحد) */}
-      <div className="absolute top-2 sm:top-3 inset-x-2 sm:inset-x-4 z-30 pointer-events-none flex justify-center">
-        <div className="pointer-events-auto flex items-center justify-between w-full max-w-5xl px-3 sm:px-4 py-1.5 sm:py-2 rounded-2xl bg-slate-900/90 backdrop-blur-md border border-slate-700/80 shadow-2xl text-white gap-2">
+      {/* Layer 3: Unified Single-Row Top Bar (الشريط الموحد المدمج على صف واحد - رفيع وملتصق بالأعلى عند التدوير الأفقي للجوال) */}
+      <div className={`absolute z-30 pointer-events-none flex justify-center ${
+        isMobileLandscape ? 'top-0 inset-x-0' : 'top-2 sm:top-3 inset-x-2 sm:inset-x-4'
+      }`}>
+        <div className={`pointer-events-auto flex items-center justify-between w-full bg-slate-900/90 backdrop-blur-md border border-slate-700/80 shadow-2xl text-white ${
+          isMobileLandscape
+            ? 'px-2.5 py-0.5 rounded-b-xl border-t-0 gap-1.5'
+            : 'max-w-5xl px-3 sm:px-4 py-1.5 sm:py-2 rounded-2xl gap-2'
+        }`}>
           
           {/* Right: Topic / Lesson Title & Repetition Badge (الموضوع والتكرار فقط بدون المستوى) */}
           <div className="flex items-center gap-2 shrink-0">
@@ -3236,7 +3252,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                 type="button"
                 onClick={onToggleFullscreen}
                 title={isFullscreen ? 'تصغير الشاشة' : 'تكبير الشاشة ملء العرض'}
-                className="p-1.5 sm:p-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60 active:scale-95 transition-all cursor-pointer"
+                className={`${isMobileLandscape ? 'p-1 rounded-lg' : 'p-1.5 sm:p-2 rounded-xl'} bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60 active:scale-95 transition-all cursor-pointer`}
               >
                 {isFullscreen ? (
                   <Minimize2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
@@ -3251,7 +3267,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
 
       {/* Floating Template Move / Scale Control Popover */}
       {isTransformPopoverOpen && template && (
-        <div className="absolute top-14 sm:top-16 left-2 sm:left-4 z-40 w-[238px] bg-slate-900/95 backdrop-blur-md border border-amber-500/40 rounded-2xl p-3 shadow-2xl text-slate-100 animate-in fade-in zoom-in-95 duration-150">
+        <div className={`absolute ${isMobileLandscape ? 'top-10' : 'top-14 sm:top-16'} left-2 sm:left-4 z-40 w-[238px] bg-slate-900/95 backdrop-blur-md border border-amber-500/40 rounded-2xl p-3 shadow-2xl text-slate-100 animate-in fade-in zoom-in-95 duration-150`}>
           <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-slate-800">
             <div className="flex items-center gap-1.5 text-xs font-bold text-amber-300">
               <Move className="w-3.5 h-3.5" />
@@ -3400,7 +3416,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         <>
           {/* Corner 10-Star Honor Widget (opposite side of sidebar so it never collides) */}
           <div
-            className={`absolute top-14 sm:top-16 z-30 pointer-events-auto flex flex-wrap lg:flex-nowrap items-center justify-center max-w-[146px] lg:max-w-none gap-0.5 lg:gap-1 px-2 py-1 lg:px-2.5 lg:py-1.5 rounded-2xl bg-slate-900/90 border border-amber-500/40 shadow-xl ${
+            className={`absolute ${isMobileLandscape ? 'top-10' : 'top-14 sm:top-16'} z-30 pointer-events-auto flex flex-wrap lg:flex-nowrap items-center justify-center max-w-[146px] lg:max-w-none gap-0.5 lg:gap-1 px-2 py-1 lg:px-2.5 lg:py-1.5 rounded-2xl bg-slate-900/90 border border-amber-500/40 shadow-xl ${
               evalSidebarSide === 'left' ? 'right-2 sm:right-4' : 'left-2 sm:left-4'
             }`}
           >
