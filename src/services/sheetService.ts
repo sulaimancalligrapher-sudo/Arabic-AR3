@@ -4,6 +4,8 @@ import { formatDirectImageUrl } from '../utils/urlHelper';
 import { ARRewardTier, splitARRewardsPayload } from './arRewardsService';
 
 const SHEET_URL_KEY = 'arabic_ar_sheet_url';
+const SHEET_URL_VERSION_KEY = 'arabic_ar_sheet_url_ver';
+const DEFAULT_SHEET_VERSION = '2026-11-16-AKfycbyK1W';
 const LOCAL_TEMPLATES_KEY = 'arabic_ar_horizontal_templates_v2';
 const LOCAL_STEPS_CACHE_KEY = 'arabic_ar_steps_backup_cache';
 
@@ -923,27 +925,30 @@ class SheetService {
     this.sheetUrl = this.getStoredSheetUrl();
     if (typeof window !== 'undefined' && !localStorage.getItem(SHEET_URL_KEY)) {
       localStorage.setItem(SHEET_URL_KEY, DEFAULT_SHEET_URL);
+      localStorage.setItem(SHEET_URL_VERSION_KEY, DEFAULT_SHEET_VERSION);
     }
   }
 
   public getStoredSheetUrl(): string {
     if (typeof window === 'undefined') return DEFAULT_SHEET_URL;
     const stored = localStorage.getItem(SHEET_URL_KEY);
-    // Automatically migrate any previous default deployment URLs to the active URL so all devices stay in sync
-    if (stored && (
+    const storedVer = localStorage.getItem(SHEET_URL_VERSION_KEY);
+    // Automatically migrate any previous default or unversioned browser URLs to the active URL so all devices/browsers stay in sync
+    if (
+      storedVer !== DEFAULT_SHEET_VERSION ||
+      !stored ||
+      !stored.trim() ||
       stored.includes('AKfycbwjtf7BiA8k5BEQgw1n0s_VYeBNzTmL-IitZ8m_YKjbnVfd_dZHL4svN08x4jNfw3LNqA') ||
       stored.includes('AKfycbw3_rZtsYcs4OLZU242sU6Kgc6OHWc6sSQ-EmLsJT4yOUCkHVP38ootritf_vnRmG1Oug') ||
       stored.includes('AKfycbzd9L7BL9tQu-7OkyFX3mNreodryMJO3EGcdcaYP-tnWG9b1reETX7gLEseLSmgsjGOVw') ||
       stored.includes('AKfycbzRDyx7Tb5uLKInIWdFBa0vPxxdide_pWRFdXQ5qPdYzkUXmKxn8HPyoIjZxDUJD_TM7A') ||
-      !stored.trim()
-    )) {
+      stored.includes('AKfycbwAXtwRRqGlrpxyn6vgDfvdWSnwix3NNI1J1nC62ZVHleekKn8XHtud9gXw5K2N0KXBbA')
+    ) {
       localStorage.setItem(SHEET_URL_KEY, DEFAULT_SHEET_URL);
+      localStorage.setItem(SHEET_URL_VERSION_KEY, DEFAULT_SHEET_VERSION);
       return DEFAULT_SHEET_URL;
     }
-    if (stored && stored.trim()) {
-      return stored.trim();
-    }
-    return DEFAULT_SHEET_URL;
+    return stored.trim();
   }
 
   public setStoredSheetUrl(url: string): void {
@@ -951,6 +956,7 @@ class SheetService {
     this.sheetUrl = trimmed;
     if (typeof window !== 'undefined') {
       localStorage.setItem(SHEET_URL_KEY, trimmed);
+      localStorage.setItem(SHEET_URL_VERSION_KEY, DEFAULT_SHEET_VERSION);
     }
   }
 
