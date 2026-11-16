@@ -1,0 +1,224 @@
+export interface ARRewardTier {
+  id: string;
+  title: string;
+  minScore: number;
+  maxScore: number;
+  presetId?: string;
+  imageUrl: string;
+  scaleRatio: number;
+  offsetYRatio: number;
+  enabled: boolean;
+}
+
+export interface ARRewardPreset {
+  id: string;
+  name: string;
+  defaultTitle: string;
+  imageUrl: string;
+  defaultScaleRatio: number;
+  defaultOffsetYRatio: number;
+}
+
+const AR_REWARDS_STORAGE_KEY = 'arabic_calligraphy_ar_rewards_v1';
+
+const svgToDataUrl = (svg: string): string =>
+  `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg.trim())}`;
+
+export const AR_REWARD_PRESETS: ARRewardPreset[] = [
+  {
+    id: 'royal_crown',
+    name: 'التاج الملكي الذهبي 👑',
+    defaultTitle: '👑 بطل الخط العربي 🌟',
+    defaultScaleRatio: 1.35,
+    defaultOffsetYRatio: -0.45,
+    imageUrl: svgToDataUrl(`
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 155" width="240" height="155">
+        <defs>
+          <linearGradient id="crownGold" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#fef08a"/>
+            <stop offset="35%" stop-color="#f59e0b"/>
+            <stop offset="65%" stop-color="#fef3c7"/>
+            <stop offset="100%" stop-color="#d97706"/>
+          </linearGradient>
+        </defs>
+        <path d="M 32 122 L 24 44 L 62 84 L 82 28 L 106 78 L 120 12 L 134 78 L 158 28 L 178 84 L 216 44 L 208 122 Z" fill="url(#crownGold)" stroke="#78350f" stroke-width="4" stroke-linejoin="round"/>
+        <path d="M 32 124 Q 120 144 208 124" fill="none" stroke="#d97706" stroke-width="14" stroke-linecap="round"/>
+        <path d="M 32 124 Q 120 144 208 124" fill="none" stroke="#fef08a" stroke-width="8" stroke-linecap="round"/>
+        <circle cx="120" cy="14" r="10" fill="#10b981" stroke="#fef08a" stroke-width="2.5"/>
+        <circle cx="82" cy="29" r="7.5" fill="#3b82f6" stroke="#fef08a" stroke-width="2"/>
+        <circle cx="158" cy="29" r="7.5" fill="#3b82f6" stroke="#fef08a" stroke-width="2"/>
+        <circle cx="25" cy="45" r="6.5" fill="#ef4444" stroke="#fef08a" stroke-width="2"/>
+        <circle cx="215" cy="45" r="6.5" fill="#ef4444" stroke="#fef08a" stroke-width="2"/>
+        <circle cx="70" cy="127" r="4.5" fill="#ffffff"/>
+        <circle cx="120" cy="133" r="5" fill="#dc2626"/>
+        <circle cx="170" cy="127" r="4.5" fill="#ffffff"/>
+      </svg>
+    `),
+  },
+  {
+    id: 'calligrapher_turban',
+    name: 'عمامة ووسام الخطاط ⭐',
+    defaultTitle: '⭐ خطاط متميز ✨',
+    defaultScaleRatio: 1.45,
+    defaultOffsetYRatio: -0.35,
+    imageUrl: svgToDataUrl(`
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 150" width="240" height="150">
+        <defs>
+          <linearGradient id="turbanSilk" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#f8fafc"/>
+            <stop offset="50%" stop-color="#e2e8f0"/>
+            <stop offset="100%" stop-color="#cbd5e1"/>
+          </linearGradient>
+          <linearGradient id="emeraldBand" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stop-color="#059669"/>
+            <stop offset="50%" stop-color="#10b981"/>
+            <stop offset="100%" stop-color="#047857"/>
+          </linearGradient>
+        </defs>
+        <ellipse cx="120" cy="82" rx="88" ry="52" fill="url(#turbanSilk)" stroke="#64748b" stroke-width="3.5"/>
+        <path d="M 38 78 Q 120 44 202 78" fill="none" stroke="#94a3b8" stroke-width="3.5"/>
+        <path d="M 46 60 Q 120 28 194 60" fill="none" stroke="#94a3b8" stroke-width="3"/>
+        <path d="M 35 104 Q 120 128 205 104 L 198 124 Q 120 144 42 124 Z" fill="url(#emeraldBand)" stroke="#fef08a" stroke-width="2.5"/>
+        <polygon points="120,26 128,46 149,47 133,60 139,80 120,68 101,80 107,60 91,47 112,46" fill="#fbbf24" stroke="#78350f" stroke-width="2.5" stroke-linejoin="round"/>
+        <circle cx="120" cy="54" r="7" fill="#dc2626" stroke="#fef08a" stroke-width="2"/>
+      </svg>
+    `),
+  },
+  {
+    id: 'excellence_laurel',
+    name: 'إكليل التميز التشجيعي 🎖️',
+    defaultTitle: '🎖️ مثابرة رائعة 👏',
+    defaultScaleRatio: 1.4,
+    defaultOffsetYRatio: -0.4,
+    imageUrl: svgToDataUrl(`
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 150" width="240" height="150">
+        <defs>
+          <linearGradient id="laurelGold" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="#fde047"/>
+            <stop offset="100%" stop-color="#d97706"/>
+          </linearGradient>
+        </defs>
+        <path d="M 110 122 C 60 116 32 82 38 40 C 56 54 64 78 60 94 C 52 84 44 74 42 62" fill="none" stroke="url(#laurelGold)" stroke-width="8" stroke-linecap="round"/>
+        <path d="M 130 122 C 180 116 208 82 202 40 C 184 54 176 78 180 94 C 188 84 196 74 198 62" fill="none" stroke="url(#laurelGold)" stroke-width="8" stroke-linecap="round"/>
+        <ellipse cx="48" cy="58" rx="14" ry="7" transform="rotate(-35 48 58)" fill="#facc15" stroke="#78350f" stroke-width="2"/>
+        <ellipse cx="58" cy="84" rx="15" ry="7" transform="rotate(-20 58 84)" fill="#fbbf24" stroke="#78350f" stroke-width="2"/>
+        <ellipse cx="78" cy="108" rx="14" ry="7" transform="rotate(-8 78 108)" fill="#f59e0b" stroke="#78350f" stroke-width="2"/>
+        <ellipse cx="192" cy="58" rx="14" ry="7" transform="rotate(35 192 58)" fill="#facc15" stroke="#78350f" stroke-width="2"/>
+        <ellipse cx="182" cy="84" rx="15" ry="7" transform="rotate(20 182 84)" fill="#fbbf24" stroke="#78350f" stroke-width="2"/>
+        <ellipse cx="162" cy="108" rx="14" ry="7" transform="rotate(8 162 108)" fill="#f59e0b" stroke="#78350f" stroke-width="2"/>
+        <circle cx="120" cy="64" r="30" fill="#0ea5e9" stroke="#fef08a" stroke-width="4"/>
+        <polygon points="120,42 126,56 141,57 129,67 133,82 120,73 107,82 111,67 99,57 114,56" fill="#fef08a"/>
+      </svg>
+    `),
+  },
+  {
+    id: 'graduation_cap',
+    name: 'قبعة الإبداع والتميز 🎓',
+    defaultTitle: '🎓 مبدع المستقبل ✨',
+    defaultScaleRatio: 1.45,
+    defaultOffsetYRatio: -0.4,
+    imageUrl: svgToDataUrl(`
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 150" width="240" height="150">
+        <polygon points="120,18 226,56 120,94 14,56" fill="#1e293b" stroke="#f59e0b" stroke-width="4" stroke-linejoin="round"/>
+        <path d="M 56 72 L 56 112 Q 120 136 184 112 L 184 72 L 120 94 Z" fill="#0f172a" stroke="#f59e0b" stroke-width="3.5" stroke-linejoin="round"/>
+        <line x1="204" y1="64" x2="204" y2="112" stroke="#fbbf24" stroke-width="4" stroke-linecap="round"/>
+        <circle cx="204" cy="116" r="7" fill="#f59e0b"/>
+        <circle cx="120" cy="56" r="6" fill="#fbbf24"/>
+      </svg>
+    `),
+  },
+  {
+    id: 'golden_star_emblem',
+    name: 'وسام نجم الخط الذهبي 🌟',
+    defaultTitle: '🌟 نجم الخط العربي 🌟',
+    defaultScaleRatio: 1.15,
+    defaultOffsetYRatio: -0.5,
+    imageUrl: svgToDataUrl(`
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 160" width="200" height="160">
+        <defs>
+          <radialGradient id="starGlow" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#fef9c3"/>
+            <stop offset="60%" stop-color="#fbbf24"/>
+            <stop offset="100%" stop-color="#d97706"/>
+          </radialGradient>
+        </defs>
+        <polygon points="100,12 123,60 176,66 136,102 147,154 100,128 53,154 64,102 24,66 77,60" fill="url(#starGlow)" stroke="#78350f" stroke-width="4" stroke-linejoin="round"/>
+        <circle cx="100" cy="90" r="20" fill="#fef08a" opacity="0.55"/>
+      </svg>
+    `),
+  },
+];
+
+export const getDefaultARRewards = (): ARRewardTier[] => [
+  {
+    id: 'tier_gold_crown',
+    title: AR_REWARD_PRESETS[0].defaultTitle,
+    minScore: 90,
+    maxScore: 100,
+    presetId: AR_REWARD_PRESETS[0].id,
+    imageUrl: AR_REWARD_PRESETS[0].imageUrl,
+    scaleRatio: AR_REWARD_PRESETS[0].defaultScaleRatio,
+    offsetYRatio: AR_REWARD_PRESETS[0].defaultOffsetYRatio,
+    enabled: true,
+  },
+  {
+    id: 'tier_silver_turban',
+    title: AR_REWARD_PRESETS[1].defaultTitle,
+    minScore: 75,
+    maxScore: 89,
+    presetId: AR_REWARD_PRESETS[1].id,
+    imageUrl: AR_REWARD_PRESETS[1].imageUrl,
+    scaleRatio: AR_REWARD_PRESETS[1].defaultScaleRatio,
+    offsetYRatio: AR_REWARD_PRESETS[1].defaultOffsetYRatio,
+    enabled: true,
+  },
+  {
+    id: 'tier_bronze_laurel',
+    title: AR_REWARD_PRESETS[2].defaultTitle,
+    minScore: 60,
+    maxScore: 74,
+    presetId: AR_REWARD_PRESETS[2].id,
+    imageUrl: AR_REWARD_PRESETS[2].imageUrl,
+    scaleRatio: AR_REWARD_PRESETS[2].defaultScaleRatio,
+    offsetYRatio: AR_REWARD_PRESETS[2].defaultOffsetYRatio,
+    enabled: true,
+  },
+];
+
+export const getStoredARRewards = (): ARRewardTier[] => {
+  try {
+    const raw = localStorage.getItem(AR_REWARDS_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+  } catch {}
+  return getDefaultARRewards();
+};
+
+export const saveStoredARRewards = (tiers: ARRewardTier[]): void => {
+  try {
+    localStorage.setItem(AR_REWARDS_STORAGE_KEY, JSON.stringify(tiers));
+  } catch {}
+};
+
+export const findARRewardForScore = (
+  score: number | null,
+  tiers: ARRewardTier[]
+): ARRewardTier | null => {
+  const enabledTiers = tiers.filter(t => t.enabled);
+  if (enabledTiers.length === 0) return null;
+
+  if (score === null || score === undefined) {
+    // Manual crown toggle preview: return highest minScore tier
+    return [...enabledTiers].sort((a, b) => b.maxScore - a.maxScore)[0] || null;
+  }
+
+  const rounded = Math.round(score);
+  const matching = enabledTiers
+    .filter(t => rounded >= t.minScore && rounded <= t.maxScore)
+    .sort((a, b) => b.minScore - a.minScore);
+  return matching[0] || null;
+};

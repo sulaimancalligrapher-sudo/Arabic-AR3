@@ -31,10 +31,14 @@ import {
   Layers,
   Users,
   UserPlus,
-  Camera
+  Camera,
+  Crown,
+  Upload,
+  RotateCcw
 } from 'lucide-react';
 import { BoardStyle, GuideColor } from '../types/drawing';
 import { GUIDE_COLORS } from '../data/drawingTemplates';
+import { ARRewardTier, AR_REWARD_PRESETS, getDefaultARRewards } from '../services/arRewardsService';
 
 interface SettingsViewProps {
   onBackToWhiteboard: () => void;
@@ -48,6 +52,8 @@ interface SettingsViewProps {
   onChangeTemplateOpacity?: (opacity: number) => void;
   saveArCameraPhoto?: boolean;
   onToggleSaveArCameraPhoto?: (val: boolean) => void;
+  arRewards?: ARRewardTier[];
+  onUpdateARRewards?: (tiers: ARRewardTier[]) => void;
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
@@ -62,14 +68,76 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onChangeTemplateOpacity,
   saveArCameraPhoto = true,
   onToggleSaveArCameraPhoto,
+  arRewards = [],
+  onUpdateARRewards,
 }) => {
-  // Tabs: 'lessons' (إدارة وتعديل), 'table' (ورقة الدروس), 'sheet' (ربط الشيت), 'board' (إعدادات وخلفيات السبورة), 'registrants' (سجل المشتركين)
-  const [activeTab, setActiveTab] = useState<'lessons' | 'table' | 'sheet' | 'board' | 'registrants'>('lessons');
+  // Tabs: 'lessons' | 'table' | 'sheet' | 'board' | 'ar_rewards' | 'registrants'
+  const [activeTab, setActiveTab] = useState<'lessons' | 'table' | 'sheet' | 'board' | 'ar_rewards' | 'registrants'>('lessons');
   const [registrantsList, setRegistrantsList] = useState<RegistrantUser[]>(() => sheetService.getCachedRegistrants());
   const [newRegId, setNewRegId] = useState('');
   const [newRegName, setNewRegName] = useState('');
   const [isAddingReg, setIsAddingReg] = useState(false);
   const [regStatusMsg, setRegStatusMsg] = useState<string | null>(null);
+
+  const handleUpdateTier = (tierId: string, updater: (t: ARRewardTier) => ARRewardTier) => {
+    if (!onUpdateARRewards) return;
+    onUpdateARRewards(arRewards.map(t => (t.id === tierId ? updater(t) : t)));
+  };
+
+  const handleAddRewardTier = () => {
+    if (!onUpdateARRewards) return;
+    const preset = AR_REWARD_PRESETS[3] || AR_REWARD_PRESETS[0];
+    const newTier: ARRewardTier = {
+      id: `tier_${Date.now()}`,
+      title: preset.defaultTitle,
+      minScore: 50,
+      maxScore: 59,
+      presetId: preset.id,
+      imageUrl: preset.imageUrl,
+      scaleRatio: preset.defaultScaleRatio,
+      offsetYRatio: preset.defaultOffsetYRatio,
+      enabled: true,
+    };
+    onUpdateARRewards([...arRewards, newTier]);
+    audioService.playSuccessSound();
+  };
+
+  const handleDeleteRewardTier = (tierId: string) => {
+    if (!onUpdateARRewards) return;
+    onUpdateARRewards(arRewards.filter(t => t.id !== tierId));
+  };
+
+  const handleUploadRewardImage = (tierId: string, file: File | undefined) => {
+    if (!file || !onUpdateARRewards) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      if (!result) return;
+      const img = new Image();
+      img.onload = () => {
+        const maxDim = 420;
+        const scale = Math.min(1, maxDim / Math.max(img.width || 1, img.height || 1));
+        const w = Math.max(1, Math.round(img.width * scale));
+        const h = Math.max(1, Math.round(img.height * scale));
+        const c = document.createElement('canvas');
+        c.width = w;
+        c.height = h;
+        const ctx = c.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, w, h);
+          const optimizedPng = c.toDataURL('image/png');
+          handleUpdateTier(tierId, t => ({
+            ...t,
+            presetId: undefined,
+            imageUrl: optimizedPng,
+          }));
+          audioService.playSuccessSound();
+        }
+      };
+      img.src = result;
+    };
+    reader.readAsDataURL(file);
+  };
 
   const reloadRegistrants = async () => {
     const res = await sheetService.fetchRegistrants();
@@ -488,6 +556,18 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             >
               <Layers className="w-4 h-4" />
               <span>إعدادات وخلفيات السبورة</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('ar_rewards')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer whitespace-nowrap ${
+                activeTab === 'ar_rewards'
+                  ? 'bg-amber-500 text-slate-950 shadow-md'
+                  : 'bg-slate-900 hover:bg-slate-800 text-slate-300'
+              }`}
+            >
+              <Crown className="w-4 h-4" />
+              <span>مكافآت الواقع المعزز AR</span>
             </button>
 
             <button
@@ -1295,6 +1375,293 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
             </div>
 
+          </div>
+        )}
+
+        {/* ======================= TAB 4B: AR HEAD REWARDS STUDIO (مكافآت الواقع المعزز AR) ======================= */}
+        {activeTab === 'ar_rewards' && (
+          <div className="space-y-6">
+            {/* Header Card */}
+            <div className="p-5 sm:p-6 bg-slate-900/90 rounded-2xl border border-slate-800 shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+                  <Crown className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm sm:text-base text-slate-100">
+                    إعدادات جوائز وصور الرأس في الواقع المعزز (AR)
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5 leading-relaxed">
+                    خصّص صور الإكسسوارات (تاج، عمامة، إكليل، قبعة، أو صورة PNG شفافة من جهازك) التي تظهر فوق رأس الطالب حسب درجته وتُحفظ مع صورته.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onUpdateARRewards && onUpdateARRewards(getDefaultARRewards());
+                    audioService.playChime(520, 0.12);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs font-bold cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>استعادة الافتراضي</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleAddRewardTier}
+                  className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-md cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>إضافة مستوى جديد</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Tiers Editor Cards */}
+            <div className="space-y-5">
+              {arRewards.map((tier, idx) => (
+                <div
+                  key={tier.id}
+                  className={`p-5 rounded-2xl border transition-all shadow-lg ${
+                    tier.enabled
+                      ? 'bg-slate-900/95 border-amber-500/30'
+                      : 'bg-slate-900/50 border-slate-800 opacity-75'
+                  }`}
+                >
+                  {/* Card Top Bar */}
+                  <div className="flex flex-wrap items-center justify-between gap-3 pb-4 mb-4 border-b border-slate-800">
+                    <div className="flex items-center gap-2.5">
+                      <span className="w-7 h-7 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-400 font-mono font-bold text-xs flex items-center justify-center">
+                        {idx + 1}
+                      </span>
+                      <span className="font-bold text-sm text-white">{tier.title || 'مستوى مكافأة'}</span>
+                      <span className="px-2.5 py-0.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-mono font-bold text-xs">
+                        {tier.minScore}% – {tier.maxScore}%
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleUpdateTier(tier.id, t => ({ ...t, enabled: !t.enabled }))}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold border cursor-pointer transition-all ${
+                          tier.enabled
+                            ? 'bg-emerald-600/20 border-emerald-500/40 text-emerald-300'
+                            : 'bg-slate-800 border-slate-700 text-slate-400'
+                        }`}
+                      >
+                        {tier.enabled ? 'مفعّل ✓' : 'معطّل'}
+                      </button>
+
+                      {arRewards.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteRewardTier(tier.id)}
+                          title="حذف هذا المستوى"
+                          className="p-2 rounded-xl bg-slate-800 hover:bg-rose-500 text-rose-400 hover:text-white transition-colors cursor-pointer"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Card Content Grid */}
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-center">
+                    {/* Live Mini Head Placement Preview */}
+                    <div className="lg:col-span-4 flex flex-col items-center justify-center p-4 rounded-2xl bg-slate-950 border border-slate-800 relative h-56 overflow-hidden">
+                      <span className="absolute top-2 right-2.5 text-[10px] font-bold text-slate-400 bg-slate-900/90 px-2 py-0.5 rounded border border-slate-800">
+                        معاينة موضع الرأس
+                      </span>
+
+                      {/* Simulated Head Anchor Box */}
+                      <div className="relative mt-14 flex flex-col items-center">
+                        {/* Accessory Overlay positioned by scaleRatio and offsetYRatio */}
+                        <div
+                          className="absolute flex flex-col items-center pointer-events-none transition-all duration-150"
+                          style={{
+                            width: `${Math.round(76 * tier.scaleRatio)}px`,
+                            top: `${Math.round(tier.offsetYRatio * 52 - 36)}px`,
+                          }}
+                        >
+                          {tier.title.trim() && (
+                            <span className="mb-1 px-2 py-0.5 rounded-md bg-slate-900/95 border border-amber-500 text-amber-300 font-bold text-[10px] whitespace-nowrap shadow">
+                              {tier.title}
+                            </span>
+                          )}
+                          {tier.imageUrl ? (
+                            <img
+                              src={tier.imageUrl}
+                              alt={tier.title}
+                              className="w-full h-auto max-h-24 object-contain drop-shadow-[0_2px_10px_rgba(251,191,36,0.5)]"
+                            />
+                          ) : null}
+                        </div>
+
+                        {/* Silhouette Student Head */}
+                        <div className="w-[76px] h-[90px] rounded-full bg-gradient-to-b from-slate-700 to-slate-800 border-2 border-slate-600 flex flex-col items-center justify-center shadow-inner">
+                          <div className="flex gap-3 mb-2">
+                            <span className="w-2 h-2 rounded-full bg-slate-400" />
+                            <span className="w-2 h-2 rounded-full bg-slate-400" />
+                          </div>
+                          <div className="w-6 h-2.5 border-b-2 border-slate-400 rounded-b-full" />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Controls */}
+                    <div className="lg:col-span-8 space-y-4">
+                      {/* Title + Score Min/Max */}
+                      <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
+                        <div className="sm:col-span-6">
+                          <label className="block text-[11px] font-bold text-amber-400 mb-1">
+                            العنوان الظاهر فوق الرأس:
+                          </label>
+                          <input
+                            type="text"
+                            value={tier.title}
+                            onChange={(e) => handleUpdateTier(tier.id, t => ({ ...t, title: e.target.value }))}
+                            placeholder="مثلاً: 👑 بطل الخط العربي 🌟"
+                            className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs font-bold text-white focus:outline-hidden focus:border-amber-500"
+                          />
+                        </div>
+
+                        <div className="sm:col-span-3">
+                          <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                            من درجة (%):
+                          </label>
+                          <input
+                            type="number"
+                            min={0}
+                            max={100}
+                            value={tier.minScore}
+                            onChange={(e) => {
+                              const val = Math.max(0, Math.min(100, Number(e.target.value) || 0));
+                              handleUpdateTier(tier.id, t => ({ ...t, minScore: val }));
+                            }}
+                            className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs font-mono font-bold text-emerald-400 focus:outline-hidden focus:border-amber-500"
+                          />
+                        </div>
+
+                        <div className="sm:col-span-3">
+                          <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                            إلى درجة (%):
+                          </label>
+                          <input
+                            type="number"
+                            min={0}
+                            max={100}
+                            value={tier.maxScore}
+                            onChange={(e) => {
+                              const val = Math.max(0, Math.min(100, Number(e.target.value) || 0));
+                              handleUpdateTier(tier.id, t => ({ ...t, maxScore: val }));
+                            }}
+                            className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs font-mono font-bold text-sky-400 focus:outline-hidden focus:border-amber-500"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Built-in Presets + Upload Custom PNG */}
+                      <div>
+                        <div className="flex items-center justify-between gap-2 mb-1.5">
+                          <label className="text-[11px] font-bold text-amber-400">
+                            اختر تصميماً جاهزاً أو ارفع صورة PNG شفافة:
+                          </label>
+                          <label className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-sky-600/20 hover:bg-sky-600/30 border border-sky-500/40 text-sky-300 text-[11px] font-bold cursor-pointer">
+                            <Upload className="w-3.5 h-3.5" />
+                            <span>رفع صورة مخصصة</span>
+                            <input
+                              type="file"
+                              accept="image/png,image/webp,image/svg+xml,image/*"
+                              className="hidden"
+                              onChange={(e) => {
+                                handleUploadRewardImage(tier.id, e.target.files?.[0]);
+                                e.target.value = '';
+                              }}
+                            />
+                          </label>
+                        </div>
+
+                        <div className="flex flex-wrap gap-2">
+                          {AR_REWARD_PRESETS.map(preset => {
+                            const selected = tier.presetId === preset.id;
+                            return (
+                              <button
+                                key={preset.id}
+                                type="button"
+                                onClick={() =>
+                                  handleUpdateTier(tier.id, t => ({
+                                    ...t,
+                                    presetId: preset.id,
+                                    imageUrl: preset.imageUrl,
+                                    scaleRatio: preset.defaultScaleRatio,
+                                    offsetYRatio: preset.defaultOffsetYRatio,
+                                  }))
+                                }
+                                className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-bold flex items-center gap-2 cursor-pointer transition-all ${
+                                  selected
+                                    ? 'bg-amber-500/20 border-amber-400 text-amber-300 ring-1 ring-amber-400/50'
+                                    : 'bg-slate-950 border-slate-800 text-slate-300 hover:bg-slate-800'
+                                }`}
+                              >
+                                <img src={preset.imageUrl} alt={preset.name} className="w-6 h-5 object-contain" />
+                                <span>{preset.name}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Scale & Vertical Offset Sliders */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                        <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800 space-y-1.5">
+                          <div className="flex items-center justify-between text-[11px]">
+                            <span className="font-bold text-slate-300">حجم الصورة نسبةً للرأس:</span>
+                            <span className="font-mono font-bold text-amber-400">
+                              {Math.round(tier.scaleRatio * 100)}%
+                            </span>
+                          </div>
+                          <input
+                            type="range"
+                            min={0.7}
+                            max={2.2}
+                            step={0.05}
+                            value={tier.scaleRatio}
+                            onChange={(e) =>
+                              handleUpdateTier(tier.id, t => ({ ...t, scaleRatio: Number(e.target.value) }))
+                            }
+                            className="w-full accent-amber-500 cursor-pointer"
+                          />
+                        </div>
+
+                        <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800 space-y-1.5">
+                          <div className="flex items-center justify-between text-[11px]">
+                            <span className="font-bold text-slate-300">الإزاحة أعلى / أسفل الرأس:</span>
+                            <span className="font-mono font-bold text-sky-400">
+                              {tier.offsetYRatio > 0 ? `+${tier.offsetYRatio.toFixed(2)}` : tier.offsetYRatio.toFixed(2)}
+                            </span>
+                          </div>
+                          <input
+                            type="range"
+                            min={-0.95}
+                            max={0.45}
+                            step={0.05}
+                            value={tier.offsetYRatio}
+                            onChange={(e) =>
+                              handleUpdateTier(tier.id, t => ({ ...t, offsetYRatio: Number(e.target.value) }))
+                            }
+                            className="w-full accent-sky-400 cursor-pointer"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 

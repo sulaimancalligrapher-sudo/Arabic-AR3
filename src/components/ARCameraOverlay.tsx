@@ -4,12 +4,14 @@ import { HandSkeletonOverlay } from './HandSkeletonOverlay';
 import { RoyalCrownOverlay } from './RoyalCrownOverlay';
 import { getScreenPointFromVideo } from '../utils/arProjection';
 import { HandTrackingDisplayMode } from '../types/drawing';
+import { ARRewardTier } from '../services/arRewardsService';
 import { AlertCircle } from 'lucide-react';
 
 interface ARCameraOverlayProps {
   isARMode: boolean;
   trackingMode: HandTrackingDisplayMode;
   showCrown: boolean;
+  activeReward?: ARRewardTier | null;
   facingMode: 'user' | 'environment';
   isMirrored: boolean;
   onCursorUpdate: (cursor: { x: number; y: number } | null, isPinching: boolean) => void;
@@ -22,6 +24,7 @@ export const ARCameraOverlay: React.FC<ARCameraOverlayProps> = ({
   isARMode,
   trackingMode,
   showCrown,
+  activeReward = null,
   facingMode,
   isMirrored,
   onCursorUpdate,
@@ -211,13 +214,14 @@ export const ARCameraOverlay: React.FC<ARCameraOverlayProps> = ({
         trackingMode={trackingMode}
       />
 
-      {/* AR Royal Crown Overlay over Student Head (Pixel-perfect matching video) */}
+      {/* AR Royal Crown / Tiered Reward Overlay over Student Head (Pixel-perfect matching video) */}
       <RoyalCrownOverlay
         face={arState.face}
         videoWidth={arState.videoWidth}
         videoHeight={arState.videoHeight}
         isMirrored={isMirrored}
         showCrown={showCrown}
+        activeReward={activeReward}
         onCanvasReady={onCrownCanvasReady}
       />
 

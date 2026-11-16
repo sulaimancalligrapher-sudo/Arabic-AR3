@@ -18,7 +18,6 @@ import {
   BookOpen,
   FolderOpen,
   Save,
-  ExternalLink,
   Loader2,
   Eye,
   EyeOff,
@@ -93,6 +92,21 @@ interface TemplateTransform {
 const DEFAULT_TEMPLATE_TRANSFORM: TemplateTransform = { offsetX: 0, offsetY: 0, scale: 1 };
 const LOCK_TRANSFORM_KEY = 'arabic_calligraphy_lock_transform_v1';
 const SAVED_TRANSFORM_KEY = 'arabic_calligraphy_saved_transform_v1';
+
+type LessonEvalMode = 'steps' | 'guide_only' | 'freehand';
+
+const getLessonEvalMode = (tpl: DrawingTemplate | null): LessonEvalMode => {
+  if (!tpl) return 'freehand';
+  const hasVisualGuide = Boolean(tpl.imageUrl?.trim() || tpl.svgData?.trim());
+  const hasSteps = Boolean(tpl.steps && tpl.steps.length > 0);
+  if (tpl.category === 'freehand' || (!hasVisualGuide && !hasSteps)) {
+    return 'freehand';
+  }
+  if (!hasSteps || tpl.hideDots) {
+    return 'guide_only';
+  }
+  return 'steps';
+};
 
 const getEarnedStars = (score: number): number => {
   if (score <= 0) return 0;
@@ -211,8 +225,13 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     pathScore: number;
     coverageScore: number;
     feedback: string;
+    evalMode: LessonEvalMode;
     repetitionBreakdown?: { rep: number; score: number }[];
   } | null>(null);
+
+  // Three-finger vertical pan for rotated mobile/tablet viewports
+  const [boardPanY, setBoardPanY] = useState(0);
+  const threeFingerPanRef = useRef<{ active: boolean; lastAvgY: number }>({ active: false, lastAvgY: 0 });
 
   // Answer submission to Google Drive and 'answers 1' sheet
   const [isSubmittingAnswer, setIsSubmittingAnswer] = useState(false);
@@ -254,20 +273,30 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
   // Canvas dimensions
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
 
-  // Update canvas size on container resize
+  // Update canvas size on container resize (including portrait <-> landscape orientation changes)
   useEffect(() => {
     const updateSize = () => {
       if (containerRef.current) {
         const { clientWidth, clientHeight } = containerRef.current;
         if (clientWidth > 0 && clientHeight > 0) {
           setDimensions({ width: clientWidth, height: clientHeight });
+          setBoardPanY(0);
         }
       }
     };
 
     updateSize();
+    const el = containerRef.current;
+    let observer: ResizeObserver | null = null;
+    if (el && typeof ResizeObserver !== 'undefined') {
+      observer = new ResizeObserver(() => updateSize());
+      observer.observe(el);
+    }
     window.addEventListener('resize', updateSize);
-    return () => window.removeEventListener('resize', updateSize);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', updateSize);
+    };
   }, []);
 
   // Persist template transform when global lock is active
@@ -337,6 +366,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     setShowDiagnosticColors(true);
     setIsEvalSidebarCollapsed(false);
     setPendingNextRepScore(null);
+    setBoardPanY(0);
     strokeStartedAtGreenRef.current = false;
     stepScoresRef.current = [];
     activePointerStrokeRef.current = null;
@@ -1022,7 +1052,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       }
     }
 
-    if (!lg || lg.totalCells === 0 || !template || template.category === 'freehand') return 0;
+    if (!lg || lg.totalCells === 0 || !template || getLessonEvalMode(template) === 'freehand') return 0;
 
     const targetStrokes = strokesOverride || strokes;
 
@@ -1084,7 +1114,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
 
     ctx.clearRect(0, 0, dCanvas.width, dCanvas.height);
 
-    if (!evaluationModal || !showDiagnosticColors || !template) {
+    if (!evaluationModal || !showDiagnosticColors || !template || evaluationModal.evalMode === 'freehand') {
       return;
     }
 
@@ -1215,6 +1245,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     feedback?: string;
     stars?: number;
     isBlindMode?: boolean;
+    evalMode?: LessonEvalMode;
   }): string => {
     const exportWidth = Math.max(780, Math.min(1200, dimensions.width || 800));
     const scale = exportWidth / Math.max(1, dimensions.width || 800);
@@ -1295,7 +1326,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       ctx.drawImage(canvasRef.current, 0, 0, exportWidth, boardHeight);
     }
 
-    if (showDiagnosticColors && diagnosticCanvasRef.current) {
+    if (showDiagnosticColors && diagnosticCanvasRef.current && stampInfo?.evalMode !== 'freehand') {
       try {
         ctx.drawImage(diagnosticCanvasRef.current, 0, 0, exportWidth, boardHeight);
       } catch {}
@@ -1396,7 +1427,13 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       ctx.textAlign = 'left';
       ctx.fillStyle = '#e2e8f0';
       ctx.font = '600 13px Cairo, Tahoma, sans-serif';
-      const breakdownText = stampInfo.isBlindMode
+      const breakdownText = stampInfo.evalMode === 'freehand'
+        ? `ثبات اليد: ${stampInfo.startEndScore}%  •  توازن اللوحة: ${stampInfo.pathScore}%  •  ثراء التفاصيل: ${stampInfo.coverageScore}%`
+        : stampInfo.evalMode === 'guide_only'
+        ? (stampInfo.isBlindMode
+            ? `تطابق الشكل: ${stampInfo.pathScore}%  •  تغطية المعالم: ${stampInfo.coverageScore}%`
+            : `الالتزام بالشكل: ${stampInfo.pathScore}%  •  التغطية والامتلاء: ${stampInfo.coverageScore}%`)
+        : stampInfo.isBlindMode
         ? `الاتزان: ${stampInfo.startEndScore}%  •  التشابه: ${stampInfo.pathScore}%  •  المعالم: ${stampInfo.coverageScore}%`
         : `البداية/النهاية: ${stampInfo.startEndScore}%  •  المسار: ${stampInfo.pathScore}%  •  السُمك: ${stampInfo.coverageScore}%`;
       ctx.fillText(breakdownText, padX, row2Y + 1);
@@ -1422,32 +1459,74 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     pathScore: number,
     coverageScore: number,
     arMode: boolean,
-    blindMode: boolean
+    blindMode: boolean,
+    evalMode: LessonEvalMode
   ): { textFeedback: string; voiceFeedback: string } => {
-    const weakest =
-      coverageScore <= pathScore && coverageScore <= startEndScore
-        ? 'coverage'
-        : pathScore <= startEndScore
-        ? 'path'
-        : 'startEnd';
+    if (evalMode === 'freehand') {
+      const weakestArt =
+        coverageScore <= pathScore && coverageScore <= startEndScore
+          ? 'details'
+          : pathScore <= startEndScore
+          ? 'balance'
+          : 'steadiness';
+
+      const artTipMap = {
+        details: 'جرّب إضافة لمسات وتفاصيل متنوعة لإثراء اللوحة أكثر.',
+        balance: 'احرص على توسيط وتوزيع الرسم داخل اللوحة بشكل متناغم.',
+        steadiness: 'ارسم بانسيابية وهدوء ليزداد ثبات واستمرارية الخط.'
+      };
+
+      if (finalScore >= 85) {
+        return {
+          textFeedback: arMode
+            ? 'إبداع فني مذهل بالواقع المعزز! ثبات وتوازن رائع في اللوحة 🎨👑'
+            : 'لوحة إبداعية مبهرة! ثبات يد وتوازن فني متميز 🎨🌟',
+          voiceFeedback: arMode
+            ? `إبداع رائع بالواقع المعزز! حققت تقييم ${finalScore} في المئة في الرسم الحر، بتوازن وثبات متميز.`
+            : `لوحة رائعة! حققت تقييم ${finalScore} في المئة في الرسم الحر، بثبات يد وتوازن جميل.`
+        };
+      }
+
+      if (finalScore >= 70) {
+        const tip = artTipMap[weakestArt];
+        return {
+          textFeedback: `رسم حر متوازن وجميل 🖌️ (${tip})`,
+          voiceFeedback: `أحسنت! حققت تقييم ${finalScore} في المئة في الرسم الحر. ${tip}`
+        };
+      }
+
+      const tip = artTipMap[weakestArt];
+      return {
+        textFeedback: `محاولة فنية جميلة 🎨 (${tip})`,
+        voiceFeedback: `محاولة طيبة في الرسم الحر، تقييمك ${finalScore} في المئة. ${tip}`
+      };
+    }
+
+    const weakest = evalMode === 'guide_only'
+      ? (coverageScore <= pathScore ? 'coverage' : 'path')
+      : (coverageScore <= pathScore && coverageScore <= startEndScore
+          ? 'coverage'
+          : pathScore <= startEndScore
+          ? 'path'
+          : 'startEnd');
 
     const adviceMap = {
       coverage: blindMode
-        ? 'حاول ملء معالم الحرف ومساحته بشكل أوضح.'
-        : 'حاول ملء كامل سمك وعرض خط الحرف بالقلم.',
+        ? 'حاول ملء معالم الشكل ومساحته بشكل أوضح.'
+        : 'حاول ملء كامل سمك وامتلاء الشكل بالقلم.',
       path: blindMode
-        ? 'قارن رسمتك مع الظل الذهبي للحرف وحاول ضبط النسب والانحناء.'
-        : 'التزم بالبقاء فوق مسار الحرف دون خروج عن الخط.',
+        ? 'قارن رسمتك مع الظل الذهبي وحاول ضبط النسب والانحناء.'
+        : 'التزم بحدود الرسمة دون خروج عن المسار.',
       startEnd: 'انتبه لنقطة انطلاق الحرف ونقطة نهايته بدقة.'
     };
 
     if (finalScore >= 85) {
       return {
         textFeedback: arMode
-          ? 'ما شاء الله! أداء متقن بالواقع المعزز، استحققت التاج الملكي 👑'
+          ? 'ما شاء الله! أداء متقن بالواقع المعزز وتفوق رائع 👑'
           : 'ما شاء الله! خط متقن وجريان قلم متميز 🌟',
         voiceFeedback: arMode
-          ? `ما شاء الله! حققت درجة ${finalScore} في المئة بالواقع المعزز. أداء متقن في الهواء، واستحققت التاج الملكي.`
+          ? `ما شاء الله! حققت درجة ${finalScore} في المئة بالواقع المعزز، أداء متقن في الهواء.`
           : `ما شاء الله! حققت درجة ${finalScore} في المئة. خط متقن وتحكم ممتاز بالقلم، أحسنت.`
       };
     }
@@ -1456,10 +1535,10 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       const tip = adviceMap[weakest];
       return {
         textFeedback: arMode
-          ? `أحسنت! رسم جميل بالواقع المعزز وتُوّجت بالتاج الملكي 👑 (${tip})`
+          ? `أحسنت! رسم جميل بالواقع المعزز ✨ (${tip})`
           : `جيد جداً! رسم متوازن وجميل 👍 (${tip})`,
         voiceFeedback: arMode
-          ? `أحسنت! حققت درجة ${finalScore} في المئة بالواقع المعزز وحصلت على التاج الملكي. ${tip}`
+          ? `أحسنت! حققت درجة ${finalScore} في المئة بالواقع المعزز. ${tip}`
           : `جيد جداً! حققت درجة ${finalScore} في المئة. ${tip}`
       };
     }
@@ -1468,7 +1547,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       const tip = adviceMap[weakest];
       return {
         textFeedback: arMode
-          ? `محاولة طيبة بالواقع المعزز! ${tip} (التاج عند 70% فأعلى) ✍️`
+          ? `محاولة طيبة بالواقع المعزز! ${tip} ✍️`
           : `محاولة طيبة! ${tip} ✍️`,
         voiceFeedback: arMode
           ? `محاولة طيبة بالواقع المعزز، درجتك ${finalScore} في المئة. ${tip}`
@@ -1490,12 +1569,16 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     startEndScore: number,
     pathScore: number,
     coverageScore: number,
-    customFeedback?: string
+    customFeedback?: string,
+    modeOverride?: LessonEvalMode
   ) => {
-    const attemptScore = Math.min(
-      100,
-      Math.max(20, Math.round(startEndScore * 0.20 + pathScore * 0.50 + coverageScore * 0.30))
-    );
+    const evalMode: LessonEvalMode = modeOverride || getLessonEvalMode(template);
+
+    const attemptScore = evalMode === 'freehand'
+      ? Math.min(100, Math.max(50, Math.round(startEndScore * 0.35 + pathScore * 0.35 + coverageScore * 0.30)))
+      : evalMode === 'guide_only'
+      ? Math.min(100, Math.max(20, Math.round(pathScore * 0.60 + coverageScore * 0.40)))
+      : Math.min(100, Math.max(20, Math.round(startEndScore * 0.20 + pathScore * 0.50 + coverageScore * 0.30)));
 
     const totalReps = Number(template?.repeatCount) || 1;
     const repIdx = currentRepetition || 1;
@@ -1526,7 +1609,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       return;
     }
 
-    // Final repetition (or single-rep lesson): compute overall final result
+    // Final repetition (or single-rep lesson): compute overall final result averaged across repetitions
     const allReps = repetitionScoresRef.current;
     const isMultiRep = totalReps > 1 && allReps.length > 1;
     const count = Math.max(1, allReps.length);
@@ -1550,7 +1633,8 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       finalPath,
       finalCoverage,
       isARMode,
-      Boolean(template?.hideImage)
+      Boolean(template?.hideImage),
+      evalMode
     );
 
     const displayFeedback = customFeedback
@@ -1566,6 +1650,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       pathScore: finalPath,
       coverageScore: finalCoverage,
       feedback: displayFeedback,
+      evalMode,
       repetitionBreakdown: isMultiRep
         ? allReps.map(r => ({ rep: r.rep, score: r.totalScore }))
         : undefined
@@ -1601,22 +1686,107 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     }
   }, [template, currentRepetition, isARMode, buildSmartEvaluationFeedback, onGoalAchieved]);
 
-  // Evaluate Blind Memory Test (hideImage) or No-Dots Mode (hideDots)
+  // Evaluate Freehand, Blind Memory Test (hideImage), or Guide-Only / No-Dots Mode
   const handleFinishChallengeEvaluation = useCallback(() => {
     const userStrokes = strokes.filter(s => s.penType !== 'eraser' && s.points.length > 0);
     if (userStrokes.length === 0) {
       audioService.playErrorSound();
       setStepAlert({
         type: 'error',
-        message: '⚠️ ارسم الحرف أولاً ثم اضغط للتقييم ✍️',
+        message: '⚠️ ارسم أولاً على السبورة ثم اضغط للتقييم ✍️',
         timestamp: Date.now()
       });
       return;
     }
 
+    const evalMode = getLessonEvalMode(template);
+
     // Collect all user drawn points
     const drawnPts: Point[] = [];
     userStrokes.forEach(s => s.points.forEach(p => drawnPts.push(p)));
+
+    // 0. ABSOLUTE FREEHAND MODE (no guide image & no steps): artistic/motivational evaluation with zero path penalty
+    if (evalMode === 'freehand') {
+      const boardW = Math.max(1, dimensions.width);
+      const boardH = Math.max(1, dimensions.height);
+      const minDim = Math.max(1, Math.min(boardW, boardH));
+
+      // A) Hand Steadiness & Continuity (direction smoothness across segments)
+      let smoothSum = 0;
+      let smoothWeight = 0;
+      let totalPathLen = 0;
+      userStrokes.forEach(stroke => {
+        const pts = stroke.points;
+        let prevDx = 0;
+        let prevDy = 0;
+        let hasPrevDir = false;
+        for (let i = 1; i < pts.length; i++) {
+          const dx = pts[i].x - pts[i - 1].x;
+          const dy = pts[i].y - pts[i - 1].y;
+          const segLen = Math.hypot(dx, dy);
+          if (segLen < 2.5) continue;
+          totalPathLen += segLen;
+          const ux = dx / segLen;
+          const uy = dy / segLen;
+          if (hasPrevDir) {
+            const cos = Math.max(-1, Math.min(1, prevDx * ux + prevDy * uy));
+            const segSmooth = (cos + 1) * 0.5; // 1 = perfectly smooth curve/line, 0 = sharp erratic reversal
+            smoothSum += segSmooth * segLen;
+            smoothWeight += segLen;
+          }
+          prevDx = ux;
+          prevDy = uy;
+          hasPrevDir = true;
+        }
+      });
+      const avgSmooth = smoothWeight > 0 ? smoothSum / smoothWeight : 0.78;
+      const continuityBonus = totalPathLen > minDim * 0.25 ? 0.08 : 0;
+      const steadinessScore = Math.min(98, Math.max(66, Math.round((0.55 + avgSmooth * 0.37 + continuityBonus) * 100)));
+
+      // B) Balance & Canvas Distribution (centroid centering & comfortable visual spread)
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      let sumX = 0, sumY = 0;
+      drawnPts.forEach(p => {
+        if (p.x < minX) minX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y > maxY) maxY = p.y;
+        sumX += p.x;
+        sumY += p.y;
+      });
+      const centroidX = sumX / Math.max(1, drawnPts.length);
+      const centroidY = sumY / Math.max(1, drawnPts.length);
+      const centerOffset = Math.hypot(
+        (centroidX - boardW / 2) / (boardW * 0.5),
+        (centroidY - boardH / 2) / (boardH * 0.5)
+      );
+      const centerScore = Math.max(0.25, 1 - Math.min(1, centerOffset * 0.75));
+      const spanRatio = Math.max((maxX - minX) / boardW, (maxY - minY) / boardH);
+      const spanFit = spanRatio >= 0.18 && spanRatio <= 0.88
+        ? 1
+        : spanRatio < 0.18
+        ? Math.max(0.35, spanRatio / 0.18)
+        : 0.88;
+      const balanceScore = Math.min(98, Math.max(65, Math.round((0.40 + (centerScore * 0.55 + spanFit * 0.45) * 0.58) * 100)));
+
+      // C) Detail Richness & Variety (ink length + stroke variety + spatial grid coverage)
+      const gridVisited = new Set<string>();
+      drawnPts.forEach(p => {
+        const gx = Math.min(3, Math.max(0, Math.floor((p.x / boardW) * 4)));
+        const gy = Math.min(3, Math.max(0, Math.floor((p.y / boardH) * 4)));
+        gridVisited.add(`${gx},${gy}`);
+      });
+      const gridFactor = Math.min(1, gridVisited.size / 6);
+      const strokeCountFactor = Math.min(1, userStrokes.length / 4);
+      const lenFactor = Math.min(1, totalPathLen / (minDim * 1.4));
+      const detailRichnessScore = Math.min(
+        98,
+        Math.max(64, Math.round((0.44 + (lenFactor * 0.45 + strokeCountFactor * 0.25 + gridFactor * 0.30) * 0.54) * 100))
+      );
+
+      openEvaluationResults(steadinessScore, balanceScore, detailRichnessScore, undefined, 'freehand');
+      return;
+    }
 
     // 1. BLIND MEMORY MODE (hideImage = true): Bounding-Box & Normalized 28x28 Shape Comparison
     if (template?.hideImage) {
@@ -1721,8 +1891,8 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         overlapScore = Math.min(100, Math.max(15, Math.round(recall * 100)));
       }
 
-      // Check step directional alignment in normalized bounding box if steps exist
-      if (template.steps && template.steps.length > 0 && drawBoundsRef.current) {
+      // Check step directional alignment in normalized bounding box only if evalMode === 'steps'
+      if (evalMode === 'steps' && template.steps && template.steps.length > 0 && drawBoundsRef.current) {
         const firstUserPt = userStrokes[0].points[0];
         const lastStroke = userStrokes[userStrokes.length - 1];
         const lastUserPt = lastStroke.points[lastStroke.points.length - 1];
@@ -1738,7 +1908,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         const endErr = Math.hypot(uEndNormX - lastStep.endX, uEndNormY - lastStep.endY);
         startEndScore = Math.min(100, Math.max(20, Math.round(100 - (startErr + endErr) * 55)));
       } else {
-        startEndScore = shapeScore;
+        startEndScore = 0;
       }
 
       // Reveal translucent gold ghost overlay of original letter for visual comparison
@@ -1751,12 +1921,13 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
           ? 'ذاكرة بصرية مذهلة! تطابق رائع مع الحرف الأصلي 🏆'
           : shapeScore >= 60
           ? 'محاولة جيدة من الذاكرة! قارن رسمتك مع الظل الذهبي للحرف ✍️'
-          : 'أحسنت المحاولة! راجع الظل الذهبي للحرف وأعد التجربة 💪'
+          : 'أحسنت المحاولة! راجع الظل الذهبي للحرف وأعد التجربة 💪',
+        evalMode
       );
       return;
     }
 
-    // 2. NO-DOTS MODE (hideDots = true) or NO-STEPS TEMPLATE: Evaluate against visible guide
+    // 2. GUIDE-ONLY (no steps or hideDots): Evaluate strictly on Path (60%) + Coverage (40%), excluding Start/End dots
     let core = 0;
     let grazing = 0;
     drawnPts.forEach(p => {
@@ -1770,30 +1941,8 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     );
     const coverageScore = calculateCoverageScore();
 
-    let startEndScore = pathScore;
-    if (template?.steps && template.steps.length > 0 && drawBoundsRef.current) {
-      const { drawX, drawY, drawW, drawH } = drawBoundsRef.current;
-      const firstStep = template.steps[0];
-      const lastStep = template.steps[template.steps.length - 1];
-      const sx = drawX + firstStep.startX * drawW;
-      const sy = drawY + firstStep.startY * drawH;
-      const ex = drawX + lastStep.endX * drawW;
-      const ey = drawY + lastStep.endY * drawH;
-
-      const uStart = userStrokes[0].points[0];
-      const lastStroke = userStrokes[userStrokes.length - 1];
-      const uEnd = lastStroke.points[lastStroke.points.length - 1];
-
-      const threshold = Math.max(45, penSize * 2.5);
-      const startDist = Math.hypot(uStart.x - sx, uStart.y - sy);
-      const endDist = Math.hypot(uEnd.x - ex, uEnd.y - ey);
-      const sPct = Math.max(0, Math.min(100, Math.round(100 - Math.max(0, startDist - threshold * 0.5) * 0.8)));
-      const ePct = Math.max(0, Math.min(100, Math.round(100 - Math.max(0, endDist - threshold * 0.5) * 0.8)));
-      startEndScore = Math.round((sPct + ePct) / 2);
-    }
-
-    openEvaluationResults(startEndScore, pathScore, coverageScore);
-  }, [strokes, template, penSize, classifyPoint, calculateCoverageScore, openEvaluationResults]);
+    openEvaluationResults(0, pathScore, coverageScore, undefined, 'guide_only');
+  }, [strokes, template, dimensions, classifyPoint, calculateCoverageScore, openEvaluationResults]);
 
   // Submit student answer & upload drawing image to Google Drive + sheet 'answers 1'
   const handleSubmitAnswer = async () => {
@@ -1810,6 +1959,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     setSubmitAnswerResult(null);
 
     try {
+      const evalMode = evaluationModal.evalMode || getLessonEvalMode(template);
       const imageBase64 = captureBoardBase64({
         studentName: currentUser.name,
         studentId: currentUser.id,
@@ -1820,9 +1970,14 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         coverageScore: evaluationModal.coverageScore,
         feedback: evaluationModal.feedback,
         stars: getEarnedStars(evaluationModal.totalScore),
-        isBlindMode: Boolean(template.hideImage)
+        isBlindMode: Boolean(template.hideImage),
+        evalMode
       });
-      const details = `البداية/النهاية: ${evaluationModal.startEndScore}% | المسار: ${evaluationModal.pathScore}% | السُمك: ${evaluationModal.coverageScore}%`;
+      const details = evalMode === 'freehand'
+        ? `ثبات اليد: ${evaluationModal.startEndScore}% | توازن اللوحة: ${evaluationModal.pathScore}% | ثراء التفاصيل: ${evaluationModal.coverageScore}%`
+        : evalMode === 'guide_only'
+        ? `الالتزام بالشكل: ${evaluationModal.pathScore}% | التغطية والامتلاء: ${evaluationModal.coverageScore}%`
+        : `البداية/النهاية: ${evaluationModal.startEndScore}% | المسار: ${evaluationModal.pathScore}% | السُمك: ${evaluationModal.coverageScore}%`;
       const res = await sheetService.submitLessonAnswer({
         studentId: currentUser.id,
         studentName: currentUser.name,
@@ -1898,6 +2053,9 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
   // Handle pointer down (Mouse, Finger Touch, Apple Pencil Stylus)
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     e.preventDefault();
+    if (e.pointerType === 'touch' && !e.isPrimary) {
+      return;
+    }
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -2516,6 +2674,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     setSubmitAnswerResult(null);
     setShowGhostOverlay(false);
     setPendingNextRepScore(null);
+    setBoardPanY(0);
     setIsLessonStarted(false);
     strokeStartedAtGreenRef.current = false;
     stepScoresRef.current = [];
@@ -2667,10 +2826,40 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     }
   };
 
+  const handleContainerTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (e.touches.length === 3) {
+      if (activePointerStrokeRef.current) {
+        activePointerStrokeRef.current = null;
+        redrawCanvas();
+      }
+      const avgY = (e.touches[0].clientY + e.touches[1].clientY + e.touches[2].clientY) / 3;
+      threeFingerPanRef.current = { active: true, lastAvgY: avgY };
+    }
+  };
+
+  const handleContainerTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (e.touches.length === 3 && threeFingerPanRef.current.active) {
+      const avgY = (e.touches[0].clientY + e.touches[1].clientY + e.touches[2].clientY) / 3;
+      const deltaY = avgY - threeFingerPanRef.current.lastAvgY;
+      threeFingerPanRef.current.lastAvgY = avgY;
+      setBoardPanY(prev => Math.max(-180, Math.min(180, Math.round(prev + deltaY))));
+    }
+  };
+
+  const handleContainerTouchEnd = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (e.touches.length < 3) {
+      threeFingerPanRef.current.active = false;
+    }
+  };
+
   return (
     <div
       ref={containerRef}
-      className={`relative w-full h-full min-h-[380px] sm:min-h-[460px] md:min-h-[540px] rounded-2xl overflow-hidden flex items-center justify-center border select-none transition-all duration-300 ${getBoardBgStyle()}`}
+      onTouchStart={handleContainerTouchStart}
+      onTouchMove={handleContainerTouchMove}
+      onTouchEnd={handleContainerTouchEnd}
+      onTouchCancel={handleContainerTouchEnd}
+      className={`relative w-full h-full min-h-0 rounded-2xl overflow-hidden flex items-center justify-center border select-none transition-all duration-300 ${getBoardBgStyle()}`}
     >
       {/* Calligraphy Guide Grid Lines Pattern */}
       {boardStyle === 'grid' && (
@@ -2694,27 +2883,45 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         </div>
       )}
 
-      {/* Layer 1: Template Guide Layer */}
-      <canvas
-        ref={templateCanvasRef}
-        className="absolute inset-0 pointer-events-none z-10"
-      />
+      {/* Translatable Board Layers Container (supports 3-finger vertical pan) */}
+      <div
+        className="absolute inset-0"
+        style={boardPanY !== 0 ? { transform: `translateY(${boardPanY}px)` } : undefined}
+      >
+        {/* Layer 1: Template Guide Layer */}
+        <canvas
+          ref={templateCanvasRef}
+          className="absolute inset-0 pointer-events-none z-10"
+        />
 
-      {/* Layer 2: Interactive User Drawing Layer */}
-      <canvas
-        ref={canvasRef}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerUp}
-        className="absolute inset-0 z-20 cursor-crosshair touch-none"
-      />
+        {/* Layer 2: Interactive User Drawing Layer */}
+        <canvas
+          ref={canvasRef}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerUp}
+          className="absolute inset-0 z-20 cursor-crosshair touch-none"
+        />
 
-      {/* Layer 2.5: Diagnostic Coloring Overlay (Green / Red / Yellow after evaluation) */}
-      <canvas
-        ref={diagnosticCanvasRef}
-        className="absolute inset-0 pointer-events-none z-20"
-      />
+        {/* Layer 2.5: Diagnostic Coloring Overlay (Green / Red / Yellow after evaluation) */}
+        <canvas
+          ref={diagnosticCanvasRef}
+          className="absolute inset-0 pointer-events-none z-20"
+        />
+      </div>
+
+      {/* Quick Re-center Pill when vertically panned with 3 fingers */}
+      {boardPanY !== 0 && (
+        <button
+          type="button"
+          onClick={() => setBoardPanY(0)}
+          className="absolute bottom-3 left-3 z-30 px-2.5 py-1 rounded-xl bg-slate-900/90 border border-amber-500/40 text-amber-300 text-[10px] font-bold shadow-lg flex items-center gap-1 cursor-pointer hover:bg-slate-800"
+        >
+          <Crosshair className="w-3 h-3" />
+          <span>توسيط اللوحة</span>
+        </button>
+      )}
 
       {/* Empty State Banner when no lesson is chosen */}
       {!template && (
@@ -3210,35 +3417,37 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
             })}
           </div>
 
-          {/* Bottom Diagnostic Legend Strip */}
-          <div className="absolute bottom-2.5 inset-x-0 z-30 flex justify-center pointer-events-none px-2">
-            <div className="pointer-events-auto flex items-center gap-2 sm:gap-3 px-2.5 py-1 rounded-xl bg-slate-900/88 border border-slate-700/80 text-[10px] sm:text-[11px] text-slate-200 shadow-lg">
-              {showDiagnosticColors && (
-                <div className="flex items-center gap-2 sm:gap-2.5">
-                  <span className="flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                    <span>صحيح</span>
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full bg-rose-500" />
-                    <span>خارج المسار</span>
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full bg-yellow-400" />
-                    <span>فراغ السُمك</span>
-                  </span>
-                </div>
-              )}
-              <button
-                type="button"
-                onClick={() => setShowDiagnosticColors(prev => !prev)}
-                className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold flex items-center gap-1 cursor-pointer"
-              >
-                {showDiagnosticColors ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
-                <span>{showDiagnosticColors ? 'إخفاء التشخيص' : 'تلوين الأخطاء'}</span>
-              </button>
+          {/* Bottom Diagnostic Legend Strip (hidden for freehand mode since there is no reference path error) */}
+          {evaluationModal.evalMode !== 'freehand' && (
+            <div className="absolute bottom-2.5 inset-x-0 z-30 flex justify-center pointer-events-none px-2">
+              <div className="pointer-events-auto flex items-center gap-2 sm:gap-3 px-2.5 py-1 rounded-xl bg-slate-900/88 border border-slate-700/80 text-[10px] sm:text-[11px] text-slate-200 shadow-lg">
+                {showDiagnosticColors && (
+                  <div className="flex items-center gap-2 sm:gap-2.5">
+                    <span className="flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                      <span>صحيح</span>
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full bg-rose-500" />
+                      <span>خارج المسار</span>
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full bg-yellow-400" />
+                      <span>فراغ السُمك</span>
+                    </span>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowDiagnosticColors(prev => !prev)}
+                  className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold flex items-center gap-1 cursor-pointer"
+                >
+                  {showDiagnosticColors ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                  <span>{showDiagnosticColors ? 'إخفاء التشخيص' : 'تلوين الأخطاء'}</span>
+                </button>
+              </div>
             </div>
-          </div>
+          )}
         </>
       )}
 
@@ -3328,23 +3537,35 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                 </div>
               )}
 
-              {/* 4–6. Vertical Criteria List (Bars hidden on mobile & tablet < lg, visible on desktop lg+) */}
+              {/* 4–6. Vertical Criteria List (Mode-aware: 2 metrics for guide_only, 3 artistic for freehand, 3 guided for steps) */}
               <div className="space-y-1 lg:space-y-1.5 bg-slate-950/55 rounded-xl border border-slate-800 p-1.5 lg:p-2 text-center">
-                <div>
-                  <div className="text-[9px] lg:text-[10px] text-slate-300 leading-tight">
-                    {template?.hideImage ? 'الاتزان والبداية' : 'البداية والنهاية'}
+                {evaluationModal.evalMode !== 'guide_only' && (
+                  <div>
+                    <div className="text-[9px] lg:text-[10px] text-slate-300 leading-tight">
+                      {evaluationModal.evalMode === 'freehand'
+                        ? 'ثبات اليد'
+                        : template?.hideImage
+                        ? 'الاتزان والبداية'
+                        : 'البداية والنهاية'}
+                    </div>
+                    <div className="font-mono font-bold text-[11px] lg:text-xs text-emerald-400 tabular-nums">
+                      {evaluationModal.startEndScore}%
+                    </div>
+                    <div className="hidden lg:block w-full bg-slate-800 rounded-full h-1 mt-0.5 overflow-hidden">
+                      <div className="bg-emerald-500 h-1 rounded-full transition-all duration-500" style={{ width: `${evaluationModal.startEndScore}%` }} />
+                    </div>
                   </div>
-                  <div className="font-mono font-bold text-[11px] lg:text-xs text-emerald-400 tabular-nums">
-                    {evaluationModal.startEndScore}%
-                  </div>
-                  <div className="hidden lg:block w-full bg-slate-800 rounded-full h-1 mt-0.5 overflow-hidden">
-                    <div className="bg-emerald-500 h-1 rounded-full transition-all duration-500" style={{ width: `${evaluationModal.startEndScore}%` }} />
-                  </div>
-                </div>
+                )}
 
-                <div className="border-t border-slate-800/80 pt-1">
+                <div className={evaluationModal.evalMode !== 'guide_only' ? 'border-t border-slate-800/80 pt-1' : ''}>
                   <div className="text-[9px] lg:text-[10px] text-slate-300 leading-tight">
-                    {template?.hideImage ? 'تطابق الشكل' : 'دقة المسار'}
+                    {evaluationModal.evalMode === 'freehand'
+                      ? 'توازن اللوحة'
+                      : template?.hideImage
+                      ? 'تطابق الشكل'
+                      : evaluationModal.evalMode === 'guide_only'
+                      ? 'الالتزام بالشكل'
+                      : 'دقة المسار'}
                   </div>
                   <div className="font-mono font-bold text-[11px] lg:text-xs text-amber-400 tabular-nums">
                     {evaluationModal.pathScore}%
@@ -3356,7 +3577,13 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
 
                 <div className="border-t border-slate-800/80 pt-1">
                   <div className="text-[9px] lg:text-[10px] text-slate-300 leading-tight">
-                    {template?.hideImage ? 'تغطية المعالم' : 'سُمك الحرف'}
+                    {evaluationModal.evalMode === 'freehand'
+                      ? 'ثراء التفاصيل'
+                      : template?.hideImage
+                      ? 'تغطية المعالم'
+                      : evaluationModal.evalMode === 'guide_only'
+                      ? 'التغطية والامتلاء'
+                      : 'سُمك الحرف'}
                   </div>
                   <div className="font-mono font-bold text-[11px] lg:text-xs text-sky-400 tabular-nums">
                     {evaluationModal.coverageScore}%

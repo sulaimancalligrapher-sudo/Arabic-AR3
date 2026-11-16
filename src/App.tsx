@@ -9,6 +9,7 @@ import { LoginModal } from './components/LoginModal';
 import { SettingsView } from './components/SettingsView';
 import { sheetService, getArabicOrdinal, getStepAudioPrompt, RegistrantUser } from './services/sheetService';
 import { audioService } from './services/audioService';
+import { ARRewardTier, getStoredARRewards, saveStoredARRewards, findARRewardForScore } from './services/arRewardsService';
 import {
   Camera,
   Award,
@@ -102,7 +103,9 @@ export default function App() {
 
   // AR Tracking & Camera Options (controlled from outside the whiteboard with the tools)
   const [trackingMode, setTrackingMode] = useState<HandTrackingDisplayMode>('one_hand');
-  const [showCrown, setShowCrown] = useState<boolean>(false); // Crown appears as reward upon mastery!
+  const [showCrown, setShowCrown] = useState<boolean>(false); // Head reward appears dynamically upon mastery!
+  const [arRewards, setArRewards] = useState<ARRewardTier[]>(() => getStoredARRewards());
+  const [lastArScore, setLastArScore] = useState<number | null>(null);
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
   const [isMirrored, setIsMirrored] = useState<boolean>(true);
   const [arDetectionStatus, setArDetectionStatus] = useState<{
@@ -214,10 +217,18 @@ export default function App() {
     setTimeout(syncHistoryState, 0);
   };
 
+  const handleUpdateARRewards = useCallback((updated: ARRewardTier[]) => {
+    setArRewards(updated);
+    saveStoredARRewards(updated);
+  }, []);
+
+  const activeReward = showCrown ? findARRewardForScore(lastArScore, arRewards) : null;
+
   const handleClearSideEffects = useCallback(() => {
     setAccuracy(0);
     setCelebrationMessage(null);
     setShowCrown(false);
+    setLastArScore(null);
     setCurrentRepetition(1);
     syncHistoryState();
     setTimeout(syncHistoryState, 0);
@@ -273,13 +284,15 @@ export default function App() {
     }
   };
 
-  // Crown toggle handler
+  // Head reward toggle handler
   const handleToggleCrown = () => {
     const next = !showCrown;
-    setShowCrown(next);
     if (next) {
-      audioService.speakArabic('تم تثبيت التاج الملكي');
+      setLastArScore(null);
+      const previewReward = findARRewardForScore(null, arRewards);
+      audioService.speakArabic(previewReward ? `تم تفعيل ${previewReward.title}` : 'تم تثبيت التاج الملكي');
     }
+    setShowCrown(next);
   };
 
   // Camera facing mode toggle (user front / environment rear)
@@ -306,17 +319,21 @@ export default function App() {
     }
   };
 
-  // Handle final goal achieved (only called on final repetition; Crown strictly reserved for AR mode)
+  // Handle final goal achieved (only called on final repetition; AR reward strictly reserved for AR mode)
   const handleGoalAchieved = (acc: number) => {
     if (boardStyle === 'ar_camera') {
-      if (acc >= 70) {
+      const matched = findARRewardForScore(acc, arRewards);
+      if (matched) {
+        setLastArScore(acc);
         setShowCrown(true);
-        setCelebrationMessage(`👑 ما شاء الله! حققت إتقان ${acc}% بالواقع المعزز وتُوّجت بالتاج الملكي!`);
+        setCelebrationMessage(`${matched.title} — درجة الإتقان ${acc}%!`);
       } else {
+        setLastArScore(null);
         setShowCrown(false);
         setCelebrationMessage(null);
       }
     } else {
+      setLastArScore(null);
       setShowCrown(false);
       if (acc >= 85) {
         setCelebrationMessage(`🌟 إبداع رائع! أتقنت كتابة الحرف بدرجة ${acc}%`);
@@ -354,12 +371,14 @@ export default function App() {
         onChangeTemplateOpacity={setTemplateOpacity}
         saveArCameraPhoto={saveArCameraPhoto}
         onToggleSaveArCameraPhoto={handleToggleSaveArCameraPhoto}
+        arRewards={arRewards}
+        onUpdateARRewards={handleUpdateARRewards}
       />
     );
   }
 
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden bg-slate-950 text-slate-100 font-cairo">
+    <div className="flex flex-col h-[100dvh] w-screen overflow-hidden bg-slate-950 text-slate-100 font-cairo">
       
       {/* Top Professional Toolbar (Includes the 4 Tracking Options outside the whiteboard) */}
       <WhiteboardToolbar
@@ -412,16 +431,17 @@ export default function App() {
       />
 
       {/* Main Workspace / Stage */}
-      <main className="relative flex-1 w-full h-full p-2 sm:p-4 overflow-hidden flex flex-col items-center justify-center">
+      <main className="relative flex-1 min-h-0 w-full p-1.5 sm:p-3 overflow-hidden flex flex-col items-center justify-center">
         
         {/* Workspace Canvas Container */}
-        <div className="relative w-full h-full max-w-6xl max-h-[85vh] rounded-2xl overflow-hidden shadow-2xl flex items-center justify-center">
+        <div className="relative w-full h-full min-h-0 max-w-6xl rounded-2xl overflow-hidden shadow-2xl flex items-center justify-center">
           
-          {/* Live AR Camera Feed with Full 21-Joint Skeleton & Crown Tracking */}
+          {/* Live AR Camera Feed with Full 21-Joint Skeleton & Reward Tracking */}
           <ARCameraOverlay
             isARMode={boardStyle === 'ar_camera'}
             trackingMode={trackingMode}
             showCrown={showCrown}
+            activeReward={activeReward}
             facingMode={facingMode}
             isMirrored={isMirrored}
             onCursorUpdate={handleCursorUpdate}
@@ -582,6 +602,7 @@ export default function App() {
           setCurrentRepetition(1);
           setCelebrationMessage(null);
           setShowCrown(false);
+          setLastArScore(null);
           canvasRef.current?.clearCanvas();
           syncHistoryState();
         }}
