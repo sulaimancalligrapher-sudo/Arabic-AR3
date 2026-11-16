@@ -1558,6 +1558,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       : smart.textFeedback;
 
     setPendingNextRepScore(null);
+    setIsLessonStarted(false);
     setEvaluationModal({
       isOpen: true,
       totalScore: finalScore,
@@ -1847,8 +1848,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
           audioService.playSuccessSound();
           setSubmitAnswerResult({
             success: true,
-            message: `تم تسجيل الإجابة ورفع الصورة بنجاح! (${res.completionStatus || 'محفوظ'})`,
-            imageUrl: res.imageUrl,
+            message: 'تم تسجيل الإجابة',
             completionStatus: res.completionStatus
           });
         }
@@ -1872,6 +1872,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
 
   // Start exercise with voice unlock and pronunciation
   const handleStartLesson = async () => {
+    if (evaluationModal) return;
     await audioService.unlockAudio();
     setPendingNextRepScore(null);
     setIsLessonStarted(true);
@@ -1919,7 +1920,18 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       return;
     }
 
-    // 2. Guard: Check if student has clicked ( ابدأ )
+    // 2. Guard: Lock board drawing once evaluation results are generated until reset or new lesson
+    if (evaluationModal) {
+      audioService.playErrorSound();
+      setStepAlert({
+        type: 'error',
+        message: '🔒 اكتمل التقييم! انقر (إعادة التمرين) أو اختر درساً جديداً للرسم مجدداً ✍️',
+        timestamp: Date.now()
+      });
+      return;
+    }
+
+    // 3. Guard: Check if student has clicked ( ابدأ )
     if (!isLessonStarted) {
       audioService.playErrorSound();
       setStepAlert({
@@ -2233,6 +2245,18 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         return;
       }
 
+      if (evaluationModal) {
+        if (!activeAirStrokeRef.current) {
+          audioService.playErrorSound();
+          setStepAlert({
+            type: 'error',
+            message: '🔒 اكتمل التقييم! انقر (إعادة التمرين) أو اختر درساً جديداً للرسم مجدداً ✍️',
+            timestamp: Date.now()
+          });
+        }
+        return;
+      }
+
       if (!isLessonStarted) {
         if (!activeAirStrokeRef.current) {
           audioService.playErrorSound();
@@ -2474,7 +2498,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         redrawCanvas();
       }
     }
-  }, [virtualCursor, effectiveIsAirDrawing, isARMode, dimensions, penType, penColor, penSize, calligraphyAngle, redrawCanvas, currentStepIndex, template, openEvaluationResults, classifyPoint, calculateCoverageScore, isLessonStarted, onOpenLibrary]);
+  }, [virtualCursor, effectiveIsAirDrawing, isARMode, dimensions, penType, penColor, penSize, calligraphyAngle, redrawCanvas, currentStepIndex, template, openEvaluationResults, classifyPoint, calculateCoverageScore, isLessonStarted, evaluationModal, onOpenLibrary]);
 
   // Unified complete board clear (matching "مسح السبورة بالكامل")
   const performFullClear = useCallback((withSound = true) => {
@@ -2830,8 +2854,8 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
               </div>
             ) : template ? (
               <div className="flex items-center gap-1.5 sm:gap-2.5">
-                {/* Lesson Start Button: strictly ( ابدأ ) */}
-                {!isLessonStarted && (
+                {/* Lesson Start Button: strictly hidden while evaluationModal exists */}
+                {!isLessonStarted && !evaluationModal && (
                   <button
                     type="button"
                     onClick={handleStartLesson}
@@ -2842,10 +2866,23 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                   </button>
                 )}
 
+                {/* Re-open Result Button if student minimized/closed evaluation panel */}
+                {evaluationModal && !evaluationModal.isOpen && (
+                  <button
+                    type="button"
+                    onClick={() => setEvaluationModal(prev => prev ? { ...prev, isOpen: true } : null)}
+                    className="px-2.5 sm:px-3 py-1 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 font-bold text-xs flex items-center gap-1 cursor-pointer shrink-0"
+                    title="إظهار نافذة التقييم"
+                  >
+                    <Award className="w-3.5 h-3.5" />
+                    <span>النتيجة {evaluationModal.totalScore}%</span>
+                  </button>
+                )}
+
                 {/* Challenge Modes (hideImage or hideDots) or No-Steps Templates */}
                 {(template.hideImage || template.hideDots || !template.steps || template.steps.length === 0) ? (
                   <>
-                    {isLessonStarted ? (
+                    {isLessonStarted && !evaluationModal ? (
                       <button
                         type="button"
                         onClick={handleFinishChallengeEvaluation}
@@ -2857,7 +2894,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                           {template.hideImage ? '( تقييم رسمة الذاكرة 🏆 )' : '( إنهاء وتقييم )'}
                         </span>
                       </button>
-                    ) : (
+                    ) : !evaluationModal ? (
                       <span className="hidden sm:inline text-xs font-semibold text-amber-300/90 whitespace-nowrap">
                         {template.hideImage
                           ? '🧠 تحدي الذاكرة (سبورة بيضاء)'
@@ -2865,29 +2902,12 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                           ? '🎯 تحدي بدون مؤشرات'
                           : '✍️ انقر ( ابدأ ) للرسم'}
                       </span>
-                    )}
+                    ) : null}
 
                     {/* Reset Challenge Button */}
                     <button
                       type="button"
-                      onClick={() => {
-                        setCurrentStepIndex(0);
-                        setStepAlert(null);
-                        setEvaluationModal(null);
-                        setSubmitAnswerResult(null);
-                        setShowGhostOverlay(false);
-                        setPendingNextRepScore(null);
-                        setIsLessonStarted(false);
-                        strokeStartedAtGreenRef.current = false;
-                        stepScoresRef.current = [];
-                        repetitionScoresRef.current = [];
-                        setStrokes([]);
-                        setRedoStack([]);
-                        const canvas = canvasRef.current;
-                        if (canvas) canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
-                        resetStrokeStats();
-                        if (onResetRepetition) onResetRepetition();
-                      }}
+                      onClick={() => performFullClear(false)}
                       className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer shrink-0"
                       title="إعادة التمرين"
                     >
@@ -2926,7 +2946,9 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                       type="button"
                       onClick={async () => {
                         await audioService.unlockAudio();
-                        setIsLessonStarted(true);
+                        if (!evaluationModal) {
+                          setIsLessonStarted(true);
+                        }
                         if (template.steps && template.steps[currentStepIndex]) {
                           const prompt = getStepAudioPrompt(template.steps[currentStepIndex]);
                           audioService.speakArabic(prompt);
@@ -2941,26 +2963,9 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                     {/* Reset Step Progress Button */}
                     <button
                       type="button"
-                      onClick={() => {
-                        setCurrentStepIndex(0);
-                        setStepAlert(null);
-                        setEvaluationModal(null);
-                        setSubmitAnswerResult(null);
-                        setShowGhostOverlay(false);
-                        setPendingNextRepScore(null);
-                        setIsLessonStarted(false);
-                        strokeStartedAtGreenRef.current = false;
-                        stepScoresRef.current = [];
-                        repetitionScoresRef.current = [];
-                        setStrokes([]);
-                        setRedoStack([]);
-                        const canvas = canvasRef.current;
-                        if (canvas) canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
-                        resetStrokeStats();
-                        if (onResetRepetition) onResetRepetition();
-                      }}
+                      onClick={() => performFullClear(false)}
                       className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer shrink-0"
-                      title="إعادة من الخطوة الأولى"
+                      title="إعادة التمرين من البداية"
                     >
                       <RotateCcw className="w-3.5 h-3.5" />
                     </button>
@@ -3188,7 +3193,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         <>
           {/* Corner 10-Star Honor Widget (opposite side of sidebar so it never collides) */}
           <div
-            className={`absolute top-14 sm:top-16 z-30 pointer-events-auto flex flex-wrap sm:flex-nowrap items-center justify-center max-w-[146px] sm:max-w-none gap-0.5 sm:gap-1 px-2 py-1 sm:px-2.5 sm:py-1.5 rounded-2xl bg-slate-900/90 border border-amber-500/40 shadow-xl ${
+            className={`absolute top-14 sm:top-16 z-30 pointer-events-auto flex flex-wrap lg:flex-nowrap items-center justify-center max-w-[146px] lg:max-w-none gap-0.5 lg:gap-1 px-2 py-1 lg:px-2.5 lg:py-1.5 rounded-2xl bg-slate-900/90 border border-amber-500/40 shadow-xl ${
               evalSidebarSide === 'left' ? 'right-2 sm:right-4' : 'left-2 sm:left-4'
             }`}
           >
@@ -3197,7 +3202,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
               return (
                 <Star
                   key={idx}
-                  className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${
+                  className={`w-3.5 h-3.5 lg:w-4 lg:h-4 ${
                     earned ? 'text-amber-400 fill-amber-400 drop-shadow-[0_0_5px_rgba(251,191,36,0.7)]' : 'text-slate-600'
                   }`}
                 />
@@ -3237,10 +3242,10 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         </>
       )}
 
-      {/* Layer 4: Zero-Blur Slim Vertical Results Sidebar (نافذة نتائج طولية نحيفة بدون ضباب أو تعتيم) */}
+      {/* Layer 4: Zero-Blur Slim Vertical Results Sidebar (نافذة نتائج نحيفة بدون ضباب - للهواتف والتابليت < lg، كاملة لسطح المكتب lg+) */}
       {evaluationModal && evaluationModal.isOpen && (
         <div
-          className={`absolute inset-y-0 z-40 pointer-events-none flex items-center p-2 sm:p-3 animate-in fade-in duration-200 ${
+          className={`absolute inset-y-0 z-40 pointer-events-none flex items-center p-1.5 sm:p-2.5 lg:p-3 animate-in fade-in duration-200 ${
             evalSidebarSide === 'left' ? 'left-0 justify-end' : 'right-0 justify-start'
           }`}
         >
@@ -3255,9 +3260,9 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
               {evalSidebarSide === 'left' ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronLeft className="w-3.5 h-3.5" />}
             </button>
           ) : (
-            <aside className="pointer-events-auto w-[114px] sm:w-[214px] max-h-[82vh] bg-slate-900/92 border border-amber-500/40 rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.45)] text-white text-center overflow-y-auto p-1.5 sm:p-3 flex flex-col gap-1.5 sm:gap-2">
+            <aside className="pointer-events-auto w-[92px] sm:w-[104px] lg:w-[214px] max-h-[82vh] bg-slate-900/92 border border-amber-500/40 rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.45)] text-white text-center overflow-y-auto p-1.5 lg:p-3 flex flex-col gap-1.5 lg:gap-2">
               {/* Compact Window Controls: Swap Side / Collapse / Close */}
-              <div className="flex items-center justify-between gap-1">
+              <div className="flex items-center justify-between gap-0.5 lg:gap-1">
                 <button
                   type="button"
                   onClick={() => {
@@ -3267,16 +3272,16 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                   title="إغلاق"
                   className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white cursor-pointer"
                 >
-                  <X className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+                  <X className="w-3 h-3 lg:w-3.5 lg:h-3.5" />
                 </button>
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-0.5 lg:gap-1">
                   <button
                     type="button"
                     onClick={() => setEvalSidebarSide(prev => prev === 'left' ? 'right' : 'left')}
                     title="نقل الشريط لليمين أو اليسار"
                     className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-300 cursor-pointer"
                   >
-                    <ArrowLeftRight className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+                    <ArrowLeftRight className="w-3 h-3 lg:w-3.5 lg:h-3.5" />
                   </button>
                   <button
                     type="button"
@@ -3284,17 +3289,17 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                     title="تصغير النافذة"
                     className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 cursor-pointer"
                   >
-                    {evalSidebarSide === 'left' ? <ChevronLeft className="w-3 h-3 sm:w-3.5 sm:h-3.5" /> : <ChevronRight className="w-3 h-3 sm:w-3.5 sm:h-3.5" />}
+                    {evalSidebarSide === 'left' ? <ChevronLeft className="w-3 h-3 lg:w-3.5 lg:h-3.5" /> : <ChevronRight className="w-3 h-3 lg:w-3.5 lg:h-3.5" />}
                   </button>
                 </div>
               </div>
 
               {/* 1. Icon + Label (تقييم) */}
-              <div className="flex flex-col items-center gap-0.5 sm:gap-1">
-                <div className="w-7 h-7 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-tr from-amber-500 to-yellow-400 text-slate-950 flex items-center justify-center shadow-md">
-                  <Award className="w-4 h-4 sm:w-5 sm:h-5" />
+              <div className="flex flex-col items-center gap-0.5 lg:gap-1">
+                <div className="w-7 h-7 lg:w-10 lg:h-10 rounded-xl bg-gradient-to-tr from-amber-500 to-yellow-400 text-slate-950 flex items-center justify-center shadow-md">
+                  <Award className="w-4 h-4 lg:w-5 lg:h-5" />
                 </div>
-                <h3 className="font-bold text-[11px] sm:text-sm text-amber-300 leading-tight">
+                <h3 className="font-bold text-[11px] lg:text-sm text-amber-300 leading-tight">
                   {evaluationModal.repetitionBreakdown && evaluationModal.repetitionBreakdown.length > 1
                     ? `تقييم (${evaluationModal.repetitionBreakdown.length})`
                     : 'تقييم'}
@@ -3302,18 +3307,18 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
               </div>
 
               {/* 2. Final Big Score (%) */}
-              <div className="font-extrabold font-mono text-xl sm:text-3xl text-white tracking-tight tabular-nums leading-none">
+              <div className="font-extrabold font-mono text-lg sm:text-xl lg:text-3xl text-white tracking-tight tabular-nums leading-none">
                 {evaluationModal.totalScore}%
               </div>
 
-              {/* 3. Concise Feedback Comment (hidden/compact on tiny mobile, readable on sm+) */}
-              <p className="text-[9px] sm:text-[11px] font-semibold text-amber-200/95 leading-snug line-clamp-2 sm:line-clamp-3">
+              {/* 3. Concise Feedback Comment */}
+              <p className="text-[9px] lg:text-[11px] font-semibold text-amber-200/95 leading-snug line-clamp-2 lg:line-clamp-3">
                 {evaluationModal.feedback}
               </p>
 
               {/* Multi-Repetition Compact Text Summary */}
               {evaluationModal.repetitionBreakdown && evaluationModal.repetitionBreakdown.length > 1 && (
-                <div className="text-[9px] sm:text-[10px] text-slate-300 leading-tight border-t border-slate-800 pt-1">
+                <div className="text-[9px] lg:text-[10px] text-slate-300 leading-tight border-t border-slate-800 pt-1">
                   {evaluationModal.repetitionBreakdown.map((item, idx) => (
                     <span key={item.rep}>
                       {idx > 0 && ' · '}
@@ -3323,40 +3328,40 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                 </div>
               )}
 
-              {/* 4–6. Vertical Criteria List (Bars hidden on mobile, kept on desktop) */}
-              <div className="space-y-1 sm:space-y-1.5 bg-slate-950/55 rounded-xl border border-slate-800 p-1.5 sm:p-2 text-center">
+              {/* 4–6. Vertical Criteria List (Bars hidden on mobile & tablet < lg, visible on desktop lg+) */}
+              <div className="space-y-1 lg:space-y-1.5 bg-slate-950/55 rounded-xl border border-slate-800 p-1.5 lg:p-2 text-center">
                 <div>
-                  <div className="text-[9px] sm:text-[10px] text-slate-300 leading-tight">
+                  <div className="text-[9px] lg:text-[10px] text-slate-300 leading-tight">
                     {template?.hideImage ? 'الاتزان والبداية' : 'البداية والنهاية'}
                   </div>
-                  <div className="font-mono font-bold text-[11px] sm:text-xs text-emerald-400 tabular-nums">
+                  <div className="font-mono font-bold text-[11px] lg:text-xs text-emerald-400 tabular-nums">
                     {evaluationModal.startEndScore}%
                   </div>
-                  <div className="hidden sm:block w-full bg-slate-800 rounded-full h-1 mt-0.5 overflow-hidden">
+                  <div className="hidden lg:block w-full bg-slate-800 rounded-full h-1 mt-0.5 overflow-hidden">
                     <div className="bg-emerald-500 h-1 rounded-full transition-all duration-500" style={{ width: `${evaluationModal.startEndScore}%` }} />
                   </div>
                 </div>
 
                 <div className="border-t border-slate-800/80 pt-1">
-                  <div className="text-[9px] sm:text-[10px] text-slate-300 leading-tight">
+                  <div className="text-[9px] lg:text-[10px] text-slate-300 leading-tight">
                     {template?.hideImage ? 'تطابق الشكل' : 'دقة المسار'}
                   </div>
-                  <div className="font-mono font-bold text-[11px] sm:text-xs text-amber-400 tabular-nums">
+                  <div className="font-mono font-bold text-[11px] lg:text-xs text-amber-400 tabular-nums">
                     {evaluationModal.pathScore}%
                   </div>
-                  <div className="hidden sm:block w-full bg-slate-800 rounded-full h-1 mt-0.5 overflow-hidden">
+                  <div className="hidden lg:block w-full bg-slate-800 rounded-full h-1 mt-0.5 overflow-hidden">
                     <div className="bg-amber-400 h-1 rounded-full transition-all duration-500" style={{ width: `${evaluationModal.pathScore}%` }} />
                   </div>
                 </div>
 
                 <div className="border-t border-slate-800/80 pt-1">
-                  <div className="text-[9px] sm:text-[10px] text-slate-300 leading-tight">
+                  <div className="text-[9px] lg:text-[10px] text-slate-300 leading-tight">
                     {template?.hideImage ? 'تغطية المعالم' : 'سُمك الحرف'}
                   </div>
-                  <div className="font-mono font-bold text-[11px] sm:text-xs text-sky-400 tabular-nums">
+                  <div className="font-mono font-bold text-[11px] lg:text-xs text-sky-400 tabular-nums">
                     {evaluationModal.coverageScore}%
                   </div>
-                  <div className="hidden sm:block w-full bg-slate-800 rounded-full h-1 mt-0.5 overflow-hidden">
+                  <div className="hidden lg:block w-full bg-slate-800 rounded-full h-1 mt-0.5 overflow-hidden">
                     <div className="bg-sky-400 h-1 rounded-full transition-all duration-500" style={{ width: `${evaluationModal.coverageScore}%` }} />
                   </div>
                 </div>
@@ -3367,35 +3372,36 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                 <button
                   type="button"
                   onClick={() => setShowGhostOverlay(prev => !prev)}
-                  className="w-full py-1.5 px-1.5 sm:px-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 font-bold text-[9px] sm:text-[10px] flex items-center justify-center gap-1 cursor-pointer"
+                  title={showGhostOverlay ? 'إخفاء الحرف' : 'عرض الحرف'}
+                  className="w-full py-1.5 px-1.5 lg:px-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 font-bold text-[9px] lg:text-[10px] flex items-center justify-center gap-1 cursor-pointer"
                 >
-                  {showGhostOverlay ? <EyeOff className="w-3 h-3 shrink-0" /> : <Eye className="w-3 h-3 shrink-0" />}
-                  <span className="hidden sm:inline">{showGhostOverlay ? 'إخفاء الحرف' : 'عرض الحرف'}</span>
+                  {showGhostOverlay ? <EyeOff className="w-3.5 h-3.5 shrink-0" /> : <Eye className="w-3.5 h-3.5 shrink-0" />}
+                  <span className="hidden lg:inline">{showGhostOverlay ? 'إخفاء الحرف' : 'عرض الحرف'}</span>
                 </button>
               )}
 
-              {/* Bottom Action Buttons: Icon-only grid on mobile, full buttons on sm+ */}
-              <div className="grid grid-cols-2 sm:flex sm:flex-col gap-1.5">
-                {/* 7. Reset Exercise Button */}
+              {/* Bottom Action Buttons: Vertically stacked (Reset above Submit), icon-only on mobile & tablet (< lg) */}
+              <div className="flex flex-col gap-1.5">
+                {/* 7. Reset Exercise Button (إعادة التمرين) */}
                 <button
                   type="button"
                   onClick={() => performFullClear(false)}
                   title="إعادة التمرين"
                   aria-label="إعادة التمرين"
-                  className="w-full py-2 px-1.5 sm:px-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-[11px] flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                  className="w-full py-2 px-1.5 lg:px-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-[11px] flex items-center justify-center gap-1.5 transition-all cursor-pointer"
                 >
-                  <RotateCcw className="w-4 h-4 sm:w-3.5 sm:h-3.5 shrink-0" />
-                  <span className="hidden sm:inline">إعادة التمرين</span>
+                  <RotateCcw className="w-4 h-4 lg:w-3.5 lg:h-3.5 shrink-0" />
+                  <span className="hidden lg:inline">إعادة التمرين</span>
                 </button>
 
-                {/* 8. Submit Answer Button */}
+                {/* 8. Submit Answer Button (تسجيل الإجابة) */}
                 <button
                   type="button"
                   onClick={handleSubmitAnswer}
                   disabled={isSubmittingAnswer || submitAnswerResult?.success}
-                  title={isSubmittingAnswer ? 'جاري الحفظ...' : submitAnswerResult?.success ? 'تم التسجيل' : 'تسجيل الإجابة'}
+                  title={isSubmittingAnswer ? 'جاري الحفظ...' : submitAnswerResult?.success ? 'تم تسجيل الإجابة' : 'تسجيل الإجابة'}
                   aria-label="تسجيل الإجابة"
-                  className={`w-full py-2 px-1.5 sm:px-2 rounded-xl font-bold text-[11px] flex items-center justify-center gap-1.5 shadow-md transition-all cursor-pointer ${
+                  className={`w-full py-2 px-1.5 lg:px-2 rounded-xl font-bold text-[11px] flex items-center justify-center gap-1.5 shadow-md transition-all cursor-pointer ${
                     submitAnswerResult?.success
                       ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 cursor-default'
                       : 'bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white active:scale-95 disabled:opacity-60'
@@ -3403,44 +3409,33 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                 >
                   {isSubmittingAnswer ? (
                     <>
-                      <Loader2 className="w-4 h-4 sm:w-3.5 sm:h-3.5 animate-spin shrink-0" />
-                      <span className="hidden sm:inline">جاري الحفظ...</span>
+                      <Loader2 className="w-4 h-4 lg:w-3.5 lg:h-3.5 animate-spin shrink-0" />
+                      <span className="hidden lg:inline">جاري الحفظ...</span>
                     </>
                   ) : submitAnswerResult?.success ? (
                     <>
-                      <CheckCircle2 className="w-4 h-4 sm:w-3.5 sm:h-3.5 text-emerald-400 shrink-0" />
-                      <span className="hidden sm:inline">تم التسجيل</span>
+                      <CheckCircle2 className="w-4 h-4 lg:w-3.5 lg:h-3.5 text-emerald-400 shrink-0" />
+                      <span className="hidden lg:inline">تم التسجيل</span>
                     </>
                   ) : (
                     <>
-                      <Save className="w-4 h-4 sm:w-3.5 sm:h-3.5 shrink-0" />
-                      <span className="hidden sm:inline">تسجيل الإجابة</span>
+                      <Save className="w-4 h-4 lg:w-3.5 lg:h-3.5 shrink-0" />
+                      <span className="hidden lg:inline">تسجيل الإجابة</span>
                     </>
                   )}
                 </button>
               </div>
 
-              {/* Compact Upload Result Message & Drive Link */}
+              {/* Compact Upload Result Message (Short text only, no image link) */}
               {submitAnswerResult && (
                 <div
-                  className={`p-1.5 rounded-xl text-[10px] font-semibold flex flex-col gap-1 text-right ${
+                  className={`p-1.5 rounded-xl text-[9px] lg:text-[10px] font-bold text-center leading-tight ${
                     submitAnswerResult.success
                       ? 'bg-emerald-500/15 border border-emerald-500/30 text-emerald-300'
                       : 'bg-rose-500/15 border border-rose-500/30 text-rose-300'
                   }`}
                 >
-                  <div className="leading-tight">{submitAnswerResult.message}</div>
-                  {submitAnswerResult.imageUrl && submitAnswerResult.imageUrl.startsWith('http') && (
-                    <a
-                      href={submitAnswerResult.imageUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 text-sky-400 hover:text-sky-300 underline w-fit"
-                    >
-                      <ExternalLink className="w-3 h-3" />
-                      <span>فتح الصورة</span>
-                    </a>
-                  )}
+                  {submitAnswerResult.message}
                 </div>
               )}
             </aside>
