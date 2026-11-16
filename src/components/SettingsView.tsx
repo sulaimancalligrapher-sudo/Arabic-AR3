@@ -30,7 +30,8 @@ import {
   Footprints,
   Layers,
   Users,
-  UserPlus
+  UserPlus,
+  Camera
 } from 'lucide-react';
 import { BoardStyle, GuideColor } from '../types/drawing';
 import { GUIDE_COLORS } from '../data/drawingTemplates';
@@ -45,6 +46,8 @@ interface SettingsViewProps {
   onSelectGuideColor?: (color: GuideColor) => void;
   templateOpacity?: number;
   onChangeTemplateOpacity?: (opacity: number) => void;
+  saveArCameraPhoto?: boolean;
+  onToggleSaveArCameraPhoto?: (val: boolean) => void;
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
@@ -57,6 +60,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onSelectGuideColor,
   templateOpacity = 0.35,
   onChangeTemplateOpacity,
+  saveArCameraPhoto = true,
+  onToggleSaveArCameraPhoto,
 }) => {
   // Tabs: 'lessons' (إدارة وتعديل), 'table' (ورقة الدروس), 'sheet' (ربط الشيت), 'board' (إعدادات وخلفيات السبورة), 'registrants' (سجل المشتركين)
   const [activeTab, setActiveTab] = useState<'lessons' | 'table' | 'sheet' | 'board' | 'registrants'>('lessons');
@@ -1134,6 +1139,37 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <div className="flex items-center justify-between text-[11px] text-slate-400">
                     <span>خفيف جداً (10% - للطلاب المتقدمين)</span>
                     <span>واضح جداً (80% - للمبتدئين)</span>
+                  </div>
+                </div>
+
+                {/* 4. AR Composite Photo Privacy Toggle */}
+                <div className="p-5 bg-slate-900 rounded-2xl border border-slate-800 space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+                        <Camera className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <label className="block text-xs sm:text-sm font-bold text-amber-400">
+                          ٤. حفظ لقطة الكاميرا والتاج في الواقع المعزز
+                        </label>
+                        <p className="text-[11px] text-slate-400 leading-snug mt-0.5">
+                          عند تسجيل الإجابة بالواقع المعزز، يتم دمج صورة الكاميرا والتاج الملكي ونجوم التميز مع الرسمة (أو إخفاؤها للخصوصية).
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => onToggleSaveArCameraPhoto && onToggleSaveArCameraPhoto(!saveArCameraPhoto)}
+                      className={`px-3.5 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer shrink-0 ${
+                        saveArCameraPhoto
+                          ? 'bg-emerald-600 text-white border-emerald-400 shadow-md'
+                          : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
+                      }`}
+                    >
+                      {saveArCameraPhoto ? 'مفعّل ✓' : 'مغلق (الخط فقط)'}
+                    </button>
                   </div>
                 </div>
 

@@ -65,10 +65,10 @@ export default function App() {
     }
   }, []);
 
-  // Core Application States (Default: White Board, Smooth Marker, Angle 120°)
+  // Core Application States (Default: White Board, Smooth Marker, Royal Blue Ink, Angle 120°)
   const [boardStyle, setBoardStyle] = useState<BoardStyle>('white');
   const [penType, setPenType] = useState<PenType>('marker');
-  const [penColor, setPenColor] = useState<string>('#0f172a');
+  const [penColor, setPenColor] = useState<string>('#2563eb');
   const [penSize, setPenSize] = useState<number>(18);
   const [calligraphyAngle, setCalligraphyAngle] = useState<number>(120);
 
@@ -80,9 +80,25 @@ export default function App() {
 
   // AR & Virtual Cursor States
   const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
+  const [crownCanvas, setCrownCanvas] = useState<HTMLCanvasElement | null>(null);
   const [virtualCursor, setVirtualCursor] = useState<{ x: number; y: number } | null>(null);
   const [isAirDrawing, setIsAirDrawing] = useState<boolean>(false);
   const [isAirPenLocked, setIsAirPenLocked] = useState<boolean>(false);
+  const [saveArCameraPhoto, setSaveArCameraPhoto] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('arabic_calligraphy_save_ar_camera_v1');
+      return saved === null ? true : saved === 'true';
+    } catch {
+      return true;
+    }
+  });
+
+  const handleToggleSaveArCameraPhoto = useCallback((val: boolean) => {
+    setSaveArCameraPhoto(val);
+    try {
+      localStorage.setItem('arabic_calligraphy_save_ar_camera_v1', String(val));
+    } catch {}
+  }, []);
 
   // AR Tracking & Camera Options (controlled from outside the whiteboard with the tools)
   const [trackingMode, setTrackingMode] = useState<HandTrackingDisplayMode>('one_hand');
@@ -129,7 +145,7 @@ export default function App() {
       }
     } else if (boardStyle === 'white' || boardStyle === 'grid') {
       if (penColor === '#f59e0b') {
-        setPenColor('#0f172a'); // Black ink on white/grid boards
+        setPenColor('#2563eb'); // Royal Blue ink on white/grid boards
       }
     }
   }, [boardStyle]);
@@ -189,19 +205,27 @@ export default function App() {
   const handleUndo = () => {
     canvasRef.current?.undo();
     syncHistoryState();
+    setTimeout(syncHistoryState, 0);
   };
 
   const handleRedo = () => {
     canvasRef.current?.redo();
     syncHistoryState();
+    setTimeout(syncHistoryState, 0);
   };
 
-  const handleClear = () => {
-    canvasRef.current?.clearCanvas();
+  const handleClearSideEffects = useCallback(() => {
     setAccuracy(0);
     setCelebrationMessage(null);
     setShowCrown(false);
+    setCurrentRepetition(1);
     syncHistoryState();
+    setTimeout(syncHistoryState, 0);
+  }, [syncHistoryState]);
+
+  const handleClear = () => {
+    canvasRef.current?.clearCanvas();
+    handleClearSideEffects();
   };
 
   // Export drawing as PNG image
@@ -328,6 +352,8 @@ export default function App() {
         onSelectGuideColor={setGuideColor}
         templateOpacity={templateOpacity}
         onChangeTemplateOpacity={setTemplateOpacity}
+        saveArCameraPhoto={saveArCameraPhoto}
+        onToggleSaveArCameraPhoto={handleToggleSaveArCameraPhoto}
       />
     );
   }
@@ -400,6 +426,7 @@ export default function App() {
             isMirrored={isMirrored}
             onCursorUpdate={handleCursorUpdate}
             onVideoElementReady={setVideoElement}
+            onCrownCanvasReady={setCrownCanvas}
             onDetectionUpdate={setArDetectionStatus}
           />
 
@@ -416,6 +443,9 @@ export default function App() {
             guideColor={guideColor}
             isARMode={boardStyle === 'ar_camera'}
             videoElement={videoElement}
+            crownCanvas={crownCanvas}
+            isMirrored={isMirrored}
+            saveArCameraPhoto={saveArCameraPhoto}
             virtualCursor={virtualCursor}
             isAirDrawing={isAirDrawing}
             isAirPenLocked={isAirPenLocked}
@@ -425,6 +455,7 @@ export default function App() {
             onToggleFullscreen={toggleFullscreen}
             onOpenHelp={() => setIsHelpOpen(true)}
             onOpenLibrary={() => setIsLibraryOpen(true)}
+            onClearSideEffects={handleClearSideEffects}
             onNextRepetition={() => {
               const totalReps = Number(selectedTemplate?.repeatCount) || 1;
               if (currentRepetition < totalReps) {

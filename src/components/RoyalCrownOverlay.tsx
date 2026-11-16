@@ -7,6 +7,7 @@ interface RoyalCrownOverlayProps {
   videoHeight: number;
   isMirrored: boolean;
   showCrown: boolean;
+  onCanvasReady?: (canvas: HTMLCanvasElement | null) => void;
 }
 
 export const RoyalCrownOverlay: React.FC<RoyalCrownOverlayProps> = ({
@@ -15,6 +16,7 @@ export const RoyalCrownOverlay: React.FC<RoyalCrownOverlayProps> = ({
   videoHeight = 480,
   isMirrored,
   showCrown,
+  onCanvasReady,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -36,8 +38,11 @@ export const RoyalCrownOverlay: React.FC<RoyalCrownOverlayProps> = ({
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     if (!showCrown || !face || !face.detected) {
+      onCanvasReady?.(null);
       return;
     }
+
+    onCanvasReady?.(canvas);
 
     // 1:1 Pixel mapping on video frame
     const topX = face.headTop.x * canvas.width;
@@ -200,7 +205,16 @@ export const RoyalCrownOverlay: React.FC<RoyalCrownOverlayProps> = ({
     }
 
     ctx.restore();
-  }, [face, videoWidth, videoHeight, isMirrored, showCrown]);
+  }, [face, videoWidth, videoHeight, isMirrored, showCrown, onCanvasReady]);
+
+  useEffect(() => {
+    if (!showCrown || !face || !face.detected) {
+      onCanvasReady?.(null);
+    } else if (canvasRef.current) {
+      onCanvasReady?.(canvasRef.current);
+    }
+    return () => onCanvasReady?.(null);
+  }, [showCrown, face?.detected, onCanvasReady]);
 
   if (!showCrown || !face || !face.detected) {
     return null;

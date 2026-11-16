@@ -59,6 +59,13 @@ export interface Stroke {
   size: number;
   opacity: number;
   nibAngle?: number; // In degrees, typically 45° for Arabic calligraphy
+  stepMeta?: {
+    prevStepIndex: number;
+    nextStepIndex: number;
+    prevStepScore?: { startEnd: number; path: number; brokenAway: boolean };
+    nextStepScore?: { startEnd: number; path: number; brokenAway: boolean };
+    completedLesson?: boolean;
+  };
 }
 
 export interface HandCursor {

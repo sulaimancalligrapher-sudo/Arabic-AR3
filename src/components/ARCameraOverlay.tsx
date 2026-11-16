@@ -14,6 +14,7 @@ interface ARCameraOverlayProps {
   isMirrored: boolean;
   onCursorUpdate: (cursor: { x: number; y: number } | null, isPinching: boolean) => void;
   onVideoElementReady: (video: HTMLVideoElement | null) => void;
+  onCrownCanvasReady?: (canvas: HTMLCanvasElement | null) => void;
   onDetectionUpdate?: (status: { handsCount: number; isPinching: boolean; faceDetected: boolean; fps: number }) => void;
 }
 
@@ -25,6 +26,7 @@ export const ARCameraOverlay: React.FC<ARCameraOverlayProps> = ({
   isMirrored,
   onCursorUpdate,
   onVideoElementReady,
+  onCrownCanvasReady,
   onDetectionUpdate,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -216,6 +218,7 @@ export const ARCameraOverlay: React.FC<ARCameraOverlayProps> = ({
         videoHeight={arState.videoHeight}
         isMirrored={isMirrored}
         showCrown={showCrown}
+        onCanvasReady={onCrownCanvasReady}
       />
 
       {/* Camera Loading Overlay */}

@@ -62,6 +62,9 @@ interface WhiteboardCanvasProps {
   guideColor: GuideColor;
   isARMode: boolean;
   videoElement: HTMLVideoElement | null;
+  crownCanvas?: HTMLCanvasElement | null;
+  isMirrored?: boolean;
+  saveArCameraPhoto?: boolean;
   virtualCursor: { x: number; y: number } | null;
   isAirDrawing: boolean;
   isAirPenLocked?: boolean;
@@ -74,6 +77,7 @@ interface WhiteboardCanvasProps {
   onToggleFullscreen?: () => void;
   onOpenHelp?: () => void;
   onOpenLibrary?: () => void;
+  onClearSideEffects?: () => void;
   onNextRepetition?: () => void;
   onResetRepetition?: () => void;
   onAccuracyUpdate?: (accuracy: number) => void;
@@ -91,10 +95,9 @@ const LOCK_TRANSFORM_KEY = 'arabic_calligraphy_lock_transform_v1';
 const SAVED_TRANSFORM_KEY = 'arabic_calligraphy_saved_transform_v1';
 
 const getEarnedStars = (score: number): number => {
-  if (score >= 85) return 3;
-  if (score >= 70) return 2;
-  if (score >= 50) return 1;
-  return 0;
+  if (score <= 0) return 0;
+  if (score >= 95) return 10;
+  return Math.max(1, Math.min(10, Math.round(score / 10)));
 };
 
 export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvasProps>(({
@@ -107,6 +110,9 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
   guideColor,
   isARMode,
   videoElement,
+  crownCanvas = null,
+  isMirrored = true,
+  saveArCameraPhoto = true,
   virtualCursor,
   isAirDrawing,
   isAirPenLocked = false,
@@ -119,6 +125,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
   onToggleFullscreen,
   onOpenHelp,
   onOpenLibrary,
+  onClearSideEffects,
   onNextRepetition,
   onResetRepetition,
   onAccuracyUpdate,
@@ -674,7 +681,8 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
             if (alpha > 30) {
               if (hasOpaqueWhiteBg) {
                 const lum = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
-                if (lum > 200) continue; // Skip white paper background; count only dark ink strokes
+                const chroma = Math.max(data[idx], data[idx + 1], data[idx + 2]) - Math.min(data[idx], data[idx + 1], data[idx + 2]);
+                if (lum > 200 && chroma < 32) continue; // Skip white paper background; preserve dark strokes AND bright colored details
               }
               const gx = Math.floor(x / cell);
               grid[gy * gw + gx] = 1;
@@ -744,55 +752,113 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       drawBoundsRef.current = { drawX, drawY, drawW, drawH };
 
       if (shouldRenderImage) {
-        ctx.save();
-        ctx.globalAlpha = effectiveOpacity;
-
         if (canReadPixels) {
           try {
+            const wPx = Math.max(1, Math.round(drawW));
+            const hPx = Math.max(1, Math.round(drawH));
             const offscreen = document.createElement('canvas');
-            offscreen.width = Math.max(1, Math.round(drawW));
-            offscreen.height = Math.max(1, Math.round(drawH));
+            offscreen.width = wPx;
+            offscreen.height = hPx;
             const offCtx = offscreen.getContext('2d');
             if (offCtx) {
-              offCtx.drawImage(img, 0, 0, offscreen.width, offscreen.height);
-              // Check if opaque white background -> strip white pixels before tinting
-              const px = offCtx.getImageData(0, 0, offscreen.width, offscreen.height);
+              offCtx.drawImage(img, 0, 0, wPx, hPx);
+              const px = offCtx.getImageData(0, 0, wPx, hPx);
               const d = px.data;
+
+              // Check if opaque white background -> strip ONLY neutral bright paper pixels
               let cornerOpaqueWhite = 0;
               const checkCoords = [
                 0,
-                (offscreen.width - 1) * 4,
-                ((offscreen.height - 1) * offscreen.width) * 4,
-                ((offscreen.height - 1) * offscreen.width + offscreen.width - 1) * 4
+                (wPx - 1) * 4,
+                ((hPx - 1) * wPx) * 4,
+                ((hPx - 1) * wPx + wPx - 1) * 4
               ];
               checkCoords.forEach(ci => {
                 if (d[ci + 3] > 200 && (d[ci] + d[ci + 1] + d[ci + 2]) / 3 > 215) {
                   cornerOpaqueWhite++;
                 }
               });
-              if (cornerOpaqueWhite >= 3) {
-                for (let i = 0; i < d.length; i += 4) {
-                  if (d[i + 3] > 0 && (d[i] + d[i + 1] + d[i + 2]) / 3 > 210) {
-                    d[i + 3] = 0;
-                  }
+              const stripWhiteBg = cornerOpaqueWhite >= 3;
+
+              // Parse active guide hex color to RGB
+              const hexClean = activeColor.replace('#', '');
+              const tR = parseInt(hexClean.slice(0, 2), 16) || 250;
+              const tG = parseInt(hexClean.slice(2, 4), 16) || 204;
+              const tB = parseInt(hexClean.slice(4, 6), 16) || 21;
+
+              // Dual-layer split:
+              // 1. neutralData: dark/grayscale strokes recolored to activeColor (drawn with effectiveOpacity)
+              // 2. coloredData: explicitly colored details (chroma >= 40) preserved at full vivid RGB & 100% opacity!
+              const neutralImg = offCtx.createImageData(wPx, hPx);
+              const coloredImg = offCtx.createImageData(wPx, hPx);
+              const nD = neutralImg.data;
+              const cD = coloredImg.data;
+              let hasColoredDetails = false;
+
+              for (let i = 0; i < d.length; i += 4) {
+                const a = d[i + 3];
+                if (a === 0) continue;
+                const r = d[i];
+                const g = d[i + 1];
+                const b = d[i + 2];
+                const maxC = Math.max(r, g, b);
+                const minC = Math.min(r, g, b);
+                const chroma = maxC - minC;
+                const avg = (r + g + b) / 3;
+
+                if (stripWhiteBg && avg > 210 && chroma < 32) {
+                  continue; // Transparent white paper background
                 }
-                offCtx.putImageData(px, 0, 0);
+
+                if (chroma >= 40) {
+                  // Vivid/chromatic colored stroke or marker detail -> keep exact RGB
+                  cD[i] = r;
+                  cD[i + 1] = g;
+                  cD[i + 2] = b;
+                  cD[i + 3] = a;
+                  hasColoredDetails = true;
+                } else {
+                  // Neutral grayscale body -> tint cleanly with active guide color
+                  nD[i] = tR;
+                  nD[i + 1] = tG;
+                  nD[i + 2] = tB;
+                  nD[i + 3] = a;
+                }
               }
-              offCtx.globalCompositeOperation = 'source-in';
-              offCtx.fillStyle = activeColor;
-              offCtx.fillRect(0, 0, offscreen.width, offscreen.height);
+
+              // Render Layer A: Neutral letter body with chosen opacity
+              offCtx.putImageData(neutralImg, 0, 0);
+              ctx.save();
+              ctx.globalAlpha = effectiveOpacity;
               ctx.drawImage(offscreen, drawX, drawY, drawW, drawH);
+              ctx.restore();
+
+              // Render Layer B: Vivid colored accents/markers at full clarity (100% opacity)
+              if (hasColoredDetails) {
+                offCtx.putImageData(coloredImg, 0, 0);
+                ctx.save();
+                ctx.globalAlpha = 1.0;
+                ctx.drawImage(offscreen, drawX, drawY, drawW, drawH);
+                ctx.restore();
+              }
             } else {
+              ctx.save();
+              ctx.globalAlpha = effectiveOpacity;
               ctx.drawImage(img, drawX, drawY, drawW, drawH);
+              ctx.restore();
             }
           } catch {
+            ctx.save();
+            ctx.globalAlpha = effectiveOpacity;
             ctx.drawImage(img, drawX, drawY, drawW, drawH);
+            ctx.restore();
           }
         } else {
+          ctx.save();
+          ctx.globalAlpha = effectiveOpacity;
           ctx.drawImage(img, drawX, drawY, drawW, drawH);
+          ctx.restore();
         }
-
-        ctx.restore();
       }
 
       if (template.steps && template.steps.length > 0) {
@@ -1160,16 +1226,60 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     exportCanvas.height = boardHeight + footerHeight;
     const ctx = exportCanvas.getContext('2d')!;
 
-    if (boardStyle === 'dark') {
+    if (isARMode && saveArCameraPhoto && videoElement && videoElement.videoWidth > 0 && videoElement.videoHeight > 0) {
+      // Composite live AR camera + Royal Crown using object-cover crop & mirror transform
+      const drawCoverMedia = (
+        source: HTMLVideoElement | HTMLCanvasElement,
+        srcW: number,
+        srcH: number
+      ) => {
+        const srcRatio = srcW / srcH;
+        const dstRatio = exportWidth / boardHeight;
+        let sx = 0;
+        let sy = 0;
+        let sWidth = srcW;
+        let sHeight = srcH;
+
+        if (srcRatio > dstRatio) {
+          sWidth = srcH * dstRatio;
+          sx = (srcW - sWidth) / 2;
+        } else {
+          sHeight = srcW / dstRatio;
+          sy = (srcH - sHeight) / 2;
+        }
+
+        ctx.save();
+        if (isMirrored) {
+          ctx.translate(exportWidth, 0);
+          ctx.scale(-1, 1);
+        }
+        ctx.drawImage(source, sx, sy, sWidth, sHeight, 0, 0, exportWidth, boardHeight);
+        ctx.restore();
+      };
+
       ctx.fillStyle = '#0f172a';
-    } else if (boardStyle === 'green') {
-      ctx.fillStyle = '#064e3b';
-    } else if (boardStyle === 'grid') {
-      ctx.fillStyle = '#fdfbf7';
+      ctx.fillRect(0, 0, exportWidth, boardHeight);
+      try {
+        drawCoverMedia(videoElement, videoElement.videoWidth, videoElement.videoHeight);
+      } catch {}
+
+      if (crownCanvas && crownCanvas.width > 0 && crownCanvas.height > 0) {
+        try {
+          drawCoverMedia(crownCanvas, crownCanvas.width, crownCanvas.height);
+        } catch {}
+      }
     } else {
-      ctx.fillStyle = '#ffffff';
+      if (boardStyle === 'dark' || (isARMode && !saveArCameraPhoto)) {
+        ctx.fillStyle = '#0f172a';
+      } else if (boardStyle === 'green') {
+        ctx.fillStyle = '#064e3b';
+      } else if (boardStyle === 'grid') {
+        ctx.fillStyle = '#fdfbf7';
+      } else {
+        ctx.fillStyle = '#ffffff';
+      }
+      ctx.fillRect(0, 0, exportWidth, boardHeight);
     }
-    ctx.fillRect(0, 0, exportWidth, boardHeight);
 
     // Check if templateCanvasRef is origin-clean BEFORE drawing it onto exportCanvas
     if (templateCanvasRef.current && (!template?.hideImage || showGhostOverlay)) {
@@ -1191,13 +1301,13 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       } catch {}
     }
 
-    // Draw Honor Stars Badge at top-right corner of the captured board
+    // Draw 10 Honor Stars Badge at top-right corner of the captured board
     if (stampInfo) {
       const starsCount = typeof stampInfo.stars === 'number' ? stampInfo.stars : getEarnedStars(stampInfo.totalScore);
-      const badgeW = 134;
-      const badgeH = 42;
+      const badgeW = 286;
+      const badgeH = 38;
       const badgeX = exportWidth - badgeW - 18;
-      const badgeY = 18;
+      const badgeY = 16;
 
       ctx.save();
       ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
@@ -1212,8 +1322,8 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       ctx.fill();
       ctx.stroke();
 
-      for (let s = 0; s < 3; s++) {
-        drawCanvasStar(ctx, badgeX + 28 + s * 39, badgeY + 21, 12, 5.5, s < starsCount);
+      for (let s = 0; s < 10; s++) {
+        drawCanvasStar(ctx, badgeX + 21 + s * 27, badgeY + 19, 10, 4.5, s < starsCount);
       }
       ctx.restore();
     }
@@ -1303,7 +1413,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     }
 
     return exportCanvas.toDataURL('image/png');
-  }, [dimensions, boardStyle, template, showGhostOverlay, showDiagnosticColors]);
+  }, [dimensions, boardStyle, template, showGhostOverlay, showDiagnosticColors, isARMode, saveArCameraPhoto, videoElement, crownCanvas, isMirrored]);
 
   // Build tailored evaluation text & automated voice feedback based on score, criteria & drawing mode (AR vs Normal)
   const buildSmartEvaluationFeedback = useCallback((
@@ -1950,14 +2060,12 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     e.preventDefault();
     if (activePointerStrokeRef.current) {
       const finishedStroke = activePointerStrokeRef.current;
-      setStrokes(prev => [...prev, finishedStroke]);
-      setRedoStack([]); // Clear redo history on new stroke
       activePointerStrokeRef.current = null;
-      redrawCanvas();
 
+      let stepMeta: Stroke['stepMeta'] | undefined;
       const isChallengeMode = !!(template?.hideDots || template?.hideImage);
 
-      // Step constraint check in standard step-by-step mode
+      // Step constraint check in standard step-by-step mode BEFORE committing stroke so Undo reverts step cleanly
       if (!isChallengeMode && template?.steps && template.steps.length > 0 && activeStepPointsRef.current && penType !== 'eraser') {
         if (strokeStartedAtGreenRef.current) {
           const active = activeStepPointsRef.current;
@@ -1973,7 +2081,6 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
             const brokeAway = stats.hasBrokenAway || stats.maxConsecutiveOffPath >= 8;
             const offCenter = rawPathScore < 45;
 
-            // Level 2 (متوسط) & Level 3 (متقدم): Strictly block if pencil left the path or broke away
             if ((difficulty === 'متوسط' || difficulty === 'متقدم') && (brokeAway || offCenter)) {
               audioService.playErrorSound();
               setStepAlert({
@@ -1987,7 +2094,6 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                 audioService.speakArabic(brokeAway ? 'خرج القلم عن مسار الحرف! التزم بالخط دون انقطاع' : 'ارسم فوق مسار الحرف بدقة');
               }
             } else {
-              // Calculate adjusted step path score (in 'سهل', penalize off-path strokes cleanly instead of blocking)
               const effectivePathScore = (difficulty === 'سهل' && (brokeAway || offCenter))
                 ? Math.min(rawPathScore, 55)
                 : rawPathScore;
@@ -1997,6 +2103,9 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
 
               // Level 3 (متقدم): On final step, enforce stroke thickness coverage >= 75%
               if (difficulty === 'متقدم' && nextIdx >= template.steps.length && coverageScore < 75) {
+                setStrokes(prev => [...prev, finishedStroke]);
+                setRedoStack([]);
+                redrawCanvas();
                 audioService.playErrorSound();
                 setStepAlert({
                   type: 'error',
@@ -2010,16 +2119,25 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                 return;
               }
 
-              // Record step result
-              stepScoresRef.current[currentStepIndex] = {
+              const prevStepScore = stepScoresRef.current[currentStepIndex]
+                ? { ...stepScoresRef.current[currentStepIndex] }
+                : undefined;
+              const newStepScore = {
                 startEnd: 100,
                 path: effectivePathScore,
                 brokenAway: brokeAway
               };
+              stepScoresRef.current[currentStepIndex] = newStepScore;
 
               audioService.playStepSuccessSound();
 
               if (nextIdx < template.steps.length) {
+                stepMeta = {
+                  prevStepIndex: currentStepIndex,
+                  nextStepIndex: nextIdx,
+                  prevStepScore,
+                  nextStepScore: newStepScore,
+                };
                 setCurrentStepIndex(nextIdx);
                 const nextStep = template.steps[nextIdx];
                 const stepName = getArabicOrdinal(currentStepIndex + 1);
@@ -2038,7 +2156,13 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                   }, 400);
                 }
               } else {
-                // ALL STEPS COMPLETED! Average path scores across recorded steps
+                stepMeta = {
+                  prevStepIndex: currentStepIndex,
+                  nextStepIndex: currentStepIndex,
+                  prevStepScore,
+                  nextStepScore: newStepScore,
+                  completedLesson: true,
+                };
                 const recorded = stepScoresRef.current.filter(Boolean);
                 const avgPathScore = recorded.length > 0
                   ? Math.round(recorded.reduce((acc, s) => acc + s.path, 0) / recorded.length)
@@ -2052,7 +2176,6 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
               }
             }
           } else {
-            // Stroke did not reach red dot
             audioService.playErrorSound();
             setStepAlert({
               type: 'error',
@@ -2066,6 +2189,11 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         }
         strokeStartedAtGreenRef.current = false;
       }
+
+      const committedStroke: Stroke = stepMeta ? { ...finishedStroke, stepMeta } : finishedStroke;
+      setStrokes(prev => [...prev, committedStroke]);
+      setRedoStack([]);
+      redrawCanvas();
     }
   };
 
@@ -2075,8 +2203,10 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
   useEffect(() => {
     if (!isARMode || !virtualCursor) {
       if (activeAirStrokeRef.current) {
-        setStrokes(prev => [...prev, activeAirStrokeRef.current!]);
+        const lostAirStroke = activeAirStrokeRef.current;
         activeAirStrokeRef.current = null;
+        setStrokes(prev => [...prev, lostAirStroke]);
+        setRedoStack([]);
         redrawCanvas();
       }
       return;
@@ -2211,9 +2341,8 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     } else {
       if (activeAirStrokeRef.current) {
         const finishedAirStroke = activeAirStrokeRef.current;
-        setStrokes(prev => [...prev, finishedAirStroke]);
         activeAirStrokeRef.current = null;
-        redrawCanvas();
+        let stepMeta: Stroke['stepMeta'] | undefined;
 
         // Validate red dot finish ONLY in standard guided mode (NEVER in challenge/no-dots/blind modes)
         if (!isChallengeMode && template?.steps && template.steps.length > 0 && activeStepPointsRef.current && penType !== 'eraser') {
@@ -2252,6 +2381,9 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                 const coverageScore = calculateCoverageScore([...strokes, finishedAirStroke]);
 
                 if (difficulty === 'متقدم' && nextIdx >= template.steps.length && coverageScore < 75) {
+                  setStrokes(prev => [...prev, finishedAirStroke]);
+                  setRedoStack([]);
+                  redrawCanvas();
                   audioService.playErrorSound();
                   setStepAlert({
                     type: 'error',
@@ -2265,15 +2397,25 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                   return;
                 }
 
-                stepScoresRef.current[currentStepIndex] = {
+                const prevStepScore = stepScoresRef.current[currentStepIndex]
+                  ? { ...stepScoresRef.current[currentStepIndex] }
+                  : undefined;
+                const newStepScore = {
                   startEnd: 100,
                   path: effectivePathScore,
                   brokenAway: brokeAway
                 };
+                stepScoresRef.current[currentStepIndex] = newStepScore;
 
                 audioService.playStepSuccessSound();
 
                 if (nextIdx < template.steps.length) {
+                  stepMeta = {
+                    prevStepIndex: currentStepIndex,
+                    nextStepIndex: nextIdx,
+                    prevStepScore,
+                    nextStepScore: newStepScore,
+                  };
                   setCurrentStepIndex(nextIdx);
                   const nextStep = template.steps[nextIdx];
                   const stepName = getArabicOrdinal(currentStepIndex + 1);
@@ -2292,6 +2434,13 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                     }, 400);
                   }
                 } else {
+                  stepMeta = {
+                    prevStepIndex: currentStepIndex,
+                    nextStepIndex: currentStepIndex,
+                    prevStepScore,
+                    nextStepScore: newStepScore,
+                    completedLesson: true,
+                  };
                   const recorded = stepScoresRef.current.filter(Boolean);
                   const avgPathScore = recorded.length > 0
                     ? Math.round(recorded.reduce((acc, s) => acc + s.path, 0) / recorded.length)
@@ -2318,31 +2467,53 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
           }
           strokeStartedAtGreenRef.current = false;
         }
+
+        const committedAirStroke: Stroke = stepMeta ? { ...finishedAirStroke, stepMeta } : finishedAirStroke;
+        setStrokes(prev => [...prev, committedAirStroke]);
+        setRedoStack([]);
+        redrawCanvas();
       }
     }
   }, [virtualCursor, effectiveIsAirDrawing, isARMode, dimensions, penType, penColor, penSize, calligraphyAngle, redrawCanvas, currentStepIndex, template, openEvaluationResults, classifyPoint, calculateCoverageScore, isLessonStarted, onOpenLibrary]);
 
+  // Unified complete board clear (matching "مسح السبورة بالكامل")
+  const performFullClear = useCallback((withSound = true) => {
+    if (withSound) {
+      audioService.playEraserSound();
+    }
+    setStrokes([]);
+    setRedoStack([]);
+    activePointerStrokeRef.current = null;
+    activeAirStrokeRef.current = null;
+    hasAchievedGoalRef.current = false;
+    setCurrentStepIndex(0);
+    setStepAlert(null);
+    setEvaluationModal(null);
+    setSubmitAnswerResult(null);
+    setShowGhostOverlay(false);
+    setPendingNextRepScore(null);
+    setIsLessonStarted(false);
+    strokeStartedAtGreenRef.current = false;
+    stepScoresRef.current = [];
+    repetitionScoresRef.current = [];
+    resetStrokeStats();
+    const canvas = canvasRef.current;
+    if (canvas) {
+      canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
+    }
+    const dCanvas = diagnosticCanvasRef.current;
+    if (dCanvas) {
+      dCanvas.getContext('2d')?.clearRect(0, 0, dCanvas.width, dCanvas.height);
+    }
+    if (onResetRepetition) onResetRepetition();
+    if (onAccuracyUpdate) onAccuracyUpdate(0);
+    if (onClearSideEffects) onClearSideEffects();
+  }, [onAccuracyUpdate, onClearSideEffects, onResetRepetition, resetStrokeStats]);
+
   // Imperative actions exposed to parent component
   useImperativeHandle(ref, () => ({
     clearCanvas: () => {
-      audioService.playEraserSound();
-      setStrokes([]);
-      setRedoStack([]);
-      activePointerStrokeRef.current = null;
-      activeAirStrokeRef.current = null;
-      hasAchievedGoalRef.current = false;
-      setCurrentStepIndex(0);
-      setStepAlert(null);
-      setEvaluationModal(null);
-      setIsLessonStarted(false);
-      strokeStartedAtGreenRef.current = false;
-      resetStrokeStats();
-      const canvas = canvasRef.current;
-      if (canvas) {
-        const ctx = canvas.getContext('2d');
-        ctx?.clearRect(0, 0, canvas.width, canvas.height);
-      }
-      if (onAccuracyUpdate) onAccuracyUpdate(0);
+      performFullClear(true);
     },
     undo: () => {
       if (strokes.length === 0) return;
@@ -2350,6 +2521,21 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       const last = strokes[strokes.length - 1];
       setStrokes(prev => prev.slice(0, -1));
       setRedoStack(prev => [...prev, last]);
+      if (last.stepMeta) {
+        if (last.stepMeta.prevStepScore) {
+          stepScoresRef.current[last.stepMeta.prevStepIndex] = last.stepMeta.prevStepScore;
+        } else if (last.stepMeta.nextStepScore) {
+          delete stepScoresRef.current[last.stepMeta.prevStepIndex];
+        }
+        if (last.stepMeta.nextStepIndex !== last.stepMeta.prevStepIndex) {
+          setCurrentStepIndex(last.stepMeta.prevStepIndex);
+        }
+        if (last.stepMeta.completedLesson) {
+          setEvaluationModal(null);
+          hasAchievedGoalRef.current = false;
+        }
+        setStepAlert(null);
+      }
     },
     redo: () => {
       if (redoStack.length === 0) return;
@@ -2357,6 +2543,15 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       const next = redoStack[redoStack.length - 1];
       setRedoStack(prev => prev.slice(0, -1));
       setStrokes(prev => [...prev, next]);
+      if (next.stepMeta) {
+        if (next.stepMeta.nextStepScore) {
+          stepScoresRef.current[next.stepMeta.prevStepIndex] = next.stepMeta.nextStepScore;
+        }
+        if (next.stepMeta.nextStepIndex !== next.stepMeta.prevStepIndex) {
+          setCurrentStepIndex(next.stepMeta.nextStepIndex);
+        }
+        setStepAlert(null);
+      }
     },
     canUndo: strokes.length > 0,
     canRedo: redoStack.length > 0,
@@ -2367,10 +2562,40 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       const ctx = exportCanvas.getContext('2d')!;
 
       if (includeBackground) {
-        if (boardStyle === 'white') {
+        if (isARMode && saveArCameraPhoto && videoElement && videoElement.videoWidth > 0 && videoElement.videoHeight > 0) {
+          const drawCoverExport = (source: HTMLVideoElement | HTMLCanvasElement, srcW: number, srcH: number) => {
+            const srcRatio = srcW / srcH;
+            const dstRatio = exportCanvas.width / exportCanvas.height;
+            let sx = 0, sy = 0, sWidth = srcW, sHeight = srcH;
+            if (srcRatio > dstRatio) {
+              sWidth = srcH * dstRatio;
+              sx = (srcW - sWidth) / 2;
+            } else {
+              sHeight = srcW / dstRatio;
+              sy = (srcH - sHeight) / 2;
+            }
+            ctx.save();
+            if (isMirrored) {
+              ctx.translate(exportCanvas.width, 0);
+              ctx.scale(-1, 1);
+            }
+            ctx.drawImage(source, sx, sy, sWidth, sHeight, 0, 0, exportCanvas.width, exportCanvas.height);
+            ctx.restore();
+          };
+          ctx.fillStyle = '#0f172a';
+          ctx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+          try {
+            drawCoverExport(videoElement, videoElement.videoWidth, videoElement.videoHeight);
+          } catch {}
+          if (crownCanvas && crownCanvas.width > 0 && crownCanvas.height > 0) {
+            try {
+              drawCoverExport(crownCanvas, crownCanvas.width, crownCanvas.height);
+            } catch {}
+          }
+        } else if (boardStyle === 'white') {
           ctx.fillStyle = '#f8fafc';
           ctx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
-        } else if (boardStyle === 'dark') {
+        } else if (boardStyle === 'dark' || boardStyle === 'ar_camera') {
           ctx.fillStyle = '#0f172a';
           ctx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
         } else if (boardStyle === 'green') {
@@ -2383,8 +2608,11 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       }
 
       // Draw template
-      if (templateCanvasRef.current) {
-        ctx.drawImage(templateCanvasRef.current, 0, 0);
+      if (templateCanvasRef.current && (!template?.hideImage || showGhostOverlay)) {
+        try {
+          templateCanvasRef.current.toDataURL('image/png');
+          ctx.drawImage(templateCanvasRef.current, 0, 0);
+        } catch {}
       }
 
       // Draw user drawing
@@ -2395,7 +2623,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       return exportCanvas.toDataURL('image/png');
     },
     recalculateAccuracy: () => calculateCoverageScore()
-  }), [strokes, redoStack, dimensions, boardStyle, calculateCoverageScore, onAccuracyUpdate, template]);
+  }), [strokes, redoStack, dimensions, boardStyle, calculateCoverageScore, template, performFullClear, isARMode, saveArCameraPhoto, videoElement, crownCanvas, isMirrored, showGhostOverlay]);
 
   // Board background classes and styles
   const getBoardBgStyle = () => {
@@ -2776,7 +3004,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                 }`}
               >
                 <Move className="w-3.5 h-3.5" />
-                <span className="hidden md:inline">تحريك / حجم</span>
+                <span className="hidden md:inline">تحريك</span>
               </button>
             )}
 
@@ -2832,13 +3060,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
               <p>امسح الحبر أولاً قبل تحريك الحرف حتى تبقى دقة التقييم صحيحة.</p>
               <button
                 type="button"
-                onClick={() => {
-                  setStrokes([]);
-                  setRedoStack([]);
-                  setCurrentStepIndex(0);
-                  const c = canvasRef.current;
-                  if (c) c.getContext('2d')?.clearRect(0, 0, c.width, c.height);
-                }}
+                onClick={() => performFullClear(true)}
                 className="w-full py-1.5 rounded-lg bg-amber-500 text-slate-950 font-bold text-[11px] hover:brightness-110 cursor-pointer"
               >
                 مسح الحبر للتحريك
@@ -2919,30 +3141,19 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                 </button>
               </div>
 
-              {/* Reset Center + Lock Across All Lessons */}
-              <div className="flex flex-col gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => updateTemplateTransform(() => DEFAULT_TEMPLATE_TRANSFORM)}
-                  className="w-full py-1.5 px-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-bold flex items-center justify-center gap-1.5 border border-slate-700 cursor-pointer"
-                >
-                  <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
-                  <span>إرجاع للمنتصف والحجم الأصلي</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={toggleTransformLock}
-                  className={`w-full py-1.5 px-2.5 rounded-xl text-[11px] font-bold flex items-center justify-center gap-1.5 border transition-all cursor-pointer ${
-                    isTransformLocked
-                      ? 'bg-emerald-600 text-white border-emerald-400 shadow-sm'
-                      : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
-                  }`}
-                >
-                  {isTransformLocked ? <Pin className="w-3.5 h-3.5" /> : <PinOff className="w-3.5 h-3.5" />}
-                  <span>{isTransformLocked ? 'مثبت لجميع الدروس ✓' : 'تثبيت هذا الموضع لكل الصور'}</span>
-                </button>
-              </div>
+              {/* Lock Across All Lessons */}
+              <button
+                type="button"
+                onClick={toggleTransformLock}
+                className={`w-full py-1.5 px-2.5 rounded-xl text-[11px] font-bold flex items-center justify-center gap-1.5 border transition-all cursor-pointer ${
+                  isTransformLocked
+                    ? 'bg-emerald-600 text-white border-emerald-400 shadow-sm'
+                    : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
+                }`}
+              >
+                {isTransformLocked ? <Pin className="w-3.5 h-3.5" /> : <PinOff className="w-3.5 h-3.5" />}
+                <span>{isTransformLocked ? 'مثبت لجميع الدروس ✓' : 'تثبيت هذا الموضع لكل الصور'}</span>
+              </button>
             </div>
           )}
         </div>
@@ -2975,19 +3186,19 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       {/* Honor Stars Corner Badge & Diagnostic Coloring Toggle on Board during Evaluation */}
       {evaluationModal && (
         <>
-          {/* Corner Honor Stars Widget (opposite side of sidebar so it never collides) */}
+          {/* Corner 10-Star Honor Widget (opposite side of sidebar so it never collides) */}
           <div
-            className={`absolute top-14 sm:top-16 z-30 pointer-events-auto flex items-center gap-1 px-2.5 py-1.5 rounded-2xl bg-slate-900/90 border border-amber-500/40 shadow-xl ${
+            className={`absolute top-14 sm:top-16 z-30 pointer-events-auto flex flex-wrap sm:flex-nowrap items-center justify-center max-w-[146px] sm:max-w-none gap-0.5 sm:gap-1 px-2 py-1 sm:px-2.5 sm:py-1.5 rounded-2xl bg-slate-900/90 border border-amber-500/40 shadow-xl ${
               evalSidebarSide === 'left' ? 'right-2 sm:right-4' : 'left-2 sm:left-4'
             }`}
           >
-            {[0, 1, 2].map(idx => {
+            {Array.from({ length: 10 }, (_, idx) => {
               const earned = idx < getEarnedStars(evaluationModal.totalScore);
               return (
                 <Star
                   key={idx}
-                  className={`w-4 h-4 sm:w-5 sm:h-5 ${
-                    earned ? 'text-amber-400 fill-amber-400 drop-shadow-[0_0_6px_rgba(251,191,36,0.7)]' : 'text-slate-600'
+                  className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${
+                    earned ? 'text-amber-400 fill-amber-400 drop-shadow-[0_0_5px_rgba(251,191,36,0.7)]' : 'text-slate-600'
                   }`}
                 />
               );
@@ -3044,7 +3255,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
               {evalSidebarSide === 'left' ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronLeft className="w-3.5 h-3.5" />}
             </button>
           ) : (
-            <aside className="pointer-events-auto w-[158px] xs:w-[168px] sm:w-[214px] max-h-[82vh] bg-slate-900/92 border border-amber-500/40 rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.45)] text-white text-center overflow-y-auto p-2.5 sm:p-3 flex flex-col gap-2">
+            <aside className="pointer-events-auto w-[114px] sm:w-[214px] max-h-[82vh] bg-slate-900/92 border border-amber-500/40 rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.45)] text-white text-center overflow-y-auto p-1.5 sm:p-3 flex flex-col gap-1.5 sm:gap-2">
               {/* Compact Window Controls: Swap Side / Collapse / Close */}
               <div className="flex items-center justify-between gap-1">
                 <button
@@ -3056,7 +3267,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                   title="إغلاق"
                   className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white cursor-pointer"
                 >
-                  <X className="w-3.5 h-3.5" />
+                  <X className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
                 </button>
                 <div className="flex items-center gap-1">
                   <button
@@ -3065,7 +3276,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                     title="نقل الشريط لليمين أو اليسار"
                     className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-300 cursor-pointer"
                   >
-                    <ArrowLeftRight className="w-3.5 h-3.5" />
+                    <ArrowLeftRight className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
                   </button>
                   <button
                     type="button"
@@ -3073,36 +3284,36 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                     title="تصغير النافذة"
                     className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 cursor-pointer"
                   >
-                    {evalSidebarSide === 'left' ? <ChevronLeft className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                    {evalSidebarSide === 'left' ? <ChevronLeft className="w-3 h-3 sm:w-3.5 sm:h-3.5" /> : <ChevronRight className="w-3 h-3 sm:w-3.5 sm:h-3.5" />}
                   </button>
                 </div>
               </div>
 
               {/* 1. Icon + Label (تقييم) */}
-              <div className="flex flex-col items-center gap-1">
-                <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-tr from-amber-500 to-yellow-400 text-slate-950 flex items-center justify-center shadow-md">
-                  <Award className="w-5 h-5" />
+              <div className="flex flex-col items-center gap-0.5 sm:gap-1">
+                <div className="w-7 h-7 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-tr from-amber-500 to-yellow-400 text-slate-950 flex items-center justify-center shadow-md">
+                  <Award className="w-4 h-4 sm:w-5 sm:h-5" />
                 </div>
-                <h3 className="font-bold text-xs sm:text-sm text-amber-300">
+                <h3 className="font-bold text-[11px] sm:text-sm text-amber-300 leading-tight">
                   {evaluationModal.repetitionBreakdown && evaluationModal.repetitionBreakdown.length > 1
-                    ? `تقييم (${evaluationModal.repetitionBreakdown.length} تكرار)`
+                    ? `تقييم (${evaluationModal.repetitionBreakdown.length})`
                     : 'تقييم'}
                 </h3>
               </div>
 
               {/* 2. Final Big Score (%) */}
-              <div className="font-extrabold font-mono text-2xl sm:text-3xl text-white tracking-tight tabular-nums leading-none">
+              <div className="font-extrabold font-mono text-xl sm:text-3xl text-white tracking-tight tabular-nums leading-none">
                 {evaluationModal.totalScore}%
               </div>
 
-              {/* 3. Concise Feedback Comment */}
-              <p className="text-[10px] sm:text-[11px] font-semibold text-amber-200/95 leading-snug line-clamp-3">
+              {/* 3. Concise Feedback Comment (hidden/compact on tiny mobile, readable on sm+) */}
+              <p className="text-[9px] sm:text-[11px] font-semibold text-amber-200/95 leading-snug line-clamp-2 sm:line-clamp-3">
                 {evaluationModal.feedback}
               </p>
 
               {/* Multi-Repetition Compact Text Summary */}
               {evaluationModal.repetitionBreakdown && evaluationModal.repetitionBreakdown.length > 1 && (
-                <div className="text-[10px] text-slate-300 leading-tight border-t border-slate-800 pt-1.5">
+                <div className="text-[9px] sm:text-[10px] text-slate-300 leading-tight border-t border-slate-800 pt-1">
                   {evaluationModal.repetitionBreakdown.map((item, idx) => (
                     <span key={item.rep}>
                       {idx > 0 && ' · '}
@@ -3112,40 +3323,40 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                 </div>
               )}
 
-              {/* 4–6. Vertical Criteria List (Label above %, slim bar) */}
-              <div className="space-y-1.5 bg-slate-950/55 rounded-xl border border-slate-800 p-2 text-center">
+              {/* 4–6. Vertical Criteria List (Bars hidden on mobile, kept on desktop) */}
+              <div className="space-y-1 sm:space-y-1.5 bg-slate-950/55 rounded-xl border border-slate-800 p-1.5 sm:p-2 text-center">
                 <div>
-                  <div className="text-[10px] text-slate-300 truncate">
-                    {template?.hideImage ? 'الاتزان والبداية' : 'نقطة البداية والنهاية'}
+                  <div className="text-[9px] sm:text-[10px] text-slate-300 leading-tight">
+                    {template?.hideImage ? 'الاتزان والبداية' : 'البداية والنهاية'}
                   </div>
-                  <div className="font-mono font-bold text-xs text-emerald-400 tabular-nums">
+                  <div className="font-mono font-bold text-[11px] sm:text-xs text-emerald-400 tabular-nums">
                     {evaluationModal.startEndScore}%
                   </div>
-                  <div className="w-full bg-slate-800 rounded-full h-1 mt-0.5 overflow-hidden">
+                  <div className="hidden sm:block w-full bg-slate-800 rounded-full h-1 mt-0.5 overflow-hidden">
                     <div className="bg-emerald-500 h-1 rounded-full transition-all duration-500" style={{ width: `${evaluationModal.startEndScore}%` }} />
                   </div>
                 </div>
 
                 <div className="border-t border-slate-800/80 pt-1">
-                  <div className="text-[10px] text-slate-300 truncate">
+                  <div className="text-[9px] sm:text-[10px] text-slate-300 leading-tight">
                     {template?.hideImage ? 'تطابق الشكل' : 'دقة المسار'}
                   </div>
-                  <div className="font-mono font-bold text-xs text-amber-400 tabular-nums">
+                  <div className="font-mono font-bold text-[11px] sm:text-xs text-amber-400 tabular-nums">
                     {evaluationModal.pathScore}%
                   </div>
-                  <div className="w-full bg-slate-800 rounded-full h-1 mt-0.5 overflow-hidden">
+                  <div className="hidden sm:block w-full bg-slate-800 rounded-full h-1 mt-0.5 overflow-hidden">
                     <div className="bg-amber-400 h-1 rounded-full transition-all duration-500" style={{ width: `${evaluationModal.pathScore}%` }} />
                   </div>
                 </div>
 
                 <div className="border-t border-slate-800/80 pt-1">
-                  <div className="text-[10px] text-slate-300 truncate">
+                  <div className="text-[9px] sm:text-[10px] text-slate-300 leading-tight">
                     {template?.hideImage ? 'تغطية المعالم' : 'سُمك الحرف'}
                   </div>
-                  <div className="font-mono font-bold text-xs text-sky-400 tabular-nums">
+                  <div className="font-mono font-bold text-[11px] sm:text-xs text-sky-400 tabular-nums">
                     {evaluationModal.coverageScore}%
                   </div>
-                  <div className="w-full bg-slate-800 rounded-full h-1 mt-0.5 overflow-hidden">
+                  <div className="hidden sm:block w-full bg-slate-800 rounded-full h-1 mt-0.5 overflow-hidden">
                     <div className="bg-sky-400 h-1 rounded-full transition-all duration-500" style={{ width: `${evaluationModal.coverageScore}%` }} />
                   </div>
                 </div>
@@ -3156,72 +3367,58 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                 <button
                   type="button"
                   onClick={() => setShowGhostOverlay(prev => !prev)}
-                  className="w-full py-1.5 px-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 font-bold text-[10px] flex items-center justify-center gap-1 cursor-pointer"
+                  className="w-full py-1.5 px-1.5 sm:px-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 font-bold text-[9px] sm:text-[10px] flex items-center justify-center gap-1 cursor-pointer"
                 >
-                  {showGhostOverlay ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
-                  <span>{showGhostOverlay ? 'إخفاء الحرف' : 'عرض الحرف'}</span>
+                  {showGhostOverlay ? <EyeOff className="w-3 h-3 shrink-0" /> : <Eye className="w-3 h-3 shrink-0" />}
+                  <span className="hidden sm:inline">{showGhostOverlay ? 'إخفاء الحرف' : 'عرض الحرف'}</span>
                 </button>
               )}
 
-              {/* 7. Reset Exercise Button (إعادة التمرين) */}
-              <button
-                type="button"
-                onClick={() => {
-                  setEvaluationModal(null);
-                  setSubmitAnswerResult(null);
-                  setShowGhostOverlay(false);
-                  setPendingNextRepScore(null);
-                  setIsLessonStarted(false);
-                  setCurrentStepIndex(0);
-                  setStepAlert(null);
-                  stepScoresRef.current = [];
-                  repetitionScoresRef.current = [];
-                  resetStrokeStats();
-                  const canvas = canvasRef.current;
-                  if (canvas) {
-                    canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
-                  }
-                  const dCanvas = diagnosticCanvasRef.current;
-                  if (dCanvas) {
-                    dCanvas.getContext('2d')?.clearRect(0, 0, dCanvas.width, dCanvas.height);
-                  }
-                  setStrokes([]);
-                  if (onResetRepetition) onResetRepetition();
-                }}
-                className="w-full py-2 px-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-[11px] flex items-center justify-center gap-1.5 transition-all cursor-pointer"
-              >
-                <RotateCcw className="w-3.5 h-3.5 shrink-0" />
-                <span>إعادة التمرين</span>
-              </button>
+              {/* Bottom Action Buttons: Icon-only grid on mobile, full buttons on sm+ */}
+              <div className="grid grid-cols-2 sm:flex sm:flex-col gap-1.5">
+                {/* 7. Reset Exercise Button */}
+                <button
+                  type="button"
+                  onClick={() => performFullClear(false)}
+                  title="إعادة التمرين"
+                  aria-label="إعادة التمرين"
+                  className="w-full py-2 px-1.5 sm:px-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-[11px] flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                >
+                  <RotateCcw className="w-4 h-4 sm:w-3.5 sm:h-3.5 shrink-0" />
+                  <span className="hidden sm:inline">إعادة التمرين</span>
+                </button>
 
-              {/* 8. Submit Answer Button with Single Icon (تسجيل الإجابة) */}
-              <button
-                type="button"
-                onClick={handleSubmitAnswer}
-                disabled={isSubmittingAnswer || submitAnswerResult?.success}
-                className={`w-full py-2 px-2 rounded-xl font-bold text-[11px] flex items-center justify-center gap-1.5 shadow-md transition-all cursor-pointer ${
-                  submitAnswerResult?.success
-                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 cursor-default'
-                    : 'bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white active:scale-95 disabled:opacity-60'
-                }`}
-              >
-                {isSubmittingAnswer ? (
-                  <>
-                    <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
-                    <span>جاري الحفظ...</span>
-                  </>
-                ) : submitAnswerResult?.success ? (
-                  <>
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                    <span>تم التسجيل</span>
-                  </>
-                ) : (
-                  <>
-                    <Save className="w-3.5 h-3.5 shrink-0" />
-                    <span>تسجيل الإجابة</span>
-                  </>
-                )}
-              </button>
+                {/* 8. Submit Answer Button */}
+                <button
+                  type="button"
+                  onClick={handleSubmitAnswer}
+                  disabled={isSubmittingAnswer || submitAnswerResult?.success}
+                  title={isSubmittingAnswer ? 'جاري الحفظ...' : submitAnswerResult?.success ? 'تم التسجيل' : 'تسجيل الإجابة'}
+                  aria-label="تسجيل الإجابة"
+                  className={`w-full py-2 px-1.5 sm:px-2 rounded-xl font-bold text-[11px] flex items-center justify-center gap-1.5 shadow-md transition-all cursor-pointer ${
+                    submitAnswerResult?.success
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 cursor-default'
+                      : 'bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white active:scale-95 disabled:opacity-60'
+                  }`}
+                >
+                  {isSubmittingAnswer ? (
+                    <>
+                      <Loader2 className="w-4 h-4 sm:w-3.5 sm:h-3.5 animate-spin shrink-0" />
+                      <span className="hidden sm:inline">جاري الحفظ...</span>
+                    </>
+                  ) : submitAnswerResult?.success ? (
+                    <>
+                      <CheckCircle2 className="w-4 h-4 sm:w-3.5 sm:h-3.5 text-emerald-400 shrink-0" />
+                      <span className="hidden sm:inline">تم التسجيل</span>
+                    </>
+                  ) : (
+                    <>
+                      <Save className="w-4 h-4 sm:w-3.5 sm:h-3.5 shrink-0" />
+                      <span className="hidden sm:inline">تسجيل الإجابة</span>
+                    </>
+                  )}
+                </button>
+              </div>
 
               {/* Compact Upload Result Message & Drive Link */}
               {submitAnswerResult && (
