@@ -1,13 +1,14 @@
 import { DrawingTemplate, LessonStep, LessonDifficulty } from '../types/drawing';
 import { DRAWING_TEMPLATES } from '../data/drawingTemplates';
 import { formatDirectImageUrl } from '../utils/urlHelper';
+import { ARRewardTier, normalizeARRewardTiers } from './arRewardsService';
 
 const SHEET_URL_KEY = 'arabic_ar_sheet_url';
 const LOCAL_TEMPLATES_KEY = 'arabic_ar_horizontal_templates_v2';
 const LOCAL_STEPS_CACHE_KEY = 'arabic_ar_steps_backup_cache';
 
 // Default built-in Google Apps Script URL so all devices (mobile, tablet, PC) connect automatically
-export const DEFAULT_SHEET_URL = 'https://script.google.com/macros/s/AKfycbxsxerSmQe-lFdJiWu8n4azsbMgUknvvcbTx8GC1-n5HFUApkGU8rYG5JWgwiBSjgLwIQ/exec';
+export const DEFAULT_SHEET_URL = 'https://script.google.com/macros/s/AKfycbwAXtwRRqGlrpxyn6vgDfvdWSnwix3NNI1J1nC62ZVHleekKn8XHtud9gXw5K2N0KXBbA/exec';
 
 /**
  * Return authentic Arabic ordinal word for steps
@@ -177,6 +178,7 @@ export const GOOGLE_APPS_SCRIPT_CODE = `/**
 const SHEET_NAME = "ArabicLessons";
 const REGISTRANTS_SHEET_NAME = "ID registrants";
 const ANSWERS_SHEET_NAME = "answers 1";
+const AR_REWARDS_SHEET_NAME = "AR Rewards";
 const DRIVE_FOLDER_ID = "1kYNXRiFvHY09BYLRbINxerXC5cpYiIOX";
 const COLS_PER_LESSON = 7;
 const SUB_HEADERS = [
@@ -285,6 +287,33 @@ function getOrCreateRegistrantsSheet() {
   return sheet;
 }
 
+function getOrCreateARRewardsSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(AR_REWARDS_SHEET_NAME);
+  if (!sheet) {
+    sheet = ss.insertSheet(AR_REWARDS_SHEET_NAME);
+    const headers = [
+      "المعرف",
+      "العنوان",
+      "من درجة",
+      "إلى درجة",
+      "التصميم الجاهز",
+      "رابط الصورة",
+      "الحجم",
+      "الإزاحة",
+      "مفعّل"
+    ];
+    sheet.appendRow(headers);
+    const headerRange = sheet.getRange(1, 1, 1, headers.length);
+    headerRange.setBackground("#1e293b");
+    headerRange.setFontColor("#f8fafc");
+    headerRange.setFontWeight("bold");
+    headerRange.setFontSize(10);
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
 function getOrCreateSheet() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sheet = ss.getSheetByName(SHEET_NAME);
@@ -351,6 +380,37 @@ function doGet(e) {
         status: "success",
         count: registrants.length,
         registrants: registrants
+      });
+    }
+
+    // 1B. Fetch AR Head Rewards from 'AR Rewards' sheet
+    if (reqAction === "get_ar_rewards" || reqSheet === "ar_rewards") {
+      const arSheet = getOrCreateARRewardsSheet();
+      const arData = arSheet.getDataRange().getValues();
+      const rewards = [];
+      for (let i = 1; i < arData.length; i++) {
+        const row = arData[i];
+        const id = String(row[0] || '').trim();
+        const title = String(row[1] || '').trim();
+        const presetId = String(row[4] || '').trim();
+        const imageUrl = String(row[5] || '').trim();
+        if (!id && !title && !presetId && !imageUrl) continue;
+        rewards.push({
+          id: id || ("tier_" + i),
+          title: title,
+          minScore: Number(row[2]) || 0,
+          maxScore: row[3] !== "" && row[3] !== null && row[3] !== undefined ? Number(row[3]) : 100,
+          presetId: presetId || undefined,
+          imageUrl: imageUrl,
+          scaleRatio: Number(row[6]) || 1.35,
+          offsetYRatio: row[7] !== "" && row[7] !== null && row[7] !== undefined ? Number(row[7]) : -0.45,
+          enabled: String(row[8] !== undefined ? row[8] : "true").toLowerCase() !== "false" && String(row[8]) !== "0"
+        });
+      }
+      return jsonResponse({
+        status: "success",
+        count: rewards.length,
+        rewards: rewards
       });
     }
 
@@ -724,6 +784,93 @@ function doPost(e) {
         topic: topic,
         slotIndex: slotIndex,
         score: score
+      });
+    }
+
+    // 7. SAVE AR HEAD REWARDS TO 'AR Rewards' SHEET (+ UPLOAD CUSTOM PNGs TO GOOGLE DRIVE)
+    if (action === "save_ar_rewards") {
+      const arSheet = getOrCreateARRewardsSheet();
+      const inputRewards = Array.isArray(body.rewards) ? body.rewards : [];
+      const savedRewards = [];
+      const rowsToWrite = [];
+
+      for (let i = 0; i < inputRewards.length; i++) {
+        const item = inputRewards[i] || {};
+        const id = String(item.id || ("tier_" + (i + 1))).trim();
+        const title = String(item.title || "");
+        const minScore = Math.max(0, Math.min(100, Number(item.minScore) || 0));
+        const maxScore = Math.max(0, Math.min(100, item.maxScore !== undefined ? Number(item.maxScore) : 100));
+        const presetId = String(item.presetId || "").trim();
+        let resolvedUrl = String(item.imageUrl || "").trim();
+        const scaleRatio = Number(item.scaleRatio) || 1.35;
+        const offsetYRatio = item.offsetYRatio !== undefined ? Number(item.offsetYRatio) : -0.45;
+        const enabled = item.enabled !== false;
+
+        if (presetId) {
+          resolvedUrl = "";
+        } else if (resolvedUrl.indexOf("data:image/") === 0) {
+          try {
+            const folder = DriveApp.getFolderById(DRIVE_FOLDER_ID);
+            const markerIdx = resolvedUrl.indexOf("base64,");
+            if (markerIdx !== -1) {
+              const headerPart = resolvedUrl.slice(0, markerIdx);
+              const cleanBase64 = resolvedUrl.slice(markerIdx + 7);
+              const isSvg = headerPart.indexOf("svg") !== -1;
+              const isWebp = headerPart.indexOf("webp") !== -1;
+              const isJpeg = headerPart.indexOf("jpeg") !== -1 || headerPart.indexOf("jpg") !== -1;
+              const mime = isSvg ? "image/svg+xml" : isWebp ? "image/webp" : isJpeg ? "image/jpeg" : "image/png";
+              const ext = isSvg ? "svg" : isWebp ? "webp" : isJpeg ? "jpg" : "png";
+              const decoded = Utilities.base64Decode(cleanBase64);
+              const fileName = "ar_reward_" + id + "_" + Utilities.formatDate(new Date(), "GMT+3", "yyyyMMdd_HHmmss") + "." + ext;
+              const blob = Utilities.newBlob(decoded, mime, fileName);
+              const file = folder.createFile(blob);
+              file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+              resolvedUrl = "https://lh3.googleusercontent.com/d/" + file.getId();
+            }
+          } catch (driveErr) {
+            if (resolvedUrl.length > 45000) {
+              resolvedUrl = "";
+            }
+          }
+        }
+
+        savedRewards.push({
+          id: id,
+          title: title,
+          minScore: Math.min(minScore, maxScore),
+          maxScore: Math.max(minScore, maxScore),
+          presetId: presetId || undefined,
+          imageUrl: resolvedUrl,
+          scaleRatio: scaleRatio,
+          offsetYRatio: offsetYRatio,
+          enabled: enabled
+        });
+
+        rowsToWrite.push([
+          id,
+          title,
+          Math.min(minScore, maxScore),
+          Math.max(minScore, maxScore),
+          presetId,
+          resolvedUrl,
+          scaleRatio,
+          offsetYRatio,
+          enabled ? "true" : "false"
+        ]);
+      }
+
+      const lastRow = arSheet.getLastRow();
+      if (lastRow > 1) {
+        arSheet.getRange(2, 1, lastRow - 1, 9).clearContent();
+      }
+      if (rowsToWrite.length > 0) {
+        arSheet.getRange(2, 1, rowsToWrite.length, 9).setValues(rowsToWrite);
+      }
+
+      return jsonResponse({
+        status: "success",
+        count: rowsToWrite.length,
+        rewards: savedRewards
       });
     }
 
@@ -1349,6 +1496,128 @@ class SheetService {
       return {
         success: false,
         error: err.message || 'حدث خطأ أثناء رفع الإجابة وحفظها'
+      };
+    }
+  }
+
+  /**
+   * Fetch AR Head Rewards configuration from 'AR Rewards' sheet in Google Sheets
+   */
+  public async fetchARRewardsFromSheet(): Promise<{
+    success: boolean;
+    rewards: ARRewardTier[];
+    needsScriptUpdate?: boolean;
+    error?: string;
+  }> {
+    const url = this.getStoredSheetUrl();
+    if (!url) {
+      return { success: false, rewards: [] };
+    }
+
+    try {
+      const fetchUrl = `${url}${url.includes('?') ? '&' : '?'}action=get_ar_rewards`;
+      const response = await fetch(fetchUrl, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+      });
+
+      if (!response.ok) {
+        throw new Error(`خطأ في استجابة الخادم: ${response.status}`);
+      }
+
+      const json = await response.json();
+      if (json.status === 'success' && Array.isArray(json.rewards)) {
+        const normalized = json.rewards.length > 0 ? normalizeARRewardTiers(json.rewards) : [];
+        return { success: true, rewards: normalized };
+      }
+
+      // Old Apps Script deployments fall through to returning lessons list without json.rewards
+      if (json.status === 'success' && Array.isArray(json.lessons)) {
+        return {
+          success: false,
+          rewards: [],
+          needsScriptUpdate: true,
+          error: 'يتطلب تحديث كود Apps Script لدعم ورقة AR Rewards'
+        };
+      }
+
+      return {
+        success: false,
+        rewards: [],
+        error: json.message || 'تعذر قراءة مكافآت الواقع المعزز من الشيت'
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        rewards: [],
+        error: err.message || 'تعذر الاتصال بـ Google Sheets'
+      };
+    }
+  }
+
+  /**
+   * Save AR Head Rewards configuration to 'AR Rewards' sheet in Google Sheets
+   */
+  public async saveARRewardsToSheet(tiers: ARRewardTier[]): Promise<{
+    success: boolean;
+    rewards?: ARRewardTier[];
+    needsScriptUpdate?: boolean;
+    error?: string;
+  }> {
+    const url = this.getStoredSheetUrl();
+    if (!url) {
+      return { success: false, error: 'رابط Google Apps Script غير مضبوط' };
+    }
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+          action: 'save_ar_rewards',
+          rewards: tiers.map(t => ({
+            id: t.id,
+            title: t.title,
+            minScore: t.minScore,
+            maxScore: t.maxScore,
+            presetId: t.presetId || '',
+            imageUrl: t.presetId ? '' : (t.imageUrl || ''),
+            scaleRatio: t.scaleRatio,
+            offsetYRatio: t.offsetYRatio,
+            enabled: t.enabled
+          }))
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`خطأ في استجابة الخادم: ${response.status}`);
+      }
+
+      const json = await response.json();
+      if (json.status === 'success') {
+        const normalized = Array.isArray(json.rewards)
+          ? normalizeARRewardTiers(json.rewards)
+          : tiers;
+        return { success: true, rewards: normalized };
+      }
+
+      const msg = String(json.message || '');
+      if (msg.includes('Unknown action')) {
+        return {
+          success: false,
+          needsScriptUpdate: true,
+          error: 'كود Apps Script المنشور على الشيت قديم ولا يدعم ورقة AR Rewards بعد'
+        };
+      }
+
+      return {
+        success: false,
+        error: msg || 'تعذر حفظ مكافآت الواقع المعزز في الشيت'
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err.message || 'حدث خطأ أثناء إرسال الإعدادات إلى الشيت'
       };
     }
   }

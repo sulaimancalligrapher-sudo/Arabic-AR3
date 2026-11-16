@@ -37,7 +37,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Lock,
-  Unlock
+  Unlock,
+  SlidersHorizontal
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -72,6 +73,8 @@ interface WhiteboardCanvasProps {
   currentRepetition?: number;
   isFullscreen?: boolean;
   isMobileLandscape?: boolean;
+  isLandscapeToolbarOpen?: boolean;
+  onToggleLandscapeToolbar?: () => void;
   currentUser?: RegistrantUser | null;
   totalLessonsInTopic?: number;
   onToggleFullscreen?: () => void;
@@ -136,6 +139,8 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
   currentRepetition = 1,
   isFullscreen = false,
   isMobileLandscape = false,
+  isLandscapeToolbarOpen = false,
+  onToggleLandscapeToolbar,
   currentUser,
   totalLessonsInTopic,
   onToggleFullscreen,
@@ -2869,7 +2874,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       onTouchMove={handleContainerTouchMove}
       onTouchEnd={handleContainerTouchEnd}
       onTouchCancel={handleContainerTouchEnd}
-      className={`relative w-full h-full min-h-0 ${isMobileLandscape ? 'rounded-xl' : 'rounded-2xl'} overflow-hidden flex items-center justify-center border select-none transition-all duration-300 ${getBoardBgStyle()}`}
+      className={`relative w-full h-full min-h-0 ${isMobileLandscape ? 'rounded-none border-0' : 'rounded-2xl border'} overflow-hidden flex items-center justify-center select-none transition-all duration-300 ${getBoardBgStyle()}`}
     >
       {/* Calligraphy Guide Grid Lines Pattern */}
       {boardStyle === 'grid' && (
@@ -3236,8 +3241,36 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
               </button>
             )}
 
+            {/* Mobile Landscape Quick Tools Bar & Library Toggles */}
+            {isMobileLandscape && onToggleLandscapeToolbar && (
+              <button
+                type="button"
+                onClick={onToggleLandscapeToolbar}
+                title={isLandscapeToolbarOpen ? 'إخفاء شريط الأدوات (ملء الشاشة)' : 'إظهار شريط الأدوات (الأقلام والواقع المعزز)'}
+                className={`p-1 px-2 rounded-lg border text-[11px] font-bold flex items-center gap-1 active:scale-95 transition-all cursor-pointer shrink-0 ${
+                  isLandscapeToolbarOpen
+                    ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-sm'
+                    : 'bg-slate-800/85 hover:bg-slate-700 text-amber-300 border-slate-700/60'
+                }`}
+              >
+                <SlidersHorizontal className="w-3.5 h-3.5" />
+                <span>الأدوات</span>
+              </button>
+            )}
+
+            {isMobileLandscape && template && onOpenLibrary && !isLandscapeToolbarOpen && (
+              <button
+                type="button"
+                onClick={onOpenLibrary}
+                title="تغيير الدرس / مكتبة الدروس"
+                className="p-1 rounded-lg bg-slate-800/85 hover:bg-slate-700 text-sky-300 border border-slate-700/60 active:scale-95 transition-all cursor-pointer shrink-0"
+              >
+                <FolderOpen className="w-3.5 h-3.5" />
+              </button>
+            )}
+
             {/* Help Guide Button: hidden on mobile per user request */}
-            {onOpenHelp && (
+            {onOpenHelp && !isMobileLandscape && (
               <button
                 type="button"
                 onClick={onOpenHelp}

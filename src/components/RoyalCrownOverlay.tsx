@@ -32,21 +32,28 @@ export const RoyalCrownOverlay: React.FC<RoyalCrownOverlayProps> = ({
     }
 
     let cancelled = false;
-    const img = new Image();
-    if (!activeReward.imageUrl.startsWith('data:')) {
-      img.crossOrigin = 'anonymous';
-    }
-    img.onload = () => {
-      if (!cancelled) {
-        setLoadedRewardImg(img);
+    const loadImg = (useCors: boolean) => {
+      const img = new Image();
+      if (useCors && !activeReward.imageUrl.startsWith('data:')) {
+        img.crossOrigin = 'anonymous';
       }
+      img.onload = () => {
+        if (!cancelled) {
+          setLoadedRewardImg(img);
+        }
+      };
+      img.onerror = () => {
+        if (cancelled) return;
+        if (useCors && !activeReward.imageUrl.startsWith('data:')) {
+          loadImg(false);
+        } else {
+          setLoadedRewardImg(null);
+        }
+      };
+      img.src = activeReward.imageUrl;
     };
-    img.onerror = () => {
-      if (!cancelled) {
-        setLoadedRewardImg(null);
-      }
-    };
-    img.src = activeReward.imageUrl;
+
+    loadImg(!activeReward.imageUrl.startsWith('data:'));
 
     return () => {
       cancelled = true;

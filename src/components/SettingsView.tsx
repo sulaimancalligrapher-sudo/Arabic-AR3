@@ -34,11 +34,19 @@ import {
   Camera,
   Crown,
   Upload,
-  RotateCcw
+  RotateCcw,
+  Share2,
+  Loader2
 } from 'lucide-react';
 import { BoardStyle, GuideColor } from '../types/drawing';
 import { GUIDE_COLORS } from '../data/drawingTemplates';
-import { ARRewardTier, AR_REWARD_PRESETS, getDefaultARRewards } from '../services/arRewardsService';
+import {
+  ARRewardTier,
+  AR_REWARD_PRESETS,
+  getDefaultARRewards,
+  normalizeARRewardTiers,
+  encodeARRewardsShareParam
+} from '../services/arRewardsService';
 
 interface SettingsViewProps {
   onBackToWhiteboard: () => void;
@@ -85,7 +93,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     arRewards.length > 0 ? arRewards : getDefaultARRewards()
   );
   const [hasUnsavedARChanges, setHasUnsavedARChanges] = useState(false);
-  const [arSaveNotice, setArSaveNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [isSyncingARCloud, setIsSyncingARCloud] = useState(false);
+  const [arSaveNotice, setArSaveNotice] = useState<{
+    type: 'success' | 'warning' | 'error';
+    text: string;
+    needsScriptUpdate?: boolean;
+  } | null>(null);
 
   useEffect(() => {
     if (!hasUnsavedARChanges && arRewards.length > 0) {
@@ -94,17 +107,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   }, [arRewards, hasUnsavedARChanges]);
 
   const normalizeTiers = (tiers: ARRewardTier[]): ARRewardTier[] =>
-    tiers.map(t => {
-      const a = Math.max(0, Math.min(100, Math.round(Number(t.minScore) || 0)));
-      const b = Math.max(0, Math.min(100, Math.round(Number(t.maxScore) || 0)));
-      return {
-        ...t,
-        minScore: Math.min(a, b),
-        maxScore: Math.max(a, b),
-      };
-    });
+    normalizeARRewardTiers(tiers);
 
-  const handleSaveARRewards = (tiersToSave?: ARRewardTier[]): boolean => {
+  const handleSaveARRewards = async (tiersToSave?: ARRewardTier[]): Promise<boolean> => {
     const normalized = normalizeTiers(tiersToSave || draftARRewards);
     setDraftARRewards(normalized);
     if (!onUpdateARRewards) return false;
@@ -117,14 +122,113 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       });
       return false;
     }
+
     setHasUnsavedARChanges(false);
+
+    // Sync to Google Sheets ('AR Rewards' sheet) so all devices receive edits automatically
+    if (sheetUrl.trim()) {
+      setIsSyncingARCloud(true);
+      const cloudRes = await sheetService.saveARRewardsToSheet(normalized);
+      setIsSyncingARCloud(false);
+
+      if (cloudRes.success) {
+        if (cloudRes.rewards && cloudRes.rewards.length > 0) {
+          const syncedTiers = normalizeARRewardTiers(cloudRes.rewards);
+          setDraftARRewards(syncedTiers);
+          onUpdateARRewards(syncedTiers);
+        }
+        audioService.playSuccessSound();
+        setArSaveNotice({
+          type: 'success',
+          text: '✅ تم الحفظ والمزامنة في ورقة «AR Rewards» في Google Sheets لتظهر على جميع الأجهزة تلقائياً!'
+        });
+        return true;
+      }
+
+      if (cloudRes.needsScriptUpdate) {
+        audioService.playChime(520, 0.14);
+        setArSaveNotice({
+          type: 'warning',
+          needsScriptUpdate: true,
+          text: '⚠️ تم الحفظ على هذا الجهاز فقط! لمزامنة التعديلات تلقائياً مع باقي الأجهزة عبر ورقة «AR Rewards»، انسخ كود Apps Script المحدّث من تبويب «ربط Google Sheets» وأعد نشره كـ (إصدار جديد).'
+        });
+        return true;
+      }
+
+      audioService.playChime(500, 0.12);
+      setArSaveNotice({
+        type: 'warning',
+        text: `⚠️ تم الحفظ على هذا الجهاز، لكن تعذرت المزامنة مع الشيت: ${cloudRes.error || 'تحقق من الاتصال'}`
+      });
+      return true;
+    }
+
     audioService.playSuccessSound();
     setArSaveNotice({
       type: 'success',
-      text: '✅ تم حفظ وتطبيق إعدادات مكافآت الواقع المعزز بنجاح!'
+      text: '✅ تم حفظ إعدادات مكافآت الواقع المعزز على هذا الجهاز!'
     });
-    setTimeout(() => setArSaveNotice(null), 5000);
     return true;
+  };
+
+  const handleFetchARRewardsFromSheet = async () => {
+    if (!sheetUrl.trim()) {
+      setArSaveNotice({ type: 'error', text: 'يرجى ضبط رابط Google Sheets أولاً' });
+      return;
+    }
+    setIsSyncingARCloud(true);
+    setArSaveNotice(null);
+    const res = await sheetService.fetchARRewardsFromSheet();
+    setIsSyncingARCloud(false);
+
+    if (res.success && res.rewards.length > 0) {
+      const normalized = normalizeARRewardTiers(res.rewards);
+      setDraftARRewards(normalized);
+      onUpdateARRewards?.(normalized);
+      setHasUnsavedARChanges(false);
+      audioService.playSuccessSound();
+      setArSaveNotice({
+        type: 'success',
+        text: `✅ تم جلب ${normalized.length} مستويات من ورقة «AR Rewards» في الشيت وتطبيقها!`
+      });
+    } else if (res.success && res.rewards.length === 0) {
+      setArSaveNotice({
+        type: 'warning',
+        text: 'ورقة «AR Rewards» موجودة ولكنها فارغة حالياً — اضغط «حفظ الإعدادات» لرفع مستوياتك إليها.'
+      });
+    } else if (res.needsScriptUpdate) {
+      setArSaveNotice({
+        type: 'warning',
+        needsScriptUpdate: true,
+        text: '⚠️ كود Apps Script الحالي على الشيت قديم ولا يحتوي على ورقة «AR Rewards» بعد.'
+      });
+    } else {
+      setArSaveNotice({
+        type: 'error',
+        text: res.error || 'تعذر جلب إعدادات المكافآت من الشيت'
+      });
+    }
+  };
+
+  const handleCopyARShareLink = async () => {
+    const normalized = normalizeTiers(draftARRewards);
+    const { token, skippedLocalImages } = encodeARRewardsShareParam(normalized);
+    const shareUrl = `${window.location.origin}${window.location.pathname}?ar=${token}${window.location.hash || '#/'}`;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      audioService.playSuccessSound();
+      setArSaveNotice({
+        type: skippedLocalImages ? 'warning' : 'success',
+        text: skippedLocalImages
+          ? '🔗 تم نسخ رابط الإعدادات! (ملاحظة: الصور المرفوعة من الجهاز تحتاج حفظها في الشيت أو رابط خارجي لتظهر بالرابط).'
+          : '🔗 تم نسخ رابط التطبيق مع تعديلاتك! أي جهاز يفتح هذا الرابط سيطبّق التعديلات فوراً.'
+      });
+    } catch {
+      setArSaveNotice({
+        type: 'error',
+        text: 'تعذر النسخ التلقائي للحافظة، تأكد من السماح بالنسخ في المتصفح.'
+      });
+    }
   };
 
   const handleUpdateTier = (tierId: string, updater: (t: ARRewardTier) => ARRewardTier) => {
@@ -1461,22 +1565,45 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <div className="flex flex-wrap items-center gap-2 shrink-0">
                 <button
                   type="button"
-                  onClick={() => handleSaveARRewards()}
-                  className={`flex items-center gap-1.5 px-4 py-2 rounded-xl font-bold text-xs shadow-md transition-all active:scale-95 cursor-pointer ${
+                  disabled={isSyncingARCloud}
+                  onClick={() => {
+                    void handleSaveARRewards();
+                  }}
+                  className={`flex items-center gap-1.5 px-4 py-2 rounded-xl font-bold text-xs shadow-md transition-all active:scale-95 cursor-pointer disabled:opacity-60 ${
                     hasUnsavedARChanges
                       ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 ring-2 ring-emerald-300/60 animate-pulse'
                       : 'bg-emerald-600/25 hover:bg-emerald-600/35 text-emerald-300 border border-emerald-500/40'
                   }`}
                 >
-                  <Save className="w-4 h-4" />
-                  <span>حفظ الإعدادات</span>
+                  {isSyncingARCloud ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  <span>{isSyncingARCloud ? 'جاري الحفظ والمزامنة...' : 'حفظ ومزامنة مع الشيت'}</span>
                 </button>
                 <button
                   type="button"
+                  disabled={isSyncingARCloud}
+                  onClick={handleFetchARRewardsFromSheet}
+                  title="جلب إعدادات المكافآت المحفوظة في Google Sheets"
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700 text-xs font-bold cursor-pointer disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingARCloud ? 'animate-spin' : ''}`} />
+                  <span>جلب من الشيت</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCopyARShareLink}
+                  title="نسخ رابط يحتوي على إعدادات المكافآت لمشاركته فوراً مع أي جهاز آخر"
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 border border-sky-500/35 text-xs font-bold cursor-pointer"
+                >
+                  <Share2 className="w-3.5 h-3.5" />
+                  <span>نسخ رابط المشاركة</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={isSyncingARCloud}
                   onClick={() => {
                     const defaults = getDefaultARRewards();
                     setDraftARRewards(defaults);
-                    handleSaveARRewards(defaults);
+                    void handleSaveARRewards(defaults);
                   }}
                   className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs font-bold cursor-pointer"
                 >
@@ -1496,18 +1623,31 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
             {arSaveNotice && (
               <div
-                className={`p-3.5 rounded-2xl border text-xs sm:text-sm font-bold flex items-center gap-2 shadow-lg animate-in fade-in duration-150 ${
+                className={`p-3.5 rounded-2xl border text-xs sm:text-sm font-bold flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 shadow-lg animate-in fade-in duration-150 ${
                   arSaveNotice.type === 'success'
                     ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+                    : arSaveNotice.type === 'warning'
+                    ? 'bg-amber-500/15 border-amber-500/40 text-amber-200'
                     : 'bg-rose-500/15 border-rose-500/40 text-rose-300'
                 }`}
               >
-                {arSaveNotice.type === 'success' ? (
-                  <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
-                ) : (
-                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+                <div className="flex items-start gap-2">
+                  {arSaveNotice.type === 'success' ? (
+                    <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400 mt-0.5" />
+                  ) : (
+                    <AlertCircle className={`w-4 h-4 shrink-0 mt-0.5 ${arSaveNotice.type === 'warning' ? 'text-amber-400' : 'text-rose-400'}`} />
+                  )}
+                  <span className="leading-relaxed">{arSaveNotice.text}</span>
+                </div>
+                {arSaveNotice.needsScriptUpdate && (
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('sheet')}
+                    className="shrink-0 px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow cursor-pointer"
+                  >
+                    الانتقال لتحديث كود الشيت 📄
+                  </button>
                 )}
-                <span>{arSaveNotice.text}</span>
               </div>
             )}
 
@@ -1538,9 +1678,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       {onPreviewARReward && (
                         <button
                           type="button"
-                          onClick={() => {
+                          onClick={async () => {
                             const normalizedList = normalizeTiers(draftARRewards);
-                            const ok = handleSaveARRewards(normalizedList);
+                            const ok = await handleSaveARRewards(normalizedList);
                             if (ok) {
                               const targetTier = normalizedList.find(t => t.id === tier.id) || tier;
                               onPreviewARReward({ ...targetTier, enabled: true });
@@ -1782,20 +1922,24 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <div className="flex flex-wrap items-center gap-2.5">
                 <button
                   type="button"
-                  onClick={() => handleSaveARRewards()}
-                  className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs sm:text-sm shadow-md transition-all active:scale-95 cursor-pointer"
+                  disabled={isSyncingARCloud}
+                  onClick={() => {
+                    void handleSaveARRewards();
+                  }}
+                  className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs sm:text-sm shadow-md transition-all active:scale-95 cursor-pointer disabled:opacity-60"
                 >
-                  <Save className="w-4 h-4" />
-                  <span>حفظ الإعدادات</span>
+                  {isSyncingARCloud ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  <span>{isSyncingARCloud ? 'جاري الحفظ والمزامنة...' : 'حفظ ومزامنة مع الشيت'}</span>
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    if (handleSaveARRewards()) {
+                  disabled={isSyncingARCloud}
+                  onClick={async () => {
+                    if (await handleSaveARRewards()) {
                       onBackToWhiteboard();
                     }
                   }}
-                  className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs sm:text-sm shadow-md transition-all active:scale-95 cursor-pointer"
+                  className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs sm:text-sm shadow-md transition-all active:scale-95 cursor-pointer disabled:opacity-60"
                 >
                   <ArrowRight className="w-4 h-4 rotate-180" />
                   <span>حفظ والعودة للسبورة</span>

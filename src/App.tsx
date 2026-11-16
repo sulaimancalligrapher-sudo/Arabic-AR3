@@ -9,7 +9,14 @@ import { LoginModal } from './components/LoginModal';
 import { SettingsView } from './components/SettingsView';
 import { sheetService, getArabicOrdinal, getStepAudioPrompt, RegistrantUser } from './services/sheetService';
 import { audioService } from './services/audioService';
-import { ARRewardTier, getStoredARRewards, saveStoredARRewards, findARRewardForScore } from './services/arRewardsService';
+import {
+  ARRewardTier,
+  getStoredARRewards,
+  saveStoredARRewards,
+  findARRewardForScore,
+  decodeARRewardsShareParam,
+  normalizeARRewardTiers
+} from './services/arRewardsService';
 import {
   Camera,
   Award,
@@ -53,16 +60,39 @@ export default function App() {
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
 
-  // Background sync on load with default or stored Google Sheet URL
+  // Background sync on load with default or stored Google Sheet URL + shared ?ar= config
   useEffect(() => {
+    let appliedFromUrl = false;
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const arToken = params.get('ar');
+      if (arToken) {
+        const decoded = decodeARRewardsShareParam(arToken);
+        if (decoded && decoded.length > 0) {
+          setArRewards(decoded);
+          saveStoredARRewards(decoded);
+          appliedFromUrl = true;
+        }
+      }
+    } catch {}
+
     const url = sheetService.getStoredSheetUrl();
     if (url) {
       sheetService.fetchLessonsFromSheet().then((res) => {
         if (res.success && res.lessons.length > 0) {
           setAllTemplates(res.lessons);
-          // Keep whiteboard blank on startup until student explicitly chooses a lesson
         }
       }).catch(() => {});
+
+      if (!appliedFromUrl) {
+        sheetService.fetchARRewardsFromSheet().then((res) => {
+          if (res.success && res.rewards.length > 0) {
+            const normalized = normalizeARRewardTiers(res.rewards);
+            setArRewards(normalized);
+            saveStoredARRewards(normalized);
+          }
+        }).catch(() => {});
+      }
     }
   }, []);
 
@@ -122,17 +152,40 @@ export default function App() {
     if (typeof window === 'undefined') return false;
     return window.innerHeight <= 520 && window.innerWidth > window.innerHeight;
   });
+  const [showToolbarInLandscape, setShowToolbarInLandscape] = useState(false);
+  const prevMobileLandscapeRef = useRef(isMobileLandscape);
 
   useEffect(() => {
     const checkLandscape = () => {
-      setIsMobileLandscape(window.innerHeight <= 520 && window.innerWidth > window.innerHeight);
+      const landscape = window.innerHeight <= 520 && window.innerWidth > window.innerHeight;
+      setIsMobileLandscape(landscape);
+
+      if (landscape && !prevMobileLandscapeRef.current) {
+        // Automatically collapse outer toolbar into full edge-to-edge canvas on phone rotation
+        setShowToolbarInLandscape(false);
+        // Attempt OS browser fullscreen immediately where browser permits, cleanly ignoring gesture restrictions
+        if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
+          document.documentElement.requestFullscreen().catch(() => {});
+        }
+        window.scrollTo?.(0, 1);
+      } else if (!landscape && prevMobileLandscapeRef.current) {
+        setShowToolbarInLandscape(false);
+      }
+      prevMobileLandscapeRef.current = landscape;
     };
+
+    const handleFullscreenChange = () => {
+      setIsFullscreen(Boolean(document.fullscreenElement));
+    };
+
     checkLandscape();
     window.addEventListener('resize', checkLandscape);
     window.addEventListener('orientationchange', checkLandscape);
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
     return () => {
       window.removeEventListener('resize', checkLandscape);
       window.removeEventListener('orientationchange', checkLandscape);
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
     };
   }, []);
   const [historyCanUndo, setHistoryCanUndo] = useState(false);
@@ -335,14 +388,24 @@ export default function App() {
     setIsMirrored(prev => !prev);
   };
 
-  // Fullscreen toggle
+  // Fullscreen toggle (syncs native browser fullscreen cleanly & works in mobile landscape)
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch(() => {});
-      setIsFullscreen(true);
+      if (document.documentElement.requestFullscreen) {
+        document.documentElement.requestFullscreen()
+          .then(() => setIsFullscreen(true))
+          .catch(() => {
+            if (isMobileLandscape) {
+              setShowToolbarInLandscape(false);
+            }
+          });
+      } else if (isMobileLandscape) {
+        setShowToolbarInLandscape(prev => !prev);
+      }
     } else {
-      document.exitFullscreen().catch(() => {});
-      setIsFullscreen(false);
+      document.exitFullscreen()
+        .then(() => setIsFullscreen(false))
+        .catch(() => {});
     }
   };
 
@@ -408,66 +471,68 @@ export default function App() {
   return (
     <div className="flex flex-col h-[100dvh] w-screen overflow-hidden bg-slate-950 text-slate-100 font-cairo">
       
-      {/* Top Professional Toolbar (Includes the 4 Tracking Options outside the whiteboard) */}
-      <WhiteboardToolbar
-        boardStyle={boardStyle}
-        onSelectBoardStyle={(style) => {
-          setBoardStyle(style);
-          if (style === 'ar_camera') {
-            audioService.speakArabic('تم تفعيل وضع الواقع المعزز AR');
-          }
-        }}
-        penType={penType}
-        onSelectPenType={setPenType}
-        penColor={penColor}
-        onSelectPenColor={setPenColor}
-        penSize={penSize}
-        onChangePenSize={setPenSize}
-        calligraphyAngle={calligraphyAngle}
-        onChangeCalligraphyAngle={setCalligraphyAngle}
-        template={selectedTemplate}
-        templateOpacity={templateOpacity}
-        onChangeTemplateOpacity={setTemplateOpacity}
-        guideColor={guideColor}
-        onSelectGuideColor={setGuideColor}
-        canUndo={historyCanUndo}
-        canRedo={historyCanRedo}
-        onUndo={handleUndo}
-        onRedo={handleRedo}
-        onClear={handleClear}
-        onExport={handleExport}
-        onOpenLibrary={() => setIsLibraryOpen(true)}
-        onOpenSettings={() => {
-          window.location.hash = '#/settings';
-        }}
-        currentUser={currentUser}
-        onOpenLogin={() => setIsLoginModalOpen(true)}
-        onLogout={handleLogout}
-        onPronounce={handlePronounce}
-        accuracy={accuracy}
-        trackingMode={trackingMode}
-        onSelectTrackingMode={handleSelectTrackingMode}
-        showCrown={showCrown}
-        onToggleCrown={handleToggleCrown}
-        facingMode={facingMode}
-        onToggleFacingMode={handleToggleFacingMode}
-        isMirrored={isMirrored}
-        onToggleMirror={handleToggleMirror}
-        arDetectionStatus={arDetectionStatus}
-        isAirPenLocked={isAirPenLocked}
-        onToggleAirPenLock={handleToggleAirPenLock}
-        activeRewardTitle={activeRewardTitle}
-        isMobileLandscape={isMobileLandscape}
-      />
+      {/* Top Professional Toolbar (auto-hidden on mobile landscape for automatic edge-to-edge fullscreen, toggleable from inside canvas bar) */}
+      {(!isMobileLandscape || showToolbarInLandscape) && (
+        <WhiteboardToolbar
+          boardStyle={boardStyle}
+          onSelectBoardStyle={(style) => {
+            setBoardStyle(style);
+            if (style === 'ar_camera') {
+              audioService.speakArabic('تم تفعيل وضع الواقع المعزز AR');
+            }
+          }}
+          penType={penType}
+          onSelectPenType={setPenType}
+          penColor={penColor}
+          onSelectPenColor={setPenColor}
+          penSize={penSize}
+          onChangePenSize={setPenSize}
+          calligraphyAngle={calligraphyAngle}
+          onChangeCalligraphyAngle={setCalligraphyAngle}
+          template={selectedTemplate}
+          templateOpacity={templateOpacity}
+          onChangeTemplateOpacity={setTemplateOpacity}
+          guideColor={guideColor}
+          onSelectGuideColor={setGuideColor}
+          canUndo={historyCanUndo}
+          canRedo={historyCanRedo}
+          onUndo={handleUndo}
+          onRedo={handleRedo}
+          onClear={handleClear}
+          onExport={handleExport}
+          onOpenLibrary={() => setIsLibraryOpen(true)}
+          onOpenSettings={() => {
+            window.location.hash = '#/settings';
+          }}
+          currentUser={currentUser}
+          onOpenLogin={() => setIsLoginModalOpen(true)}
+          onLogout={handleLogout}
+          onPronounce={handlePronounce}
+          accuracy={accuracy}
+          trackingMode={trackingMode}
+          onSelectTrackingMode={handleSelectTrackingMode}
+          showCrown={showCrown}
+          onToggleCrown={handleToggleCrown}
+          facingMode={facingMode}
+          onToggleFacingMode={handleToggleFacingMode}
+          isMirrored={isMirrored}
+          onToggleMirror={handleToggleMirror}
+          arDetectionStatus={arDetectionStatus}
+          isAirPenLocked={isAirPenLocked}
+          onToggleAirPenLock={handleToggleAirPenLock}
+          activeRewardTitle={activeRewardTitle}
+          isMobileLandscape={isMobileLandscape}
+        />
+      )}
 
       {/* Main Workspace / Stage */}
       <main className={`relative flex-1 min-h-0 w-full overflow-hidden flex flex-col items-center justify-center ${
-        isMobileLandscape ? 'p-1' : 'p-1.5 sm:p-3'
+        isMobileLandscape ? 'p-0' : 'p-1.5 sm:p-3'
       }`}>
         
         {/* Workspace Canvas Container */}
-        <div className={`relative w-full h-full min-h-0 max-w-6xl overflow-hidden shadow-2xl flex items-center justify-center ${
-          isMobileLandscape ? 'rounded-xl' : 'rounded-2xl'
+        <div className={`relative w-full h-full min-h-0 overflow-hidden shadow-2xl flex items-center justify-center ${
+          isMobileLandscape ? 'max-w-none rounded-none' : 'max-w-6xl rounded-2xl'
         }`}>
           
           {/* Live AR Camera Feed with Full 21-Joint Skeleton & Reward Tracking */}
@@ -507,6 +572,8 @@ export default function App() {
             currentRepetition={currentRepetition}
             isFullscreen={isFullscreen}
             isMobileLandscape={isMobileLandscape}
+            isLandscapeToolbarOpen={showToolbarInLandscape}
+            onToggleLandscapeToolbar={() => setShowToolbarInLandscape(prev => !prev)}
             onToggleFullscreen={toggleFullscreen}
             onOpenHelp={() => setIsHelpOpen(true)}
             onOpenLibrary={() => setIsLibraryOpen(true)}

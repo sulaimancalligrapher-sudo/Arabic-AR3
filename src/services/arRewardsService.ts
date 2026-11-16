@@ -1,3 +1,5 @@
+import { formatDirectImageUrl } from '../utils/urlHelper';
+
 export interface ARRewardTier {
   id: string;
   title: string;
@@ -185,13 +187,73 @@ export const getDefaultARRewards = (): ARRewardTier[] => [
   },
 ];
 
+export const normalizeARRewardTiers = (rawList: any[]): ARRewardTier[] => {
+  if (!Array.isArray(rawList)) return getDefaultARRewards();
+
+  const normalized = rawList
+    .filter(item => item && typeof item === 'object')
+    .map((item, idx) => {
+      const presetId = typeof item.presetId === 'string' && item.presetId.trim()
+        ? item.presetId.trim()
+        : undefined;
+      const matchedPreset = presetId ? AR_REWARD_PRESETS.find(p => p.id === presetId) : undefined;
+      const rawUrl = typeof item.imageUrl === 'string' ? item.imageUrl.trim() : '';
+
+      let resolvedImageUrl = '';
+      if (matchedPreset && (!rawUrl || rawUrl.startsWith('preset:'))) {
+        resolvedImageUrl = matchedPreset.imageUrl;
+      } else if (rawUrl.startsWith('data:image/')) {
+        resolvedImageUrl = rawUrl;
+      } else if (rawUrl) {
+        resolvedImageUrl = formatDirectImageUrl(rawUrl) || rawUrl;
+      } else {
+        resolvedImageUrl = AR_REWARD_PRESETS[0].imageUrl;
+      }
+
+      const rawMin = Number(item.minScore);
+      const rawMax = Number(item.maxScore);
+      const a = Number.isFinite(rawMin) ? Math.max(0, Math.min(100, Math.round(rawMin))) : 0;
+      const b = Number.isFinite(rawMax) ? Math.max(0, Math.min(100, Math.round(rawMax))) : 100;
+
+      const rawScale = Number(item.scaleRatio);
+      const scaleRatio = Number.isFinite(rawScale)
+        ? Math.max(0.7, Math.min(2.2, Number(rawScale.toFixed(2))))
+        : (matchedPreset?.defaultScaleRatio ?? 1.35);
+
+      const rawOffset = Number(item.offsetYRatio);
+      const offsetYRatio = Number.isFinite(rawOffset)
+        ? Math.max(-0.95, Math.min(0.45, Number(rawOffset.toFixed(2))))
+        : (matchedPreset?.defaultOffsetYRatio ?? -0.45);
+
+      const enabledVal = item.enabled;
+      const enabled =
+        typeof enabledVal === 'boolean'
+          ? enabledVal
+          : !['false', '0', 'لا', 'معطل'].includes(String(enabledVal ?? 'true').trim().toLowerCase());
+
+      return {
+        id: String(item.id || `tier_${idx}_${Date.now()}`),
+        title: String(item.title ?? matchedPreset?.defaultTitle ?? '👑 بطل الخط العربي'),
+        minScore: Math.min(a, b),
+        maxScore: Math.max(a, b),
+        presetId: matchedPreset ? matchedPreset.id : undefined,
+        imageUrl: resolvedImageUrl,
+        scaleRatio,
+        offsetYRatio,
+        enabled,
+      };
+    });
+
+  return normalized.length > 0 ? normalized : getDefaultARRewards();
+};
+
 export const getStoredARRewards = (): ARRewardTier[] => {
   try {
     const raw = localStorage.getItem(AR_REWARDS_STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
+        return normalizeARRewardTiers(parsed);
       }
     }
   } catch {}
@@ -229,4 +291,72 @@ export const findARRewardForScore = (
     })
     .sort((a, b) => Math.min(b.minScore, b.maxScore) - Math.min(a.minScore, a.maxScore));
   return matching[0] || null;
+};
+
+// Compact UTF-8 safe URL share encoding/decoding for instant cross-device sharing
+export const encodeARRewardsShareParam = (
+  tiers: ARRewardTier[]
+): { token: string; skippedLocalImages: boolean } => {
+  let skippedLocalImages = false;
+  const compact = tiers.map(t => {
+    let img = '';
+    if (!t.presetId && t.imageUrl) {
+      if (t.imageUrl.startsWith('http://') || t.imageUrl.startsWith('https://')) {
+        img = t.imageUrl;
+      } else {
+        skippedLocalImages = true;
+      }
+    }
+    return {
+      i: t.id,
+      t: t.title,
+      n: t.minScore,
+      x: t.maxScore,
+      p: t.presetId || '',
+      u: img,
+      s: t.scaleRatio,
+      y: t.offsetYRatio,
+      e: t.enabled ? 1 : 0,
+    };
+  });
+
+  const json = JSON.stringify(compact);
+  const bytes = new TextEncoder().encode(json);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) {
+    bin += String.fromCharCode(bytes[i]);
+  }
+  const base64 = btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return { token: base64, skippedLocalImages };
+};
+
+export const decodeARRewardsShareParam = (token: string): ARRewardTier[] | null => {
+  try {
+    if (!token || !token.trim()) return null;
+    let b64 = token.trim().replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4 !== 0) b64 += '=';
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) {
+      bytes[i] = bin.charCodeAt(i);
+    }
+    const json = new TextDecoder().decode(bytes);
+    const parsed = JSON.parse(json);
+    if (!Array.isArray(parsed) || parsed.length === 0) return null;
+
+    const expanded = parsed.map((c: any) => ({
+      id: c.i,
+      title: c.t,
+      minScore: c.n,
+      maxScore: c.x,
+      presetId: c.p || undefined,
+      imageUrl: c.u || '',
+      scaleRatio: c.s,
+      offsetYRatio: c.y,
+      enabled: c.e !== 0,
+    }));
+    return normalizeARRewardTiers(expanded);
+  } catch {
+    return null;
+  }
 };
