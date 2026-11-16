@@ -3,16 +3,16 @@ import { BoardStyle, PenType, Stroke, Point, DrawingTemplate, GuideColor, Lesson
 import { audioService } from '../services/audioService';
 import { formatDirectImageUrl } from '../utils/urlHelper';
 import { getArabicOrdinal, getArabicDrawingOrdinal, getStepAudioPrompt, RegistrantUser, sheetService } from '../services/sheetService';
-import { 
-  AlertCircle, 
-  CheckCircle2, 
-  Volume2, 
-  RotateCcw, 
-  Repeat, 
-  HelpCircle, 
-  Maximize2, 
-  Minimize2, 
-  Award, 
+import {
+  AlertCircle,
+  CheckCircle2,
+  Volume2,
+  RotateCcw,
+  Repeat,
+  HelpCircle,
+  Maximize2,
+  Minimize2,
+  Award,
   X,
   Camera,
   BookOpen,
@@ -22,7 +22,23 @@ import {
   Loader2,
   Eye,
   EyeOff,
-  Sparkles
+  Sparkles,
+  Move,
+  Plus,
+  Minus,
+  Crosshair,
+  Pin,
+  PinOff,
+  Star,
+  ArrowUp,
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  ArrowLeftRight,
+  ChevronLeft,
+  ChevronRight,
+  Lock,
+  Unlock
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -48,6 +64,8 @@ interface WhiteboardCanvasProps {
   videoElement: HTMLVideoElement | null;
   virtualCursor: { x: number; y: number } | null;
   isAirDrawing: boolean;
+  isAirPenLocked?: boolean;
+  onToggleAirPenLock?: () => void;
   calligraphyAngle?: number;
   currentRepetition?: number;
   isFullscreen?: boolean;
@@ -62,6 +80,23 @@ interface WhiteboardCanvasProps {
   onGoalAchieved?: (accuracy: number) => void;
 }
 
+interface TemplateTransform {
+  offsetX: number; // fraction of canvas width [-0.42, 0.42]
+  offsetY: number; // fraction of canvas height [-0.42, 0.42]
+  scale: number;   // multiplier [0.55, 1.60]
+}
+
+const DEFAULT_TEMPLATE_TRANSFORM: TemplateTransform = { offsetX: 0, offsetY: 0, scale: 1 };
+const LOCK_TRANSFORM_KEY = 'arabic_calligraphy_lock_transform_v1';
+const SAVED_TRANSFORM_KEY = 'arabic_calligraphy_saved_transform_v1';
+
+const getEarnedStars = (score: number): number => {
+  if (score >= 85) return 3;
+  if (score >= 70) return 2;
+  if (score >= 50) return 1;
+  return 0;
+};
+
 export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvasProps>(({
   boardStyle,
   penType,
@@ -74,6 +109,8 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
   videoElement,
   virtualCursor,
   isAirDrawing,
+  isAirPenLocked = false,
+  onToggleAirPenLock,
   calligraphyAngle = 120,
   currentRepetition = 1,
   isFullscreen = false,
@@ -90,12 +127,42 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const templateCanvasRef = useRef<HTMLCanvasElement>(null);
+  const diagnosticCanvasRef = useRef<HTMLCanvasElement>(null);
 
   // Stroke histories for Undo / Redo
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const [redoStack, setRedoStack] = useState<Stroke[]>([]);
   const activePointerStrokeRef = useRef<Stroke | null>(null);
   const activeAirStrokeRef = useRef<Stroke | null>(null);
+
+  // Template Move & Scale Controls + Global Lock Persistence
+  const [isTransformLocked, setIsTransformLocked] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(LOCK_TRANSFORM_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [templateTransform, setTemplateTransform] = useState<TemplateTransform>(() => {
+    try {
+      if (localStorage.getItem(LOCK_TRANSFORM_KEY) === 'true') {
+        const raw = localStorage.getItem(SAVED_TRANSFORM_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (typeof parsed.offsetX === 'number' && typeof parsed.offsetY === 'number' && typeof parsed.scale === 'number') {
+            return parsed;
+          }
+        }
+      }
+    } catch {}
+    return DEFAULT_TEMPLATE_TRANSFORM;
+  });
+  const [isTransformPopoverOpen, setIsTransformPopoverOpen] = useState(false);
+
+  // Diagnostic overlay & Slim evaluation sidebar controls
+  const [showDiagnosticColors, setShowDiagnosticColors] = useState(true);
+  const [evalSidebarSide, setEvalSidebarSide] = useState<'right' | 'left'>('left');
+  const [isEvalSidebarCollapsed, setIsEvalSidebarCollapsed] = useState(false);
 
   // Sequential Step-by-Step Learning State
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
@@ -196,26 +263,61 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     return () => window.removeEventListener('resize', updateSize);
   }, []);
 
+  // Persist template transform when global lock is active
+  const updateTemplateTransform = useCallback((updater: (prev: TemplateTransform) => TemplateTransform) => {
+    setTemplateTransform(prev => {
+      const next = updater(prev);
+      if (isTransformLocked) {
+        try {
+          localStorage.setItem(SAVED_TRANSFORM_KEY, JSON.stringify(next));
+        } catch {}
+      }
+      return next;
+    });
+  }, [isTransformLocked]);
+
+  const toggleTransformLock = useCallback(() => {
+    setIsTransformLocked(prev => {
+      const next = !prev;
+      try {
+        localStorage.setItem(LOCK_TRANSFORM_KEY, String(next));
+        if (next) {
+          localStorage.setItem(SAVED_TRANSFORM_KEY, JSON.stringify(templateTransform));
+        }
+      } catch {}
+      return next;
+    });
+  }, [templateTransform]);
+
   // Sync canvas width/height attributes with display dimensions and step index
   useEffect(() => {
     const canvas = canvasRef.current;
     const tCanvas = templateCanvasRef.current;
+    const dCanvas = diagnosticCanvasRef.current;
     if (canvas && tCanvas) {
       canvas.width = dimensions.width;
       canvas.height = dimensions.height;
       tCanvas.width = dimensions.width;
       tCanvas.height = dimensions.height;
+      if (dCanvas) {
+        dCanvas.width = dimensions.width;
+        dCanvas.height = dimensions.height;
+      }
       redrawCanvas();
       drawTemplateGuide();
     }
-  }, [dimensions, template, guideColor, templateOpacity, currentStepIndex, showGhostOverlay]);
+  }, [dimensions, template, guideColor, templateOpacity, currentStepIndex, showGhostOverlay, templateTransform]);
 
-  // Clear repetition cumulative history when template changes
+  // Clear repetition cumulative history & apply transform lock behavior when template changes
   useEffect(() => {
     repetitionScoresRef.current = [];
     autoStartNextRepRef.current = false;
     setPendingNextRepScore(null);
-  }, [template]);
+    setIsTransformPopoverOpen(false);
+    if (!isTransformLocked) {
+      setTemplateTransform(DEFAULT_TEMPLATE_TRANSFORM);
+    }
+  }, [template, isTransformLocked]);
 
   // Reset goal achieved state and step progression when template or repetition changes
   useEffect(() => {
@@ -225,6 +327,8 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     setEvaluationModal(null);
     setSubmitAnswerResult(null);
     setShowGhostOverlay(false);
+    setShowDiagnosticColors(true);
+    setIsEvalSidebarCollapsed(false);
     setPendingNextRepScore(null);
     strokeStartedAtGreenRef.current = false;
     stepScoresRef.current = [];
@@ -238,6 +342,10 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     if (canvas) {
       const ctx = canvas.getContext('2d');
       ctx?.clearRect(0, 0, canvas.width, canvas.height);
+    }
+    const dCanvas = diagnosticCanvasRef.current;
+    if (dCanvas) {
+      dCanvas.getContext('2d')?.clearRect(0, 0, dCanvas.width, dCanvas.height);
     }
 
     if (autoStartNextRepRef.current) {
@@ -619,15 +727,20 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     const activeColor = isBlindMode && showGhostOverlay ? '#f59e0b' : (colorHexMap[guideColor] || '#facc15');
     const effectiveOpacity = isBlindMode && showGhostOverlay ? 0.45 : templateOpacity;
 
-    const renderLoadedImage = (img: HTMLImageElement, canReadPixels: boolean) => {
+    const computeTransformedBox = (natW: number, natH: number) => {
       const padding = Math.min(tCanvas.width, tCanvas.height) * 0.08;
       const availW = tCanvas.width - padding * 2;
       const availH = tCanvas.height - padding * 2;
-      const scale = Math.min(availW / (img.width || 500), availH / (img.height || 500));
-      const drawW = (img.width || 500) * scale;
-      const drawH = (img.height || 500) * scale;
-      const drawX = (tCanvas.width - drawW) / 2;
-      const drawY = (tCanvas.height - drawH) / 2;
+      const baseScale = Math.min(availW / (natW || 500), availH / (natH || 500));
+      const drawW = (natW || 500) * baseScale * templateTransform.scale;
+      const drawH = (natH || 500) * baseScale * templateTransform.scale;
+      const drawX = (tCanvas.width - drawW) / 2 + templateTransform.offsetX * tCanvas.width;
+      const drawY = (tCanvas.height - drawH) / 2 + templateTransform.offsetY * tCanvas.height;
+      return { drawX, drawY, drawW, drawH };
+    };
+
+    const renderLoadedImage = (img: HTMLImageElement, canReadPixels: boolean) => {
+      const { drawX, drawY, drawW, drawH } = computeTransformedBox(img.width || 500, img.height || 500);
       drawBoundsRef.current = { drawX, drawY, drawW, drawH };
 
       if (shouldRenderImage) {
@@ -712,11 +825,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         fallbackImg.onload = () => renderLoadedImage(fallbackImg, false);
         fallbackImg.onerror = () => {
           // Last-resort fallback: build bounds & grid purely from lesson steps if present
-          const padding = Math.min(tCanvas.width, tCanvas.height) * 0.08;
-          const drawX = padding;
-          const drawY = padding;
-          const drawW = tCanvas.width - padding * 2;
-          const drawH = tCanvas.height - padding * 2;
+          const { drawX, drawY, drawW, drawH } = computeTransformedBox(500, 500);
           drawBoundsRef.current = { drawX, drawY, drawW, drawH };
           if (template.steps && template.steps.length > 0) {
             drawActiveStepMarker(ctx, template.steps, currentStepIndex, drawX, drawY, drawW, drawH, shouldRenderDots);
@@ -747,14 +856,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(coloredSvg);
 
       img.onload = () => {
-        const padding = Math.min(tCanvas.width, tCanvas.height) * 0.08;
-        const availW = tCanvas.width - padding * 2;
-        const availH = tCanvas.height - padding * 2;
-        const scale = Math.min(availW / (img.width || 500), availH / (img.height || 500));
-        const drawW = (img.width || 500) * scale;
-        const drawH = (img.height || 500) * scale;
-        const drawX = (tCanvas.width - drawW) / 2;
-        const drawY = (tCanvas.height - drawH) / 2;
+        const { drawX, drawY, drawW, drawH } = computeTransformedBox(img.width || 500, img.height || 500);
         drawBoundsRef.current = { drawX, drawY, drawW, drawH };
 
         if (shouldRenderImage) {
@@ -907,7 +1009,135 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     calculateCoverageScore();
   }, [strokes, calculateCoverageScore]);
 
-  // Capture composite board image safely as Base64 PNG with an optional bottom stamp bar (student info + scores)
+  // Render Visual Diagnostic Overlay (Green = On-Path, Red = Off-Path, Yellow = Uncovered Thickness)
+  useEffect(() => {
+    const dCanvas = diagnosticCanvasRef.current;
+    if (!dCanvas) return;
+    const ctx = dCanvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.clearRect(0, 0, dCanvas.width, dCanvas.height);
+
+    if (!evaluationModal || !showDiagnosticColors || !template) {
+      return;
+    }
+
+    const lg = letterGridRef.current;
+    const userStrokes = strokes.filter(s => s.penType !== 'eraser' && s.points.length > 0);
+
+    // 1. Highlight uncovered letter thickness in soft golden yellow (skip if blind mode had no grid)
+    if (lg && lg.totalCells > 0) {
+      const covered = new Uint8Array(lg.grid.length);
+      userStrokes.forEach(stroke => {
+        const strokePenRadius = Math.max(4, (stroke.size || penSize) * 0.65);
+        const strokeCellRadius = Math.ceil(strokePenRadius / lg.cell);
+        stroke.points.forEach(p => {
+          const gx = Math.floor(p.x / lg.cell);
+          const gy = Math.floor(p.y / lg.cell);
+          const minX = Math.max(0, gx - strokeCellRadius);
+          const maxX = Math.min(lg.width - 1, gx + strokeCellRadius);
+          const minY = Math.max(0, gy - strokeCellRadius);
+          const maxY = Math.min(lg.height - 1, gy + strokeCellRadius);
+          for (let cy = minY; cy <= maxY; cy++) {
+            const rowOffset: number = cy * lg.width;
+            for (let cx = minX; cx <= maxX; cx++) {
+              const idx: number = rowOffset + cx;
+              if (lg.grid[idx] === 1 && covered[idx] === 0) {
+                const dx = (cx - gx) * lg.cell;
+                const dy = (cy - gy) * lg.cell;
+                if (dx * dx + dy * dy <= strokePenRadius * strokePenRadius) {
+                  covered[idx] = 1;
+                }
+              }
+            }
+          }
+        });
+      });
+
+      const off = document.createElement('canvas');
+      off.width = lg.width;
+      off.height = lg.height;
+      const oCtx = off.getContext('2d');
+      if (oCtx) {
+        const imgData = oCtx.createImageData(lg.width, lg.height);
+        const d = imgData.data;
+        for (let i = 0; i < lg.grid.length; i++) {
+          if (lg.grid[i] === 1 && covered[i] === 0) {
+            const p = i * 4;
+            d[p] = 250;
+            d[p + 1] = 204;
+            d[p + 2] = 21;
+            d[p + 3] = 115; // Soft yellow highlight for missed letter fill
+          }
+        }
+        oCtx.putImageData(imgData, 0, 0);
+        ctx.save();
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(off, 0, 0, lg.width * lg.cell, lg.height * lg.cell);
+        ctx.restore();
+      }
+    }
+
+    // 2. Overlay Green (Inside Letter) vs Red (Off-Path) segments over student strokes
+    if (lg && lg.totalCells > 0 && userStrokes.length > 0) {
+      ctx.save();
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      userStrokes.forEach(stroke => {
+        const w = Math.max(4, Math.min(12, (stroke.size || penSize) * 0.42));
+        ctx.lineWidth = w;
+        for (let i = 1; i < stroke.points.length; i++) {
+          const p1 = stroke.points[i - 1];
+          const p2 = stroke.points[i];
+          const midX = (p1.x + p2.x) * 0.5;
+          const midY = (p1.y + p2.y) * 0.5;
+          const cls = classifyPoint(midX, midY);
+          ctx.beginPath();
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(p2.x, p2.y);
+          ctx.strokeStyle = cls === 'off' ? 'rgba(244, 63, 94, 0.88)' : 'rgba(16, 185, 129, 0.78)';
+          ctx.stroke();
+        }
+      });
+      ctx.restore();
+    }
+  }, [evaluationModal, showDiagnosticColors, template, strokes, penSize, dimensions, classifyPoint]);
+
+  // Helper to draw a crisp 5-point vector star on Canvas for Drive PNG stamping
+  const drawCanvasStar = (
+    ctx: CanvasRenderingContext2D,
+    cx: number,
+    cy: number,
+    outerR: number,
+    innerR: number,
+    filled: boolean
+  ) => {
+    ctx.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const r = i % 2 === 0 ? outerR : innerR;
+      const angle = (Math.PI / 5) * i - Math.PI / 2;
+      const px = cx + Math.cos(angle) * r;
+      const py = cy + Math.sin(angle) * r;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    if (filled) {
+      ctx.fillStyle = '#fbbf24';
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = '#fef3c7';
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = 'rgba(148, 163, 184, 0.25)';
+      ctx.fill();
+      ctx.lineWidth = 1.2;
+      ctx.strokeStyle = 'rgba(148, 163, 184, 0.5)';
+      ctx.stroke();
+    }
+  };
+
+  // Capture composite board image safely as Base64 PNG with stars badge, diagnostic overlay & bottom stamp bar
   const captureBoardBase64 = useCallback((stampInfo?: {
     studentName: string;
     studentId: string;
@@ -916,12 +1146,14 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     startEndScore: number;
     pathScore: number;
     coverageScore: number;
+    feedback?: string;
+    stars?: number;
     isBlindMode?: boolean;
   }): string => {
     const exportWidth = Math.max(780, Math.min(1200, dimensions.width || 800));
     const scale = exportWidth / Math.max(1, dimensions.width || 800);
     const boardHeight = Math.max(1, Math.round((dimensions.height || 500) * scale));
-    const footerHeight = stampInfo ? 78 : 0;
+    const footerHeight = stampInfo ? 104 : 0;
 
     const exportCanvas = document.createElement('canvas');
     exportCanvas.width = exportWidth;
@@ -940,7 +1172,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     ctx.fillRect(0, 0, exportWidth, boardHeight);
 
     // Check if templateCanvasRef is origin-clean BEFORE drawing it onto exportCanvas
-    if (templateCanvasRef.current && !template?.hideImage) {
+    if (templateCanvasRef.current && (!template?.hideImage || showGhostOverlay)) {
       try {
         templateCanvasRef.current.toDataURL('image/png');
         ctx.drawImage(templateCanvasRef.current, 0, 0, exportWidth, boardHeight);
@@ -953,7 +1185,40 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       ctx.drawImage(canvasRef.current, 0, 0, exportWidth, boardHeight);
     }
 
-    // Stamp student info, score badge, and breakdown on a crisp bottom band
+    if (showDiagnosticColors && diagnosticCanvasRef.current) {
+      try {
+        ctx.drawImage(diagnosticCanvasRef.current, 0, 0, exportWidth, boardHeight);
+      } catch {}
+    }
+
+    // Draw Honor Stars Badge at top-right corner of the captured board
+    if (stampInfo) {
+      const starsCount = typeof stampInfo.stars === 'number' ? stampInfo.stars : getEarnedStars(stampInfo.totalScore);
+      const badgeW = 134;
+      const badgeH = 42;
+      const badgeX = exportWidth - badgeW - 18;
+      const badgeY = 18;
+
+      ctx.save();
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+      ctx.strokeStyle = '#f59e0b';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      if (typeof ctx.roundRect === 'function') {
+        ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 12);
+      } else {
+        ctx.rect(badgeX, badgeY, badgeW, badgeH);
+      }
+      ctx.fill();
+      ctx.stroke();
+
+      for (let s = 0; s < 3; s++) {
+        drawCanvasStar(ctx, badgeX + 28 + s * 39, badgeY + 21, 12, 5.5, s < starsCount);
+      }
+      ctx.restore();
+    }
+
+    // Stamp student info, score badge, breakdown, and comment on crisp bottom band
     if (stampInfo) {
       const padX = 20;
       const yTop = boardHeight;
@@ -968,7 +1233,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       ctx.textBaseline = 'middle';
 
       // Row 1: Student Name & ID (right) | Lesson Title & Date (left)
-      const row1Y = yTop + 23;
+      const row1Y = yTop + 21;
       ctx.textAlign = 'right';
       ctx.fillStyle = '#f8fafc';
       ctx.font = 'bold 15px Cairo, Tahoma, sans-serif';
@@ -986,10 +1251,10 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
 
       // Subtle divider between rows
       ctx.fillStyle = 'rgba(148, 163, 184, 0.16)';
-      ctx.fillRect(padX, yTop + 40, exportWidth - padX * 2, 1);
+      ctx.fillRect(padX, yTop + 38, exportWidth - padX * 2, 1);
 
       // Row 2: Final Score Badge (right) | Detailed Breakdown (left)
-      const row2Y = yTop + 58;
+      const row2Y = yTop + 56;
       const scoreVal = Math.round(stampInfo.totalScore);
       const badgeColor = scoreVal >= 75 ? '#10b981' : scoreVal >= 50 ? '#f59e0b' : '#f43f5e';
       const badgeBg = scoreVal >= 75 ? 'rgba(16, 185, 129, 0.16)' : scoreVal >= 50 ? 'rgba(245, 158, 11, 0.16)' : 'rgba(244, 63, 94, 0.18)';
@@ -997,7 +1262,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       const scoreLabel = `الدرجة النهائية: ${scoreVal}%`;
       ctx.font = 'bold 14px Cairo, Tahoma, sans-serif';
       const pillWidth = Math.ceil(ctx.measureText(scoreLabel).width) + 24;
-      const pillHeight = 26;
+      const pillHeight = 25;
       const pillX = exportWidth - padX - pillWidth;
       const pillY = row2Y - pillHeight / 2;
 
@@ -1025,10 +1290,20 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         ? `الاتزان: ${stampInfo.startEndScore}%  •  التشابه: ${stampInfo.pathScore}%  •  المعالم: ${stampInfo.coverageScore}%`
         : `البداية/النهاية: ${stampInfo.startEndScore}%  •  المسار: ${stampInfo.pathScore}%  •  السُمك: ${stampInfo.coverageScore}%`;
       ctx.fillText(breakdownText, padX, row2Y + 1);
+
+      // Row 3: Comment & Stars Summary
+      if (stampInfo.feedback) {
+        const row3Y = yTop + 85;
+        ctx.textAlign = 'right';
+        ctx.fillStyle = '#fcd34d';
+        ctx.font = '600 12px Cairo, Tahoma, sans-serif';
+        const cleanFeedback = stampInfo.feedback.slice(0, 88);
+        ctx.fillText(`التقييم: ${cleanFeedback}`, exportWidth - padX, row3Y);
+      }
     }
 
     return exportCanvas.toDataURL('image/png');
-  }, [dimensions, boardStyle, template]);
+  }, [dimensions, boardStyle, template, showGhostOverlay, showDiagnosticColors]);
 
   // Build tailored evaluation text & automated voice feedback based on score, criteria & drawing mode (AR vs Normal)
   const buildSmartEvaluationFeedback = useCallback((
@@ -1432,6 +1707,8 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         startEndScore: evaluationModal.startEndScore,
         pathScore: evaluationModal.pathScore,
         coverageScore: evaluationModal.coverageScore,
+        feedback: evaluationModal.feedback,
+        stars: getEarnedStars(evaluationModal.totalScore),
         isBlindMode: Boolean(template.hideImage)
       });
       const details = `البداية/النهاية: ${evaluationModal.startEndScore}% | المسار: ${evaluationModal.pathScore}% | السُمك: ${evaluationModal.coverageScore}%`;
@@ -1793,6 +2070,8 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
   };
 
   // Handle Air-Drawing from AR Hand Tracking
+  const effectiveIsAirDrawing = isAirDrawing && !isAirPenLocked;
+
   useEffect(() => {
     if (!isARMode || !virtualCursor) {
       if (activeAirStrokeRef.current) {
@@ -1810,7 +2089,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     const y = virtualCursor.y * dimensions.height;
     const isChallengeMode = !!(template?.hideDots || template?.hideImage);
 
-    if (isAirDrawing) {
+    if (effectiveIsAirDrawing) {
       if (!template) {
         if (!activeAirStrokeRef.current) {
           audioService.playErrorSound();
@@ -2041,7 +2320,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         }
       }
     }
-  }, [virtualCursor, isAirDrawing, isARMode, dimensions, penType, penColor, penSize, calligraphyAngle, redrawCanvas, currentStepIndex, template, openEvaluationResults, classifyPoint, calculateCoverageScore, isLessonStarted, onOpenLibrary]);
+  }, [virtualCursor, effectiveIsAirDrawing, isARMode, dimensions, penType, penColor, penSize, calligraphyAngle, redrawCanvas, currentStepIndex, template, openEvaluationResults, classifyPoint, calculateCoverageScore, isLessonStarted, onOpenLibrary]);
 
   // Imperative actions exposed to parent component
   useImperativeHandle(ref, () => ({
@@ -2177,6 +2456,12 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
         className="absolute inset-0 z-20 cursor-crosshair touch-none"
+      />
+
+      {/* Layer 2.5: Diagnostic Coloring Overlay (Green / Red / Yellow after evaluation) */}
+      <canvas
+        ref={diagnosticCanvasRef}
+        className="absolute inset-0 pointer-events-none z-20"
       />
 
       {/* Empty State Banner when no lesson is chosen */}
@@ -2459,8 +2744,42 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
             )}
           </div>
 
-          {/* Left: Quick Action Controls (دليل الاستخدام وتكبير الشاشة) */}
-          <div className="flex items-center gap-1.5 shrink-0">
+          {/* Left: Quick Action Controls (تحريك/حجم، قفل القلم الهوائي، دليل الاستخدام وتكبير الشاشة) */}
+          <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+            {/* Air Pen Lock / Unlock quick toggle in AR mode */}
+            {isARMode && onToggleAirPenLock && (
+              <button
+                type="button"
+                onClick={onToggleAirPenLock}
+                title={isAirPenLocked ? 'القلم الهوائي مقفل — انقر لفتح الرسم' : 'قفل القلم الهوائي مؤقتاً لمنع الشخبطة'}
+                className={`p-1.5 sm:px-2 sm:py-1.5 rounded-xl border text-[11px] font-bold flex items-center gap-1 active:scale-95 transition-all cursor-pointer shrink-0 ${
+                  isAirPenLocked
+                    ? 'bg-rose-500/25 text-rose-300 border-rose-500/50'
+                    : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/25'
+                }`}
+              >
+                {isAirPenLocked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
+                <span className="hidden md:inline">{isAirPenLocked ? 'مقفل' : 'مفعّل'}</span>
+              </button>
+            )}
+
+            {/* Template Move & Resize Popover Button */}
+            {template && (
+              <button
+                type="button"
+                onClick={() => setIsTransformPopoverOpen(prev => !prev)}
+                title="تحريك وتكبير/تصغير موضع الصورة"
+                className={`p-1.5 sm:px-2.5 sm:py-1.5 rounded-xl border text-[11px] font-bold flex items-center gap-1 active:scale-95 transition-all cursor-pointer shrink-0 ${
+                  isTransformPopoverOpen || isTransformLocked || templateTransform.offsetX !== 0 || templateTransform.offsetY !== 0 || templateTransform.scale !== 1
+                    ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-sm'
+                    : 'bg-slate-800/80 hover:bg-slate-700 text-amber-300 border-slate-700/60'
+                }`}
+              >
+                <Move className="w-3.5 h-3.5" />
+                <span className="hidden md:inline">تحريك / حجم</span>
+              </button>
+            )}
+
             {/* Help Guide Button: hidden on mobile per user request */}
             {onOpenHelp && (
               <button
@@ -2490,6 +2809,145 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         </div>
       </div>
 
+      {/* Floating Template Move / Scale Control Popover */}
+      {isTransformPopoverOpen && template && (
+        <div className="absolute top-14 sm:top-16 left-2 sm:left-4 z-40 w-[238px] bg-slate-900/95 backdrop-blur-md border border-amber-500/40 rounded-2xl p-3 shadow-2xl text-slate-100 animate-in fade-in zoom-in-95 duration-150">
+          <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-slate-800">
+            <div className="flex items-center gap-1.5 text-xs font-bold text-amber-300">
+              <Move className="w-3.5 h-3.5" />
+              <span>ضبط مكان وحجم الصورة</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsTransformPopoverOpen(false)}
+              className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
+              aria-label="إغلاق"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {strokes.length > 0 ? (
+            <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-200 space-y-2 text-center">
+              <p>امسح الحبر أولاً قبل تحريك الحرف حتى تبقى دقة التقييم صحيحة.</p>
+              <button
+                type="button"
+                onClick={() => {
+                  setStrokes([]);
+                  setRedoStack([]);
+                  setCurrentStepIndex(0);
+                  const c = canvasRef.current;
+                  if (c) c.getContext('2d')?.clearRect(0, 0, c.width, c.height);
+                }}
+                className="w-full py-1.5 rounded-lg bg-amber-500 text-slate-950 font-bold text-[11px] hover:brightness-110 cursor-pointer"
+              >
+                مسح الحبر للتحريك
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {/* Directional Pad: Up / Right / Center / Left / Down */}
+              <div className="grid grid-cols-3 gap-1.5 w-[132px] mx-auto">
+                <div />
+                <button
+                  type="button"
+                  onClick={() => updateTemplateTransform(p => ({ ...p, offsetY: Math.max(-0.42, +(p.offsetY - 0.04).toFixed(2)) }))}
+                  title="تحريك للأعلى"
+                  className="p-2 rounded-xl bg-slate-800 hover:bg-amber-500 hover:text-slate-950 border border-slate-700 flex items-center justify-center active:scale-90 transition-all cursor-pointer"
+                >
+                  <ArrowUp className="w-4 h-4" />
+                </button>
+                <div />
+
+                <button
+                  type="button"
+                  onClick={() => updateTemplateTransform(p => ({ ...p, offsetX: Math.min(0.42, +(p.offsetX + 0.04).toFixed(2)) }))}
+                  title="تحريك لليمين"
+                  className="p-2 rounded-xl bg-slate-800 hover:bg-amber-500 hover:text-slate-950 border border-slate-700 flex items-center justify-center active:scale-90 transition-all cursor-pointer"
+                >
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => updateTemplateTransform(() => DEFAULT_TEMPLATE_TRANSFORM)}
+                  title="إرجاع للمنتصف"
+                  className="p-2 rounded-xl bg-slate-700 hover:bg-emerald-500 hover:text-slate-950 border border-slate-600 flex items-center justify-center active:scale-90 transition-all cursor-pointer"
+                >
+                  <Crosshair className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => updateTemplateTransform(p => ({ ...p, offsetX: Math.max(-0.42, +(p.offsetX - 0.04).toFixed(2)) }))}
+                  title="تحريك لليسار"
+                  className="p-2 rounded-xl bg-slate-800 hover:bg-amber-500 hover:text-slate-950 border border-slate-700 flex items-center justify-center active:scale-90 transition-all cursor-pointer"
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                </button>
+
+                <div />
+                <button
+                  type="button"
+                  onClick={() => updateTemplateTransform(p => ({ ...p, offsetY: Math.min(0.42, +(p.offsetY + 0.04).toFixed(2)) }))}
+                  title="تحريك للأسفل"
+                  className="p-2 rounded-xl bg-slate-800 hover:bg-amber-500 hover:text-slate-950 border border-slate-700 flex items-center justify-center active:scale-90 transition-all cursor-pointer"
+                >
+                  <ArrowDown className="w-4 h-4" />
+                </button>
+                <div />
+              </div>
+
+              {/* Scale +/- Controls */}
+              <div className="flex items-center justify-between gap-2 bg-slate-950/70 p-1.5 rounded-xl border border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => updateTemplateTransform(p => ({ ...p, scale: Math.max(0.55, +(p.scale - 0.08).toFixed(2)) }))}
+                  title="تصغير الصورة"
+                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 cursor-pointer"
+                >
+                  <Minus className="w-3.5 h-3.5" />
+                </button>
+                <span className="font-mono text-xs font-bold text-amber-400 tabular-nums">
+                  {Math.round(templateTransform.scale * 100)}%
+                </span>
+                <button
+                  type="button"
+                  onClick={() => updateTemplateTransform(p => ({ ...p, scale: Math.min(1.60, +(p.scale + 0.08).toFixed(2)) }))}
+                  title="تكبير الصورة"
+                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              {/* Reset Center + Lock Across All Lessons */}
+              <div className="flex flex-col gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => updateTemplateTransform(() => DEFAULT_TEMPLATE_TRANSFORM)}
+                  className="w-full py-1.5 px-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-bold flex items-center justify-center gap-1.5 border border-slate-700 cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
+                  <span>إرجاع للمنتصف والحجم الأصلي</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={toggleTransformLock}
+                  className={`w-full py-1.5 px-2.5 rounded-xl text-[11px] font-bold flex items-center justify-center gap-1.5 border transition-all cursor-pointer ${
+                    isTransformLocked
+                      ? 'bg-emerald-600 text-white border-emerald-400 shadow-sm'
+                      : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
+                  }`}
+                >
+                  {isTransformLocked ? <Pin className="w-3.5 h-3.5" /> : <PinOff className="w-3.5 h-3.5" />}
+                  <span>{isTransformLocked ? 'مثبت لجميع الدروس ✓' : 'تثبيت هذا الموضع لكل الصور'}</span>
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Floating Comparison Bar when inspecting Ghost Overlay outside modal */}
       {template?.hideImage && showGhostOverlay && !evaluationModal?.isOpen && (
         <div className="absolute bottom-4 inset-x-0 z-30 flex justify-center pointer-events-none px-4">
@@ -2514,199 +2972,200 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
         </div>
       )}
 
-      {/* Layer 4: Calligraphy Evaluation Scorecard Modal (بطاقة تقييم رسم الحرف) */}
-      {evaluationModal && evaluationModal.isOpen && (
-        <div
-          className={`absolute inset-0 z-50 flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200 ${
-            isARMode ? 'bg-transparent' : 'bg-slate-950/75 backdrop-blur-md'
-          }`}
-        >
+      {/* Honor Stars Corner Badge & Diagnostic Coloring Toggle on Board during Evaluation */}
+      {evaluationModal && (
+        <>
+          {/* Corner Honor Stars Widget (opposite side of sidebar so it never collides) */}
           <div
-            className={`relative w-full border border-amber-500/40 rounded-3xl shadow-[0_0_50px_rgba(245,158,11,0.25)] text-white text-center overflow-y-auto ${
-              isARMode
-                ? 'max-w-[295px] sm:max-w-[335px] bg-slate-900/88 p-3.5 sm:p-4 max-h-[86vh]'
-                : 'max-w-sm sm:max-w-md bg-gradient-to-b from-slate-900 via-slate-900 to-slate-950 p-5 sm:p-6 max-h-[92vh]'
+            className={`absolute top-14 sm:top-16 z-30 pointer-events-auto flex items-center gap-1 px-2.5 py-1.5 rounded-2xl bg-slate-900/90 border border-amber-500/40 shadow-xl ${
+              evalSidebarSide === 'left' ? 'right-2 sm:right-4' : 'left-2 sm:left-4'
             }`}
           >
-            
-            {/* Close button */}
-            <button
-              onClick={() => {
-                setEvaluationModal(prev => prev ? { ...prev, isOpen: false } : null);
-                setIsLessonStarted(false);
-              }}
-              className={`absolute p-1.5 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors cursor-pointer ${
-                isARMode ? 'top-3 left-3' : 'top-4 left-4'
-              }`}
-            >
-              <X className="w-4 h-4" />
-            </button>
-
-            {/* Badge Icon */}
-            <div
-              className={`mx-auto rounded-2xl bg-gradient-to-tr from-amber-500 to-yellow-400 text-slate-950 flex items-center justify-center shadow-lg ${
-                isARMode ? 'w-10 h-10 mb-2' : 'w-14 h-14 mb-3'
-              }`}
-            >
-              <Award className={isARMode ? 'w-5 h-5' : 'w-8 h-8'} />
-            </div>
-
-            <h3 className={`font-bold font-ruqaa text-amber-300 mb-1 ${isARMode ? 'text-base sm:text-lg' : 'text-lg sm:text-xl'}`}>
-              {evaluationModal.repetitionBreakdown && evaluationModal.repetitionBreakdown.length > 1
-                ? `النتيجة الكلية النهائية (${evaluationModal.repetitionBreakdown.length} تكرارات)`
-                : template?.hideImage
-                ? 'بطاقة تقييم اختبار الذاكرة 🧠'
-                : 'بطاقة تقييم كتابة الحرف'}
-            </h3>
-            
-            {/* Final Big Score */}
-            <div className={isARMode ? 'my-1.5' : 'my-3'}>
-              <span className={`font-extrabold font-mono text-white tracking-tight ${isARMode ? 'text-3xl sm:text-4xl' : 'text-4xl sm:text-5xl'}`}>
-                {evaluationModal.totalScore}%
-              </span>
-              <p className={`font-semibold text-amber-400 mt-1 ${isARMode ? 'text-xs' : 'text-sm'}`}>
-                {evaluationModal.feedback}
-              </p>
-            </div>
-
-            {/* Individual Repetition Scores Summary (when repeatCount > 1) */}
-            {evaluationModal.repetitionBreakdown && evaluationModal.repetitionBreakdown.length > 1 && (
-              <div className={`flex flex-wrap items-center justify-center gap-1.5 px-2 py-1.5 rounded-xl bg-slate-800/70 border border-slate-700/60 text-[11px] ${isARMode ? 'mb-2' : 'mb-3'}`}>
-                {evaluationModal.repetitionBreakdown.map(item => (
-                  <span
-                    key={item.rep}
-                    className="px-2 py-0.5 rounded-lg bg-slate-900 text-slate-200 border border-slate-700 font-semibold"
-                  >
-                    الرسمة {getArabicDrawingOrdinal(item.rep)}:{' '}
-                    <span className="font-mono text-amber-400 font-bold">{item.score}%</span>
-                  </span>
-                ))}
-              </div>
-            )}
-
-            {/* Criteria Progress Bars */}
-            <div className={`text-xs text-right bg-slate-800/60 rounded-2xl border border-slate-700/60 ${isARMode ? 'space-y-2 my-2.5 p-2.5' : 'space-y-3 my-4 p-3.5'}`}>
-              {/* Criterion 1 */}
-              <div>
-                <div className="flex justify-between mb-1">
-                  <span className="text-slate-300">
-                    {template?.hideImage ? 'اتجاه البداية والنهاية المرسوم' : 'نقطتا البداية والنهاية (🟢 → 🔴)'}
-                  </span>
-                  <span className="font-bold text-emerald-400">{evaluationModal.startEndScore}%</span>
-                </div>
-                <div className="w-full bg-slate-700 rounded-full h-2 overflow-hidden">
-                  <div
-                    className="bg-emerald-500 h-2 rounded-full transition-all duration-700"
-                    style={{ width: `${evaluationModal.startEndScore}%` }}
-                  />
-                </div>
-              </div>
-
-              {/* Criterion 2 */}
-              <div>
-                <div className="flex justify-between mb-1">
-                  <span className="text-slate-300">
-                    {template?.hideImage ? 'تطابق الشكل والنسب من الذاكرة' : 'دقة المسار (عدم الخروج عن الحرف)'}
-                  </span>
-                  <span className="font-bold text-amber-400">{evaluationModal.pathScore}%</span>
-                </div>
-                <div className="w-full bg-slate-700 rounded-full h-2 overflow-hidden">
-                  <div
-                    className="bg-amber-400 h-2 rounded-full transition-all duration-700"
-                    style={{ width: `${evaluationModal.pathScore}%` }}
-                  />
-                </div>
-              </div>
-
-              {/* Criterion 3 */}
-              <div>
-                <div className="flex justify-between mb-1">
-                  <span className="text-slate-300">
-                    {template?.hideImage ? 'تغطية معالم الحرف الأصلي' : 'تغطية سُمك الحرف (ملء عرض الخط)'}
-                  </span>
-                  <span className="font-bold text-sky-400">{evaluationModal.coverageScore}%</span>
-                </div>
-                <div className="w-full bg-slate-700 rounded-full h-2 overflow-hidden">
-                  <div
-                    className="bg-sky-400 h-2 rounded-full transition-all duration-700"
-                    style={{ width: `${evaluationModal.coverageScore}%` }}
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Blind Memory Mode: Compare Ghost Overlay Toggle */}
-            {template?.hideImage && (
-              <button
-                type="button"
-                onClick={() => {
-                  setShowGhostOverlay(true);
-                  setEvaluationModal(prev => prev ? { ...prev, isOpen: false } : null);
-                }}
-                className="w-full mb-3 py-2 px-3 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer"
-              >
-                <Eye className="w-4 h-4" />
-                <span>معاينة الظل الذهبي للحرف الأصلي على السبورة للمقارنة 👻</span>
-              </button>
-            )}
-
-            {/* Save & Upload Answer to Google Drive & Sheet 'answers 1' */}
-            <div className="mb-3">
-              <button
-                type="button"
-                onClick={handleSubmitAnswer}
-                disabled={isSubmittingAnswer || submitAnswerResult?.success}
-                className={`w-full py-2.5 px-4 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg transition-all cursor-pointer ${
-                  submitAnswerResult?.success
-                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 cursor-default'
-                    : 'bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white active:scale-95 disabled:opacity-60'
-                }`}
-              >
-                {isSubmittingAnswer ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>جارِ رفع الصورة وتسجيل الإجابة...</span>
-                  </>
-                ) : submitAnswerResult?.success ? (
-                  <>
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                    <span>تم تسجيل الإجابة وحفظ الصورة بنجاح ✓</span>
-                  </>
-                ) : (
-                  <>
-                    <Save className="w-4 h-4" />
-                    <span>تسجيل الإجابة 💾</span>
-                  </>
-                )}
-              </button>
-
-              {submitAnswerResult && (
-                <div
-                  className={`mt-2 p-2.5 rounded-xl text-[11px] font-semibold flex flex-col gap-1 text-right ${
-                    submitAnswerResult.success
-                      ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-300'
-                      : 'bg-rose-500/15 border border-rose-500/30 text-rose-300'
+            {[0, 1, 2].map(idx => {
+              const earned = idx < getEarnedStars(evaluationModal.totalScore);
+              return (
+                <Star
+                  key={idx}
+                  className={`w-4 h-4 sm:w-5 sm:h-5 ${
+                    earned ? 'text-amber-400 fill-amber-400 drop-shadow-[0_0_6px_rgba(251,191,36,0.7)]' : 'text-slate-600'
                   }`}
-                >
-                  <div>{submitAnswerResult.message}</div>
-                  {submitAnswerResult.imageUrl && submitAnswerResult.imageUrl.startsWith('http') && (
-                    <a
-                      href={submitAnswerResult.imageUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 text-sky-400 hover:text-sky-300 underline w-fit"
-                    >
-                      <ExternalLink className="w-3 h-3" />
-                      <span>عرض صورة التمرين المحفوظة في Google Drive</span>
-                    </a>
-                  )}
+                />
+              );
+            })}
+          </div>
+
+          {/* Bottom Diagnostic Legend Strip */}
+          <div className="absolute bottom-2.5 inset-x-0 z-30 flex justify-center pointer-events-none px-2">
+            <div className="pointer-events-auto flex items-center gap-2 sm:gap-3 px-2.5 py-1 rounded-xl bg-slate-900/88 border border-slate-700/80 text-[10px] sm:text-[11px] text-slate-200 shadow-lg">
+              {showDiagnosticColors && (
+                <div className="flex items-center gap-2 sm:gap-2.5">
+                  <span className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                    <span>صحيح</span>
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-rose-500" />
+                    <span>خارج المسار</span>
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-yellow-400" />
+                    <span>فراغ السُمك</span>
+                  </span>
                 </div>
               )}
-            </div>
-
-            {/* Action Buttons */}
-            <div className="flex items-center gap-2 mt-2">
               <button
+                type="button"
+                onClick={() => setShowDiagnosticColors(prev => !prev)}
+                className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold flex items-center gap-1 cursor-pointer"
+              >
+                {showDiagnosticColors ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                <span>{showDiagnosticColors ? 'إخفاء التشخيص' : 'تلوين الأخطاء'}</span>
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Layer 4: Zero-Blur Slim Vertical Results Sidebar (نافذة نتائج طولية نحيفة بدون ضباب أو تعتيم) */}
+      {evaluationModal && evaluationModal.isOpen && (
+        <div
+          className={`absolute inset-y-0 z-40 pointer-events-none flex items-center p-2 sm:p-3 animate-in fade-in duration-200 ${
+            evalSidebarSide === 'left' ? 'left-0 justify-end' : 'right-0 justify-start'
+          }`}
+        >
+          {isEvalSidebarCollapsed ? (
+            <button
+              type="button"
+              onClick={() => setIsEvalSidebarCollapsed(false)}
+              className="pointer-events-auto px-2.5 py-2 rounded-2xl bg-slate-900/95 border border-amber-500/50 text-amber-300 shadow-2xl flex items-center gap-1.5 text-xs font-bold cursor-pointer hover:bg-slate-800"
+            >
+              <Award className="w-4 h-4 text-amber-400" />
+              <span className="font-mono">{evaluationModal.totalScore}%</span>
+              {evalSidebarSide === 'left' ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronLeft className="w-3.5 h-3.5" />}
+            </button>
+          ) : (
+            <aside className="pointer-events-auto w-[158px] xs:w-[168px] sm:w-[214px] max-h-[82vh] bg-slate-900/92 border border-amber-500/40 rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.45)] text-white text-center overflow-y-auto p-2.5 sm:p-3 flex flex-col gap-2">
+              {/* Compact Window Controls: Swap Side / Collapse / Close */}
+              <div className="flex items-center justify-between gap-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEvaluationModal(prev => prev ? { ...prev, isOpen: false } : null);
+                    setIsLessonStarted(false);
+                  }}
+                  title="إغلاق"
+                  className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setEvalSidebarSide(prev => prev === 'left' ? 'right' : 'left')}
+                    title="نقل الشريط لليمين أو اليسار"
+                    className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-300 cursor-pointer"
+                  >
+                    <ArrowLeftRight className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsEvalSidebarCollapsed(true)}
+                    title="تصغير النافذة"
+                    className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 cursor-pointer"
+                  >
+                    {evalSidebarSide === 'left' ? <ChevronLeft className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+              </div>
+
+              {/* 1. Icon + Label (تقييم) */}
+              <div className="flex flex-col items-center gap-1">
+                <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-tr from-amber-500 to-yellow-400 text-slate-950 flex items-center justify-center shadow-md">
+                  <Award className="w-5 h-5" />
+                </div>
+                <h3 className="font-bold text-xs sm:text-sm text-amber-300">
+                  {evaluationModal.repetitionBreakdown && evaluationModal.repetitionBreakdown.length > 1
+                    ? `تقييم (${evaluationModal.repetitionBreakdown.length} تكرار)`
+                    : 'تقييم'}
+                </h3>
+              </div>
+
+              {/* 2. Final Big Score (%) */}
+              <div className="font-extrabold font-mono text-2xl sm:text-3xl text-white tracking-tight tabular-nums leading-none">
+                {evaluationModal.totalScore}%
+              </div>
+
+              {/* 3. Concise Feedback Comment */}
+              <p className="text-[10px] sm:text-[11px] font-semibold text-amber-200/95 leading-snug line-clamp-3">
+                {evaluationModal.feedback}
+              </p>
+
+              {/* Multi-Repetition Compact Text Summary */}
+              {evaluationModal.repetitionBreakdown && evaluationModal.repetitionBreakdown.length > 1 && (
+                <div className="text-[10px] text-slate-300 leading-tight border-t border-slate-800 pt-1.5">
+                  {evaluationModal.repetitionBreakdown.map((item, idx) => (
+                    <span key={item.rep}>
+                      {idx > 0 && ' · '}
+                      <span className="font-mono text-amber-300 font-bold">{item.score}%</span>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* 4–6. Vertical Criteria List (Label above %, slim bar) */}
+              <div className="space-y-1.5 bg-slate-950/55 rounded-xl border border-slate-800 p-2 text-center">
+                <div>
+                  <div className="text-[10px] text-slate-300 truncate">
+                    {template?.hideImage ? 'الاتزان والبداية' : 'نقطة البداية والنهاية'}
+                  </div>
+                  <div className="font-mono font-bold text-xs text-emerald-400 tabular-nums">
+                    {evaluationModal.startEndScore}%
+                  </div>
+                  <div className="w-full bg-slate-800 rounded-full h-1 mt-0.5 overflow-hidden">
+                    <div className="bg-emerald-500 h-1 rounded-full transition-all duration-500" style={{ width: `${evaluationModal.startEndScore}%` }} />
+                  </div>
+                </div>
+
+                <div className="border-t border-slate-800/80 pt-1">
+                  <div className="text-[10px] text-slate-300 truncate">
+                    {template?.hideImage ? 'تطابق الشكل' : 'دقة المسار'}
+                  </div>
+                  <div className="font-mono font-bold text-xs text-amber-400 tabular-nums">
+                    {evaluationModal.pathScore}%
+                  </div>
+                  <div className="w-full bg-slate-800 rounded-full h-1 mt-0.5 overflow-hidden">
+                    <div className="bg-amber-400 h-1 rounded-full transition-all duration-500" style={{ width: `${evaluationModal.pathScore}%` }} />
+                  </div>
+                </div>
+
+                <div className="border-t border-slate-800/80 pt-1">
+                  <div className="text-[10px] text-slate-300 truncate">
+                    {template?.hideImage ? 'تغطية المعالم' : 'سُمك الحرف'}
+                  </div>
+                  <div className="font-mono font-bold text-xs text-sky-400 tabular-nums">
+                    {evaluationModal.coverageScore}%
+                  </div>
+                  <div className="w-full bg-slate-800 rounded-full h-1 mt-0.5 overflow-hidden">
+                    <div className="bg-sky-400 h-1 rounded-full transition-all duration-500" style={{ width: `${evaluationModal.coverageScore}%` }} />
+                  </div>
+                </div>
+              </div>
+
+              {/* Blind Memory Mode: Quick Ghost Toggle */}
+              {template?.hideImage && (
+                <button
+                  type="button"
+                  onClick={() => setShowGhostOverlay(prev => !prev)}
+                  className="w-full py-1.5 px-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 font-bold text-[10px] flex items-center justify-center gap-1 cursor-pointer"
+                >
+                  {showGhostOverlay ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                  <span>{showGhostOverlay ? 'إخفاء الحرف' : 'عرض الحرف'}</span>
+                </button>
+              )}
+
+              {/* 7. Reset Exercise Button (إعادة التمرين) */}
+              <button
+                type="button"
                 onClick={() => {
                   setEvaluationModal(null);
                   setSubmitAnswerResult(null);
@@ -2720,74 +3179,144 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
                   resetStrokeStats();
                   const canvas = canvasRef.current;
                   if (canvas) {
-                    const ctx = canvas.getContext('2d');
-                    ctx?.clearRect(0, 0, canvas.width, canvas.height);
+                    canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
+                  }
+                  const dCanvas = diagnosticCanvasRef.current;
+                  if (dCanvas) {
+                    dCanvas.getContext('2d')?.clearRect(0, 0, dCanvas.width, dCanvas.height);
                   }
                   setStrokes([]);
                   if (onResetRepetition) onResetRepetition();
                 }}
-                className="flex-1 py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                className="w-full py-2 px-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-[11px] flex items-center justify-center gap-1.5 transition-all cursor-pointer"
               >
-                <RotateCcw className="w-3.5 h-3.5" />
+                <RotateCcw className="w-3.5 h-3.5 shrink-0" />
                 <span>إعادة التمرين</span>
               </button>
 
-              {onNextRepetition && currentRepetition && template?.repeatCount && currentRepetition < template.repeatCount ? (
-                <button
-                  onClick={() => {
-                    setEvaluationModal(null);
-                    setSubmitAnswerResult(null);
-                    setShowGhostOverlay(false);
-                    setIsLessonStarted(false);
-                    onNextRepetition();
-                  }}
-                  className="flex-1 py-2.5 px-3 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg hover:brightness-110 transition-all cursor-pointer"
+              {/* 8. Submit Answer Button with Single Icon (تسجيل الإجابة) */}
+              <button
+                type="button"
+                onClick={handleSubmitAnswer}
+                disabled={isSubmittingAnswer || submitAnswerResult?.success}
+                className={`w-full py-2 px-2 rounded-xl font-bold text-[11px] flex items-center justify-center gap-1.5 shadow-md transition-all cursor-pointer ${
+                  submitAnswerResult?.success
+                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 cursor-default'
+                    : 'bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white active:scale-95 disabled:opacity-60'
+                }`}
+              >
+                {isSubmittingAnswer ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                    <span>جاري الحفظ...</span>
+                  </>
+                ) : submitAnswerResult?.success ? (
+                  <>
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                    <span>تم التسجيل</span>
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-3.5 h-3.5 shrink-0" />
+                    <span>تسجيل الإجابة</span>
+                  </>
+                )}
+              </button>
+
+              {/* Compact Upload Result Message & Drive Link */}
+              {submitAnswerResult && (
+                <div
+                  className={`p-1.5 rounded-xl text-[10px] font-semibold flex flex-col gap-1 text-right ${
+                    submitAnswerResult.success
+                      ? 'bg-emerald-500/15 border border-emerald-500/30 text-emerald-300'
+                      : 'bg-rose-500/15 border border-rose-500/30 text-rose-300'
+                  }`}
                 >
-                  <span>التكرار التالي ({currentRepetition + 1})</span>
-                  <Repeat className="w-3.5 h-3.5" />
-                </button>
-              ) : (
-                <button
-                  onClick={() => {
-                    setEvaluationModal(null);
-                    setSubmitAnswerResult(null);
-                    setIsLessonStarted(false);
-                  }}
-                  className="flex-1 py-2.5 px-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg hover:brightness-110 transition-all cursor-pointer"
-                >
-                  <span>متابعة</span>
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                </button>
+                  <div className="leading-tight">{submitAnswerResult.message}</div>
+                  {submitAnswerResult.imageUrl && submitAnswerResult.imageUrl.startsWith('http') && (
+                    <a
+                      href={submitAnswerResult.imageUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-sky-400 hover:text-sky-300 underline w-fit"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      <span>فتح الصورة</span>
+                    </a>
+                  )}
+                </div>
               )}
-            </div>
-          </div>
+            </aside>
+          )}
         </div>
       )}
 
-      {/* Layer 5: Virtual Air-Cursor Overlay (for AR Hand Tracking) */}
-      {isARMode && virtualCursor && (
-        <div
-          className="absolute z-30 pointer-events-none"
-          style={{
-            left: `${virtualCursor.x * 100}%`,
-            top: `${virtualCursor.y * 100}%`,
-            transform: 'translate(-50%, -50%)'
-          }}
-        >
-          <div className={`relative flex items-center justify-center w-8 h-8 rounded-full border-2 transition-all duration-150 ${
-            isAirDrawing
-              ? 'bg-amber-500/80 border-white shadow-[0_0_20px_#f59e0b] scale-125 animate-pulse'
-              : 'bg-white/40 border-amber-400 shadow-[0_0_12px_rgba(255,255,255,0.8)] scale-100'
-          }`}>
-            <div className={`w-2.5 h-2.5 rounded-full ${isAirDrawing ? 'bg-white' : 'bg-amber-400'}`} />
-            {isAirDrawing && (
-              <span className="absolute -top-7 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500 text-slate-950 whitespace-nowrap shadow-md">
-                ✍️ يرسم
-              </span>
-            )}
+      {/* Layer 5: Virtual Air-Cursor Overlay with Live Path-Adherence Glow */}
+      {isARMode && virtualCursor && (() => {
+        const cx = virtualCursor.x * dimensions.width;
+        const cy = virtualCursor.y * dimensions.height;
+        const canCheckPath =
+          effectiveIsAirDrawing &&
+          Boolean(template) &&
+          !template?.hideImage &&
+          (letterGridRef.current?.totalCells || 0) > 0 &&
+          penType !== 'eraser';
+        const pointClass = canCheckPath ? classifyPoint(cx, cy) : null;
+
+        let ringClass = 'bg-white/40 border-amber-400 shadow-[0_0_12px_rgba(255,255,255,0.8)] scale-100';
+        let dotClass = 'bg-amber-400';
+        let badgeText = '';
+        let badgeClass = '';
+
+        if (isAirPenLocked) {
+          ringClass = 'bg-slate-800/75 border-rose-400 shadow-[0_0_12px_rgba(244,63,94,0.45)] scale-95';
+          dotClass = 'bg-rose-400';
+          badgeText = '🔒 القلم مقفل';
+          badgeClass = 'bg-rose-600 text-white';
+        } else if (effectiveIsAirDrawing) {
+          if (pointClass === 'core') {
+            ringClass = 'bg-emerald-500/85 border-amber-200 shadow-[0_0_24px_rgba(16,185,129,0.95)] scale-125';
+            dotClass = 'bg-white';
+            badgeText = '✨ داخل الحرف';
+            badgeClass = 'bg-emerald-500 text-slate-950';
+          } else if (pointClass === 'grazing') {
+            ringClass = 'bg-amber-500/85 border-yellow-100 shadow-[0_0_22px_rgba(245,158,11,0.95)] scale-125';
+            dotClass = 'bg-white';
+            badgeText = '✍️ قريب من المسار';
+            badgeClass = 'bg-amber-400 text-slate-950';
+          } else if (pointClass === 'off') {
+            ringClass = 'bg-rose-600/90 border-white shadow-[0_0_24px_rgba(244,63,94,0.95)] scale-125';
+            dotClass = 'bg-white';
+            badgeText = '⚠️ خارج المسار';
+            badgeClass = 'bg-rose-600 text-white';
+          } else {
+            ringClass = 'bg-amber-500/80 border-white shadow-[0_0_20px_#f59e0b] scale-125';
+            dotClass = 'bg-white';
+            badgeText = '✍️ يرسم';
+            badgeClass = 'bg-amber-500 text-slate-950';
+          }
+        }
+
+        return (
+          <div
+            className="absolute z-30 pointer-events-none"
+            style={{
+              left: `${virtualCursor.x * 100}%`,
+              top: `${virtualCursor.y * 100}%`,
+              transform: 'translate(-50%, -50%)'
+            }}
+          >
+            <div className={`relative flex items-center justify-center w-8 h-8 rounded-full border-2 transition-all duration-100 ${ringClass}`}>
+              <div className={`w-2.5 h-2.5 rounded-full ${dotClass}`} />
+              {badgeText && (
+                <span className={`absolute -top-7 px-2 py-0.5 rounded text-[10px] font-bold whitespace-nowrap shadow-md ${badgeClass}`}>
+                  {badgeText}
+                </span>
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 });

@@ -26,7 +26,9 @@ import {
   Settings,
   User,
   LogIn,
-  LogOut
+  LogOut,
+  Lock,
+  Unlock
 } from 'lucide-react';
 
 interface WhiteboardToolbarProps {
@@ -74,6 +76,8 @@ interface WhiteboardToolbarProps {
     faceDetected: boolean;
     fps: number;
   };
+  isAirPenLocked?: boolean;
+  onToggleAirPenLock?: () => void;
 }
 
 type ActivePopover = 'drawing_tools' | 'ar_settings' | null;
@@ -116,6 +120,8 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
   isMirrored,
   onToggleMirror,
   arDetectionStatus,
+  isAirPenLocked = false,
+  onToggleAirPenLock,
 }) => {
   const [activePopover, setActivePopover] = useState<ActivePopover>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
@@ -997,6 +1003,41 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
                 {showCrown ? 'معاينة التاج 👑' : 'تفعيل المعاينة'}
               </button>
             </div>
+
+            {/* Air Pen Lock / Unlock (قفل القلم الهوائي لمنع الرسم عند ضبط الجلسة أو الكاميرا) */}
+            {onToggleAirPenLock && (
+              <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800 flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border ${
+                    isAirPenLocked
+                      ? 'bg-rose-500/20 text-rose-400 border-rose-500/30'
+                      : 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                  }`}>
+                    {isAirPenLocked ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-slate-100">
+                      {isAirPenLocked ? 'القلم الهوائي مقفل 🔒' : 'القلم الهوائي مفعّل ✍️'}
+                    </div>
+                    <div className="text-[10px] text-slate-400">
+                      تأمين القلم لمنع الرسم العشوائي أثناء تعديل جلستك أو الكاميرا
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={onToggleAirPenLock}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                    isAirPenLocked
+                      ? 'bg-rose-500 text-white shadow-sm'
+                      : 'bg-emerald-600 text-white shadow-sm'
+                  }`}
+                >
+                  {isAirPenLocked ? 'فتح القلم' : 'قفل القلم'}
+                </button>
+              </div>
+            )}
 
             {/* Camera Flipping & Mirroring */}
             <div className="grid grid-cols-2 gap-2">

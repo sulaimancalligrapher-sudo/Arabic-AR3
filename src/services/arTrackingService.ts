@@ -64,6 +64,17 @@ class ARTrackingService {
   private latestHands: SingleHandData[] = [];
   private latestFace: FaceData | null = null;
 
+  // Stability & anti-false-draw tracking states
+  private previousPinchMap: Map<number, boolean> = new Map();
+  private handPresenceMap: Map<number, {
+    stableFrames: number;
+    hasSeenOpen: boolean;
+    pinchFrames: number;
+    releaseFrames: number;
+  }> = new Map();
+  private missedHandFrames: number = 0;
+  private readonly MAX_MISSED_HAND_FRAMES = 5;
+
   public setMirrored(mirrored: boolean) {
     this.isMirrored = mirrored;
   }
@@ -124,8 +135,8 @@ class ARTrackingService {
         this.handsInstance.setOptions({
           maxNumHands: 2,
           modelComplexity: isMobile ? 0 : 1, // modelComplexity 0 (Lite) is 3x faster and designed for mobile GPUs
-          minDetectionConfidence: 0.5,
-          minTrackingConfidence: 0.5
+          minDetectionConfidence: 0.74, // Raised from 0.50 to eliminate phantom hands on face/clothing
+          minTrackingConfidence: 0.72
         });
         this.handsInstance.onResults(this.onHandsResults.bind(this));
       }
@@ -163,6 +174,7 @@ class ARTrackingService {
     this.isMirrored = isMirrored;
 
     this.stopCameraStreamOnly();
+    this.resetHandTrackingState();
 
     try {
       let stream: MediaStream | null = null;
@@ -202,6 +214,15 @@ class ARTrackingService {
     }
   }
 
+  private resetHandTrackingState() {
+    this.latestHands = [];
+    this.activeDrawingHand = null;
+    this.hasInitialCursor = false;
+    this.previousPinchMap.clear();
+    this.handPresenceMap.clear();
+    this.missedHandFrames = 0;
+  }
+
   private startProcessingLoop() {
     let lastHandProcess = 0;
     let lastFaceProcess = 0;
@@ -237,8 +258,6 @@ class ARTrackingService {
     this.animFrameId = requestAnimationFrame(loop);
   }
 
-  private previousPinchMap: Map<number, boolean> = new Map();
-
   private onHandsResults(results: any) {
     const now = performance.now();
     if (this.lastTimestamp) {
@@ -246,45 +265,91 @@ class ARTrackingService {
     }
     this.lastTimestamp = now;
 
-    if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
-      this.latestHands = [];
-      this.activeDrawingHand = null;
-      this.hasInitialCursor = false;
-      this.previousPinchMap.clear();
-      this.emitUpdate();
-      return;
-    }
-
+    const rawList: HandLandmark[][] = results.multiHandLandmarks || [];
     const parsedHands: SingleHandData[] = [];
 
-    for (let hIdx = 0; hIdx < results.multiHandLandmarks.length; hIdx++) {
-      const rawLandmarks: HandLandmark[] = results.multiHandLandmarks[hIdx];
+    for (let hIdx = 0; hIdx < rawList.length; hIdx++) {
+      // 1. Per-hand classification confidence filter (reject phantom hands < 72%)
+      const handednessInfo = results.multiHandedness?.[hIdx];
+      if (handednessInfo && typeof handednessInfo.score === 'number' && handednessInfo.score < 0.72) {
+        continue;
+      }
+
+      const rawLandmarks: HandLandmark[] = rawList[hIdx];
+      if (!rawLandmarks || rawLandmarks.length < 21) continue;
+
       const thumbTip = rawLandmarks[4];
       const indexTip = rawLandmarks[8];
       const wrist = rawLandmarks[0];
+      const indexMcp = rawLandmarks[5];
       const middleKnuckle = rawLandmarks[9];
 
-      const palmLength = Math.hypot(middleKnuckle.x - wrist.x, middleKnuckle.y - wrist.y) || 0.2;
+      // 2. Logical palm size filter (reject tiny noise blobs on face/shirt/background)
+      const palmLength = Math.hypot(middleKnuckle.x - wrist.x, middleKnuckle.y - wrist.y);
+      const knuckleSpan = Math.hypot(middleKnuckle.x - indexMcp.x, middleKnuckle.y - indexMcp.y);
+      if (!isFinite(palmLength) || palmLength < 0.055 || palmLength > 0.65 || knuckleSpan < 0.015) {
+        continue;
+      }
+
+      // 3. Depth-assisted pinch ratio (dampened z reduces false pinch when hand tilts toward camera)
       const dx = thumbTip.x - indexTip.x;
       const dy = thumbTip.y - indexTip.y;
-      const directDist = Math.hypot(dx, dy);
+      const dz = ((thumbTip.z || 0) - (indexTip.z || 0)) * 0.35;
+      const directDist = Math.hypot(dx, dy, dz);
       const normalizedDistance = directDist / palmLength;
 
-      // Hysteresis for intentional pinching:
-      // Requires closer contact to initiate drawing (< 0.22), remains drawing until fingers spread apart (> 0.28)
+      // 4. Open-before-pinch gate + temporal debounce to eliminate accidental auto-drawing
       const prevPinch = this.previousPinchMap.get(hIdx) || false;
-      const pinchThreshold = prevPinch ? 0.28 : 0.22;
-      const isPinching = normalizedDistance < pinchThreshold;
+      const presence = this.handPresenceMap.get(hIdx) || {
+        stableFrames: 0,
+        hasSeenOpen: false,
+        pinchFrames: 0,
+        releaseFrames: 0
+      };
+
+      presence.stableFrames = Math.min(30, presence.stableFrames + 1);
+
+      // Require fingers visibly open at least once (>= 0.27) before any drawing can begin
+      if (normalizedDistance >= 0.27) {
+        presence.hasSeenOpen = true;
+      }
+
+      let isPinching = prevPinch;
+
+      if (!prevPinch) {
+        // Trying to start pinching: must be stable (>= 4 frames), opened first, and pinched cleanly (< 0.20) for 2 frames
+        if (presence.stableFrames >= 4 && presence.hasSeenOpen && normalizedDistance < 0.20) {
+          presence.pinchFrames++;
+          if (presence.pinchFrames >= 2) {
+            isPinching = true;
+            presence.releaseFrames = 0;
+          }
+        } else {
+          presence.pinchFrames = 0;
+        }
+      } else {
+        // Currently drawing: require >= 3 consecutive open frames (> 0.30) to finish stroke (prevents mid-stroke cuts)
+        if (normalizedDistance > 0.30) {
+          presence.releaseFrames++;
+          if (presence.releaseFrames >= 3) {
+            isPinching = false;
+            presence.pinchFrames = 0;
+          }
+        } else {
+          presence.releaseFrames = 0;
+        }
+      }
+
+      this.handPresenceMap.set(hIdx, presence);
       this.previousPinchMap.set(hIdx, isPinching);
 
       let handedness: 'Right' | 'Left' = 'Right';
-      if (results.multiHandedness && results.multiHandedness[hIdx]) {
-        handedness = results.multiHandedness[hIdx].label as 'Right' | 'Left';
+      if (handednessInfo?.label) {
+        handedness = handednessInfo.label as 'Right' | 'Left';
       }
 
-      // Preserve raw coordinates in video frame space
       parsedHands.push({
-        index: hIdx,
+        index: parsedHands.length,
         cursor: { x: indexTip.x, y: indexTip.y },
         isPinching,
         pinchDistance: normalizedDistance,
@@ -293,32 +358,49 @@ class ARTrackingService {
       });
     }
 
+    if (parsedHands.length === 0) {
+      // Grace period buffer (up to 5 frames ~ 150ms) before cutting an active hand/stroke
+      if (this.latestHands.length > 0 && this.missedHandFrames < this.MAX_MISSED_HAND_FRAMES) {
+        this.missedHandFrames++;
+        this.emitUpdate();
+        return;
+      }
+
+      this.resetHandTrackingState();
+      this.emitUpdate();
+      return;
+    }
+
+    // Valid hand(s) present -> reset missed frame counter & prune unused indices
+    this.missedHandFrames = 0;
+    for (const key of Array.from(this.handPresenceMap.keys())) {
+      if (key >= rawList.length) {
+        this.handPresenceMap.delete(key);
+        this.previousPinchMap.delete(key);
+      }
+    }
+
     this.latestHands = parsedHands;
 
-    if (parsedHands.length > 0) {
-      // Prioritize the pinching hand (drawing), otherwise prefer right hand or first detected
-      const pinchingHand = parsedHands.find(h => h.isPinching);
-      const primary = pinchingHand || (parsedHands.length > 1 && parsedHands[1].handedness === 'Right' ? parsedHands[1] : parsedHands[0]);
-      this.activeDrawingHand = primary;
+    // Prioritize the pinching hand (drawing), otherwise prefer right hand or first detected
+    const pinchingHand = parsedHands.find(h => h.isPinching);
+    const primary = pinchingHand || (parsedHands.length > 1 && parsedHands[1].handedness === 'Right' ? parsedHands[1] : parsedHands[0]);
+    this.activeDrawingHand = primary;
 
-      const targetX = primary.cursor.x;
-      const targetY = primary.cursor.y;
+    const targetX = primary.cursor.x;
+    const targetY = primary.cursor.y;
 
-      const dist = Math.hypot(targetX - this.smoothedCursor.x, targetY - this.smoothedCursor.y);
-      if (dist > 0.08 || !this.hasInitialCursor) {
-        // Snap immediately when hand jumps or first enters
-        this.smoothedCursor.x = targetX;
-        this.smoothedCursor.y = targetY;
-        this.hasInitialCursor = true;
-      } else {
-        // High responsiveness factor (0.85) to eliminate lagging behind index finger
-        const alpha = 0.85;
-        this.smoothedCursor.x += (targetX - this.smoothedCursor.x) * alpha;
-        this.smoothedCursor.y += (targetY - this.smoothedCursor.y) * alpha;
-      }
+    const dist = Math.hypot(targetX - this.smoothedCursor.x, targetY - this.smoothedCursor.y);
+    if (dist > 0.25 || !this.hasInitialCursor) {
+      // Snap cleanly on first entry or genuine hand swap
+      this.smoothedCursor.x = targetX;
+      this.smoothedCursor.y = targetY;
+      this.hasInitialCursor = true;
     } else {
-      this.hasInitialCursor = false;
-      this.activeDrawingHand = null;
+      // Velocity-adaptive smoothing: steady on tiny jitter, fast on sweeping strokes
+      const alpha = dist < 0.008 ? 0.35 : dist < 0.06 ? 0.65 : 0.88;
+      this.smoothedCursor.x += (targetX - this.smoothedCursor.x) * alpha;
+      this.smoothedCursor.y += (targetY - this.smoothedCursor.y) * alpha;
     }
 
     this.emitUpdate();
@@ -399,7 +481,7 @@ class ARTrackingService {
   public stop() {
     this.isRunning = false;
     this.stopCameraStreamOnly();
-    this.latestHands = [];
+    this.resetHandTrackingState();
     this.latestFace = null;
   }
 

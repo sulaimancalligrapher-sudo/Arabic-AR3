@@ -152,11 +152,11 @@ export const ARCameraOverlay: React.FC<ARCameraOverlayProps> = ({
             return;
           }
 
-          // Index tip landmark 8 is the exact drawing tip
-          const rawIndexTip = activeHand.landmarks[8];
+          // Prefer adaptive smoothed cursor from tracking service, fallback to index tip landmark 8
+          const targetPoint = state.cursor || activeHand.landmarks[8];
 
           const screenCursor = getScreenPointFromVideo(
-            rawIndexTip,
+            targetPoint,
             containerW,
             containerH,
             videoW,

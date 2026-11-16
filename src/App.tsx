@@ -82,6 +82,7 @@ export default function App() {
   const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
   const [virtualCursor, setVirtualCursor] = useState<{ x: number; y: number } | null>(null);
   const [isAirDrawing, setIsAirDrawing] = useState<boolean>(false);
+  const [isAirPenLocked, setIsAirPenLocked] = useState<boolean>(false);
 
   // AR Tracking & Camera Options (controlled from outside the whiteboard with the tools)
   const [trackingMode, setTrackingMode] = useState<HandTrackingDisplayMode>('one_hand');
@@ -178,6 +179,10 @@ export default function App() {
   const handleCursorUpdate = useCallback((cursor: { x: number; y: number } | null, isPinching: boolean) => {
     setVirtualCursor(cursor);
     setIsAirDrawing(isPinching);
+  }, []);
+
+  const handleToggleAirPenLock = useCallback(() => {
+    setIsAirPenLocked(prev => !prev);
   }, []);
 
   // Handle Undo / Redo / Clear
@@ -376,6 +381,8 @@ export default function App() {
         isMirrored={isMirrored}
         onToggleMirror={handleToggleMirror}
         arDetectionStatus={arDetectionStatus}
+        isAirPenLocked={isAirPenLocked}
+        onToggleAirPenLock={handleToggleAirPenLock}
       />
 
       {/* Main Workspace / Stage */}
@@ -411,6 +418,8 @@ export default function App() {
             videoElement={videoElement}
             virtualCursor={virtualCursor}
             isAirDrawing={isAirDrawing}
+            isAirPenLocked={isAirPenLocked}
+            onToggleAirPenLock={handleToggleAirPenLock}
             currentRepetition={currentRepetition}
             isFullscreen={isFullscreen}
             onToggleFullscreen={toggleFullscreen}
